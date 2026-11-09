@@ -241,6 +241,112 @@ What went well:
   also joins remote lines cut mid-sentence, e.g. "and that feels about average, but we've had"
   / "how many speakers…".
 
+## From Test #4: `2026-11-09_1605_work-recording-2` (target user's laptop)
+
+Setup: a real work call recorded on the target user's laptop. Mic: Razer Kiyo Pro (webcam
+mic); system: Realtek headphones; base.en; Keep audio on. 22 min 41 s; 252 live lines,
+203 final lines. The laptop's user spoke only 3–4 times; the rest is remote speech. From names
+used on the call, there were at least 5 remote people: Remote A and Remote B (the QDM team), Remote C,
+Remote D and probably Remote E. A copy of the folder is in `Downloads\testmeeting`.
+
+What went well:
+- **No gaps, errors or crashes**, and a clean exit. Echo dedupe correctly dropped nothing
+  (headphones).
+- **Live speed held up on the laptop over 22 minutes:** line delay median 1.3 s, **p90
+  2.4 s** (PRD target 5 s), max 6.8 s; backlog never above 2; max lag 6.6 s.
+- **Remote C is labelled correctly throughout:** every line of his has `SPEAKER_02` in the final
+  file, and nobody else's does.
+- The mic question split over two live lines is joined in the final file (601d147 working).
+
+### Final pass: a real speaker was folded away (high priority)
+
+- [ ] **Remote D is merged into Remote B (`SPEAKER_03`).** Final result: 3 speakers —
+  `SPEAKER_01` 591 s (Remote A plus others), `SPEAKER_02` 74 s (Remote C), `SPEAKER_03` 377 s
+  (Remote B + Remote D). Remote D's lines form a clean, separate voice cluster: 6 lines, 28 s,
+  lines 102 ("Yeah, so I can provide that." → "Thank you, Remote D"), 119, 127, 167, 196
+  ("…Colleague G and I for now") and 198. They're only 0.64–0.75 similar to Remote B's centroid, the
+  same range as clearly different speakers in Test #2. Two things merge them, and both need
+  fixing:
+  1. **The threshold.** At `final_voice_threshold` 0.65, average linkage already merges
+     Remote D's lines into Remote B's cluster. From 0.70 to 0.80 they're a separate cluster every
+     time.
+  2. **The fold has no similarity check.** Even at 0.70, Remote D's 28 s is under the fold
+     limit (3% of 1035 s of speech = 31 s). `fold_small_clusters` would then give it to the
+     most similar large cluster however unlike it is. A second small cluster (lines 170, 172
+     and 176, 13 s, "But Remote C and Colleague F's can keep you updated…") is folded the same way. The
+     live pass also gave it its own label (`SPEAKER_06`), so it may be another person.
+
+  **Tension with Test #3:** there, 0.70 split speaker A into pieces (see the table under
+  Test #3), which is why 0.65 was chosen. A fixed threshold that works for both may not
+  exist. *Options to test:* (a) 0.70 plus a similarity-gated fold (always fold clusters under
+  ~4 s; fold larger ones only if ≥ ~0.7 like the target), checked on Tests #2–#4 and the
+  TTS sample; (b) build cluster centroids only from lines over ~3 s, whose fingerprints are
+  steadier, then assign short lines to the nearest centroid. Test #3's A pieces were short
+  lines. Code: `diarize.py` `cluster_voices`, `fold_small_clusters`; `finalize.py`
+  `_voice_labels`.
+- [ ] **`SPEAKER_01` may still be several people.** Remote A, the person who opens the call ("I'm
+  just trying to capture the business need…") and the lines that sound like Remote E ("…Remote D,
+  feel free to correct me", "So Remote A, Remote B, early Q1, does that work for you guys?") are all
+  0.82–0.92 alike, as similar as Remote A is to himself, and they stay together even at 0.8. So
+  either they're the same person, or this embedding model can't tell these voices apart over call
+  audio. *Needs:* someone who was on the call to say who spoke lines 1–17, 117 and 121.
+
+### Final pass: fragments and mixed lines
+
+- [ ] **A sentence end cut off onto another speaker.** "Can we get a copy of that or is it just
+  a dump of the" (`SPEAKER_03`) / "GCP table." (`SPEAKER_01`); "I'm kind of just getting…"
+  (`01`) / "validation from the FMX people here." (`02`); "…we can always get the address from
+  joining you." (`02`) / "Another table." (`01`). The short second piece is too short to
+  fingerprint reliably, so it takes a neighbour's label, which can be the wrong neighbour.
+  `join_fragments` only joins the same speaker. *Idea:* when the previous line has no closing
+  punctuation, the gap is under ~1 s and the next line is very short (≤ 3 words), attach it
+  to the previous line whatever its label.
+- [ ] **Same-speaker fragments not joined:** "…all we would have to do is build out the…" /
+  "Quodium side in the ETO process." Whisper's trailing "…" counts as closing punctuation.
+  *Idea:* don't treat "…" as a sentence end in `join_fragments`. (Also "default to the" / "The
+  zone code address" was not joined because its gap is 2.6 s; leave that as is.)
+- [ ] **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
+  Yes. Yes.", "I think that is CSV. Yeah. Okay. Okay.", "…you're all good." Interjections under
+  1 s / 3 words are folded into the surrounding line on purpose (Test #1 fix), so a short reply
+  from someone else is attributed to the main speaker. Revisit only if the downstream app needs it.
+
+### Speed of the final pass on the laptop
+
+- [ ] **The final transcript took 13 min 34 s after Stop** for a 22.7-minute meeting
+  (16:28:01 → 16:41:35), 0.6× the meeting's length. The PRD accepts "several minutes", but a
+  1-hour meeting would take about 35 minutes before `DONE`. Re-running the pass on the dev
+  PC (Ryzen 5 5600X) takes 4 min 36 s and gives the same 203 lines. About 4 min of that is
+  sherpa's offline diarization (segmentation, embeddings, `merge_small_speakers`); voice
+  clustering of the 181 pieces takes about 35 s. So the laptop is roughly 3× slower than the
+  dev PC, and the diarization step is where the time goes.
+  *Ideas:* labels now come from `cluster_voices`, so sherpa's offline diarization is only used
+  for split points. That pass embeds the audio twice more: inside sherpa and again in
+  `merge_small_speakers`. Run the embedders with more than 1 thread (`SherpaEmbedder`
+  defaults to `num_threads=1`), skip `merge_small_speakers` (it no longer affects labels), or
+  find split points from per-word voice changes instead. Measure each stage before choosing.
+
+### Transcription quality
+
+- [ ] **Domain jargon is misheard throughout** (base.en): KoVa → "cover" / "co-va" /
+  "Co-ver", QDM → "Quodium" / "odium", ETL → "ETO", FMS → "FMX" / "famous" (fleet),
+  vendor → "bender", code freeze → "co-trees", prod → "abroad", spreadsheet → "spray cheat",
+  zone codes → "zonkers". The meaning of whole sentences is lost for a downstream summary.
+  *Ideas:* (1) a **custom vocabulary** setting passed to faster-whisper as `hotwords` or
+  `initial_prompt` (e.g. "KoVa, QDM, ETL, FMS, GCP, zone code, Zentrix"); test on this
+  meeting's kept audio. (2) small.en (see the Test #1 item). The laptop's p90 of 2.4 s
+  leaves some headroom, but small.en is roughly 3× slower; benchmark it on this laptop with
+  `huddle-helper bench --audio …\system.flac --models base.en,small.en` first.
+
+### Microphone
+
+- [ ] **The Kiyo Pro webcam mic is quiet:** speech peak median 0.046 (warning limit 0.05), so
+  the quiet-mic warning should have shown once. Confirm with the user that it appeared. Every
+  spoken mic passage was transcribed. Short sounds with no line at 03:29, 06:47 and 10:35 come
+  out of Whisper as "Okay." or "I'm so sorry.", most likely noises or backchannel. "Zendrix."
+  is probably "Zentrix" (a data-management product) said at the end of the question, so it's
+  not a hallucination.
+  *Action:* raise the mic's input level in Windows Sound settings on that laptop.
+
 ## Still open from the PRD milestones
 
 - [ ] M1: 30-minute capture spike on a real call (`capture-spike --minutes 30`).
