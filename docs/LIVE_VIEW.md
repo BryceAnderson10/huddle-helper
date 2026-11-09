@@ -23,14 +23,19 @@ the transcript is to open `transcript.jsonl`, and names can only be added afterw
   the user has to remember the moment and search for it later.
 - Once recording starts, everything the mic hears is transcribed. The user can't take
   a side conversation or a private aside off the record without stopping the meeting.
+- Whisper doesn't know the team's own words. In Test #4 (a real work call) base.en heard
+  "KoVa" as "cover", "QDM" as "Quodium", "ETL" as "ETO" and "spreadsheet" as "spray
+  cheat", so whole sentences lost their meaning for the downstream app. The user has no
+  way to tell it which acronyms, product names and people's names to expect.
 - Sharing a transcript means handing someone raw JSONL.
 - Managing past meetings means Explorer. A meeting whose final pass failed stays
   `failed` with the error only in the log; nothing retries it.
 
 **Scope.** Windows only, same Python/Tk stack as the tray. The window is a viewer plus
 speaker naming, one-press bookmarks with types, muting the mic in the recording,
-click-to-hear playback of a line, export to plain text and Markdown, and a Meetings view
-for housekeeping. It is not a transcript editor (PRD non-goal) and does no analysis.
+click-to-hear playback of a line, export to plain text and Markdown, a Meetings view
+for housekeeping, and a custom vocabulary that helps transcription with the user's own
+terms and names. It is not a transcript editor (PRD non-goal) and does no analysis.
 
 ## Goals and non-goals
 
@@ -53,6 +58,8 @@ for housekeeping. It is not a transcript editor (PRD non-goal) and does no analy
   audio exists, so they can tell who spoke and check what was really said, without the
   clip being recorded again or heard by the call.
 - Let the user see, retry, clean up and delete past meetings from one place.
+- Let the user list the terms, acronyms and names their meetings use, so transcription
+  spells them right, without slowing live lines past the PRD's latency target.
 
 **Non-goals**
 - Editing transcript text, or rewriting `transcript.jsonl` / `transcript.final.jsonl`.
@@ -98,6 +105,11 @@ for housekeeping. It is not a transcript editor (PRD non-goal) and does no analy
     status and how much audio it keeps. One meeting says "Final pass failed" with the
     reason; I click Retry and it completes. I delete two test meetings (they go to the
     Recycle Bin) and remove the audio from last month's meetings to free 600 MB.
+12. **Teach it our words.** Our calls are full of "KoVa", "QDM" and "Zentrix", and the
+    transcript keeps writing "cover" and "Quodium". In Settings → Vocabulary I paste
+    our acronyms and product names once. At Start I add two names for this meeting. From
+    the next line on, the transcript spells them right. When I spot another miss in the
+    window, I right-click the line, choose "Add to vocabulary…" and type the right word.
 
 ## Functional requirements
 
@@ -141,6 +153,13 @@ P0 items define this feature's first release; P1 items follow.
 | L30 | Delete a meeting, or only its kept audio, to the Recycle Bin, after a confirmation that says what will go; not allowed while it is recording or processing | P0 |
 | L31 | A meeting whose final pass failed shows the error and a Retry button that runs the final pass again | P0 |
 | L32 | A Storage panel shows disk use of the meetings folder (transcripts vs kept audio), the auto-purge setting, and "Delete kept audio older than N days" now, with a preview | P1 |
+| **Custom vocabulary** | | |
+| L33 | A Vocabulary list in Settings (acronyms, product names, people's names, one per line) is given to Whisper for every utterance on both streams; changes apply from the next utterance, including during a meeting | P0 |
+| L34 | The Start dialog takes extra terms for this meeting only; attendee names (L13) are added automatically | P0 |
+| L35 | The vocabulary a meeting used is recorded in `meta.json`, so a transcript can be traced to the vocabulary it was made with | P0 |
+| L36 | Vocabulary never adds words that weren't said: no measurable rise in hallucinated lines, and live line delay stays within the PRD target, measured on kept real audio before release | P0 |
+| L37 | "Add to vocabulary…" on a line's right-click menu, with the selected words prefilled for the user to correct | P1 |
+| L38 | Import and export the vocabulary as a plain text file, so a team can share one list | P1 |
 
 ## The core problem: live labels are not final labels
 
@@ -248,6 +267,11 @@ a new reason, so readers that already handle device gaps handle mutes too:
   follower knows right away that mic silence is deliberate. It is `null` otherwise.
 - No line is added to `transcript.jsonl`: the contract says everything between
   `meeting_start` and `meeting_end` is a `segment`, and that stays true.
+
+**`meta.json`: vocabulary.** `"vocabulary": ["KoVa", "QDM", "ETL", "Zentrix"]` holds the
+terms passed to Whisper (after the token budget; empty list if none), and
+`"vocabulary_changed_at_ms": [742000]` lists meeting times when it changed during the
+meeting (empty if never). See "Custom vocabulary".
 
 **Deleting meetings.** A meeting folder can now disappear when the user deletes it in
 the Meetings view (and its `audio\` folder when they delete kept audio). Downstream apps
@@ -539,6 +563,63 @@ transcripts and kept audio; the largest meetings by audio; the auto-purge settin
 (same as Settings); and **Delete kept audio older than [N] days** with a preview list
 ("6 meetings, 1.2 GB") before it runs.
 
+## Custom vocabulary
+
+**Why.** Test #4 was a real call about a data platform. base.en got the general speech
+right but misheard nearly every domain word: KoVa → "cover" / "co-va", QDM →
+"Quodium" / "odium", ETL → "ETO", FMS → "FMX" / "famous", vendor → "bender", code
+freeze → "co-trees", spreadsheet → "spray cheat", zone codes → "zonkers". A summary
+built on that transcript would be wrong in exactly the places that matter. A larger
+model (small.en) helps with ordinary words but still can't know a team's acronyms, and
+it may not keep up live on the target laptop.
+
+**What the user sets.**
+- **Settings → Vocabulary (L33).** A multi-line box, one term per line, as it should be
+  spelled: `KoVa`, `QDM`, `ETL`, `Zentrix`, `zone code`. Blank lines and `#` comments
+  are ignored. A counter shows how much of the limit is used (below). Saved in
+  `settings.json` as a list.
+- **This meeting (L34).** The Start dialog has an "Extra terms for this meeting" box
+  (names of attendees, a project codename). Attendee names from L13 are added
+  automatically. These apply to this meeting only and aren't saved to Settings.
+- **From a line (L37, P1).** Right-click → "Add to vocabulary…" opens a small dialog
+  with the selected text ("Quodium") for the user to replace with the right term
+  ("QDM"). It's added to Settings and applies from the next utterance. It doesn't change
+  the line that was misheard: the transcript isn't edited (PRD non-goal).
+- **Sharing (L38, P1).** Import/export the list as a `.txt` file, one term per line.
+
+**How it's used.** Whisper accepts a short text prompt that biases what it writes. The
+recorder builds one prompt per meeting, meeting terms first, then the Settings list, and
+passes it with every utterance on both streams. faster-whisper offers two ways in:
+`hotwords` and `initial_prompt`. A spike on Test #4's kept audio picks one (see
+Milestones). Today `transcribe.py` passes neither and turns off
+`condition_on_previous_text`, so the vocabulary is the only prompt.
+
+- **Limit.** Whisper's prompt is capped at about 224 tokens, and long prompts slow down
+  every utterance. The list is cut at a token budget (proposed: 120 tokens, roughly 60–80
+  short terms). Meeting terms win over Settings terms when the budget runs out. Settings
+  shows "42 of ~70 terms used" and names the terms that would be dropped.
+- **Mid-meeting changes.** A change in Settings or from a line takes effect from the
+  next utterance the transcriber picks up; lines already written stay as they are.
+- **Recorded (L35).** `meta.json` gets `vocabulary`: the terms actually passed (after
+  the budget), plus `vocabulary_changed_at_ms` for any change during the meeting. That's
+  additive under schema 1. The downstream app can use the same list to read the
+  transcript better.
+
+**Guardrails (L36).** A prompt can make Whisper write a vocabulary word when it hears
+noise or a short unclear sound, e.g. "QDM." for a cough. Before release, measure on kept
+real audio (Tests #2–#4) with and without vocabulary:
+- **Accuracy:** count how many Test #4 domain words come out right. The goal is most of
+  the list above.
+- **No new hallucinations:** lines made only of vocabulary terms, or that appear where
+  the run without vocabulary had none, must not go up. The existing filters
+  (`drop_hallucinated`, the no-speech check) stay on. If needed, add one rule: a line
+  under ~1 s whose only word is a vocabulary term needs `confidence` above a floor.
+- **Speed:** live line delay p90 stays under the PRD's 5 s on the target laptop (it was
+  2.4 s in Test #4 without vocabulary).
+
+Vocabulary is plain text in settings and `meta.json`, like the transcript; nothing
+leaves the PC.
+
 ## Window design
 
 One resizable Tk window with two views, **Transcript** and **Meetings**, opened from
@@ -569,7 +650,7 @@ While muted, an amber bar sits under the header:
   A new unnamed voice gets a highlighted "Who is this?" chip.
 - **Transcript.** Colour per person, time from `start_ms` + `started_at`. Auto-scroll
   while at the bottom; scrolling up pauses it and shows "Jump to live". Right-click a
-  line: "This line is…", "Copy".
+  line: "This line is…", "Add to vocabulary…", "Copy".
 - **Status bar.** Elapsed time, line count, lag and backlog (`RecordingState`), mic/call
   levels, gaps (device rebind) shown inline as "— 4 s gap (device changed) —".
 - **After Stop.** The status bar shows the after-Stop pass's stage and fraction (already
@@ -635,6 +716,12 @@ show that the call is active, but who is speaking is only known once the line la
 - **Export.** A new `export.py` with pure functions: events + names + marks → text. The
   window, the meetings list and the CLI all call it; it is unit-tested against fixture
   meetings (live-only, final, interrupted, no marks, marks in pauses).
+- **Vocabulary.** `Settings.vocabulary: list[str]` (new field, default empty; a settings
+  version bump isn't needed since it's additive). `WhisperTranscriber.transcribe` takes
+  the prompt and passes it as `hotwords` or `initial_prompt`; the recorder holds the
+  current prompt and replaces it under its lock when Settings or a line adds a term. The
+  token budget uses the model's own tokenizer (`WhisperModel.hf_tokenizer`). The Start
+  dialog and Settings get the text boxes; `meta.json` is updated at Start and on change.
 - **Scale.** A 2-hour meeting is ~2–3k lines; a Tk `Text` widget with per-speaker tags
   handles that. Speaker renames reapply a tag colour/name, not re-render every line.
 
@@ -682,6 +769,15 @@ show that the call is active, but who is speaking is only known once the line la
    Huddle Helper; re-run the device-switch test and a soak test.
 8. **Tags guide the final pass** (L14). Constraints in the line clustering; re-run Tests
    #2, #3 and the TTS sample.
+9. **Custom vocabulary** (L33–L36, then L37–L38). Independent of the window: the Settings
+   box, Start dialog box and `meta.json` field work without it, so this can ship before
+   milestone 1. Starts with a spike: `hotwords` vs `initial_prompt`, and the token
+   budget, on Test #4's kept audio. "Add to vocabulary…" follows once the Transcript view
+   exists.
+   *Check:* re-transcribe Test #4's kept audio with the list in "Custom vocabulary";
+   count domain words right before and after, count vocabulary-only lines, and compare
+   line delay. Re-run Tests #2 and #3 to confirm no new hallucinated lines. Then a real
+   call on the target laptop with `live_stats` p90 under 5 s.
 
 ## Risks and open questions
 
@@ -707,6 +803,10 @@ show that the call is active, but who is speaking is only known once the line la
 | Memory for the in-memory audio window | ~38 MB for 10 min of both streams; length is a constant that can shrink. |
 | Exported files spread transcripts outside the meetings folder | User picks the location each time; nothing is exported automatically. Same privacy as copying the JSONL. |
 | Names are personal data | Stored only in the meeting folder like the transcript; no network. |
+| Vocabulary makes Whisper write terms that weren't said (on noise or short sounds) | Measured before release (L36); existing hallucination filters stay on; a confidence floor for very short vocabulary-only lines if needed. |
+| A long vocabulary slows every utterance or crowds out the audio | Token budget with a visible counter; meeting terms first; speed checked on the target laptop. |
+| Vocabulary helps less than expected on base.en | Measure in the milestone 9 spike; pair with the small.en benchmark (TODO) if base.en still misses the terms. |
+| Open: should vocabulary also correct known mishears ("Quodium" → "QDM") after transcription? | That edits transcript text, which is a PRD non-goal; prompt-only for now. |
 | Open: should a speaker tag also apply to later lines of that live label? | Proposed yes until untagged; alternative is past lines only. |
 | Open: should the final view hide `SPEAKER_nn` for speakers with under N seconds? | Would hide noise but could hide a real short speaker. |
 

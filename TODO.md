@@ -336,11 +336,14 @@ What went well:
   meeting's kept audio. (2) small.en (see the Test #1 item). The laptop's p90 of 2.4 s
   leaves some headroom, but small.en is roughly 3× slower; benchmark it on this laptop with
   `huddle-helper bench --audio …\system.flac --models base.en,small.en` first.
+  → Custom vocabulary is now a requirement: `docs/LIVE_VIEW.md` L33–L38 ("Custom
+  vocabulary", milestone 9), with a spike on this meeting's kept audio first.
 
 ### Microphone
 
-- [ ] **The Kiyo Pro webcam mic is quiet:** speech peak median 0.046 (warning limit 0.05), so
-  the quiet-mic warning should have shown once. Confirm with the user that it appeared. Every
+- [ ] **The Kiyo Pro webcam mic is quiet:** speech peak median 0.046 (warning limit 0.05).
+  **Confirmed by Bryce:** the quiet-mic notification appeared, so the 079d8c9 warning works on
+  the target laptop. Every
   spoken mic passage was transcribed. Short sounds with no line at 03:29, 06:47 and 10:35 come
   out of Whisper as "Okay." or "I'm so sorry.", most likely noises or backchannel. "Zendrix."
   is probably "Zentrix" (a data-management product) said at the end of the question, so it's
