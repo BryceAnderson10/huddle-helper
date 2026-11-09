@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huddle-helper"
+version = "0.1.0"
+description = "Local Windows meeting recorder: on-device transcription and diarization, streamed as JSONL"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "faster-whisper>=1.1",
+    "onnxruntime>=1.17",
+    "sherpa-onnx>=1.10",
+    "PyAudioWPatch>=0.2.12",
+    "soxr>=0.3",
+    "soundfile>=0.12",
+    "pystray>=0.19",
+    "Pillow>=10",
+    "pycaw>=20240210",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6.6"]
+
+[project.scripts]
+huddle-helper = "huddle_helper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["models: needs the downloaded whisper and diarization models (slow)"]
