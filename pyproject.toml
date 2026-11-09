@@ -7,7 +7,7 @@ name = "huddle-helper"
 version = "0.1.0"
 description = "Local Windows meeting recorder: on-device transcription and diarization, streamed as JSONL"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "numpy>=1.26",
     "faster-whisper>=1.1",

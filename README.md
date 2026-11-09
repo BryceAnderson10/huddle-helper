@@ -38,7 +38,7 @@ Files and folders:
 
 ## Development
 
-Requires Windows and Python 3.12.
+Requires Windows and Python 3.12 or 3.14.
 
 ```powershell
 python -m venv .venv
