@@ -11,6 +11,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -20,7 +21,12 @@ from . import paths
 log = logging.getLogger(__name__)
 
 WHISPER_MODELS = ("tiny.en", "base.en", "small.en", "medium.en")
-_WHISPER_REPOS = "https://huggingface.co/Systran/faster-whisper"
+# Tried in order. The second is a copy of the same files kept as assets of this
+# project's "whisper-models" GitHub release, for networks that block Hugging Face.
+WHISPER_SOURCES = (
+    "https://huggingface.co/Systran/faster-whisper-{name}/resolve/main/{file}",
+    "https://github.com/BryceAnderson10/huddle-helper/releases/download/whisper-models/faster-whisper-{name}-{file}",
+)
 # model.bin comes last: whisper_installed() looks for it, so an interrupted
 # download is picked up again instead of being mistaken for a complete model.
 WHISPER_FILES = ("config.json", "tokenizer.json", "vocabulary.txt", "model.bin")
@@ -93,10 +99,20 @@ def install_whisper(name: str, root: Path | None = None, progress: Progress | No
         return target
     if progress:
         progress(f"Downloading whisper model {name}")
-    for filename in WHISPER_FILES:
-        if not (target / filename).exists():
-            _download(f"{_WHISPER_REPOS}-{name}/resolve/main/{filename}", target / filename, None)
-    return target
+    failures = []
+    for source in WHISPER_SOURCES:
+        host = urllib.parse.urlsplit(source).netloc or source
+        if failures and progress:
+            progress(f"Downloading whisper model {name} from {host} instead")
+        try:
+            for filename in WHISPER_FILES:
+                if not (target / filename).exists():
+                    _download(source.format(name=name, file=filename), target / filename, None)
+            return target
+        except OSError as exc:  # blocked, offline, or not published there
+            log.warning("Could not download whisper model %s from %s: %s", name, host, exc)
+            failures.append(f"{host}: {exc}")
+    raise OSError(f"Could not download whisper model {name} ({'; '.join(failures)})")
 
 
 def install_diarization(root: Path | None = None, progress: Progress | None = None) -> None:
