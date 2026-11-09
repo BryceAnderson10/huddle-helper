@@ -13,7 +13,7 @@ from huddle_helper.writer import read_events
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
 
 
-def run(tmp_path, mic, system, **settings):
+def run(tmp_path, mic, system, errors=None, **settings):
     s = config.Settings(meetings_dir=str(tmp_path / "meetings"), **settings)
     holder = {}
 
@@ -23,7 +23,7 @@ def run(tmp_path, mic, system, **settings):
 
     comps = Components(transcriber=ToneTranscriber(), embedder=ToneEmbedder(),
                        scorer_factory=EnergyScorer, capture_factory=factory)
-    rec = Recorder(s, comps)
+    rec = Recorder(s, comps, on_error=(errors.append if errors is not None else None))
     folder = rec.start("Unit Test")
     holder["cap"].finished.wait()
     rec.stop()
@@ -50,6 +50,41 @@ def test_two_streams_to_jsonl_contract(tmp_path):
     assert meta["status"] == "processing" and meta["clean_exit"] is True and meta["segments"] == 4
     assert folder.audio_file("mic").exists() and folder.audio_file("system").exists()
     assert not folder.done_path.exists()  # DONE only after the final pass
+
+
+def test_meta_has_live_stats_and_quiet_mic_warning(tmp_path):
+    # Test #2's mic peaked at 0.047: quiet enough to warn about.
+    mic = np.concatenate([silence(0.5), tone(300, 1.5, amp=0.04), silence(1), tone(300, 1.5, amp=0.04), silence(1)])
+    errors = []
+    folder, _events = run(tmp_path, mic, None, errors=errors)
+    stats = folder.read_meta()["live_stats"]
+    # Fed faster than real time, so no delay figures (they would be negative).
+    assert stats["line_delay_ms"]["lines"] == 0 and stats["line_delay_ms"]["p90"] is None
+    assert stats["speech_peak_median"]["mic"] == 0.04 and stats["speech_peak_median"]["system"] is None
+    assert len(errors) == 1 and "microphone is very quiet" in errors[0]
+
+    errors = []
+    loud = np.concatenate([silence(0.5), tone(300, 1.5), silence(1), tone(300, 1.5), silence(1)])
+    run(tmp_path / "loud", loud, None, errors=errors)
+    assert errors == []
+
+
+def test_line_delay_recorded_at_real_time(tmp_path):
+    s = config.Settings(meetings_dir=str(tmp_path / "m"))
+    audio = np.concatenate([silence(0.3), tone(300, 0.8), silence(1.0)])
+    holder = {}
+
+    def factory(**kw):
+        holder["cap"] = FileCapture(kw["on_audio"], {"mic": audio, "system": None}, realtime=True)
+        return holder["cap"]
+
+    rec = Recorder(s, Components(transcriber=ToneTranscriber(), scorer_factory=EnergyScorer,
+                                 capture_factory=factory))
+    folder = rec.start("rt")
+    holder["cap"].finished.wait()
+    rec.stop()
+    delay = folder.read_meta()["live_stats"]["line_delay_ms"]
+    assert delay["lines"] == 1 and 0 <= delay["median"] < 3000
 
 
 def test_echo_dedupe_drops_mic_copy(tmp_path):

@@ -40,15 +40,77 @@ def test_speaker_at_overlap_and_nearest():
     assert speaker_at(9000, 9100, turns) is None
 
 
-def test_relabel_splits_segment_at_speaker_change():
-    words = [Word(0, 300, " Sounds"), Word(300, 600, " good."), Word(1200, 1500, " I"),
-             Word(1500, 1800, " disagree"), Word(1800, 2100, " though.")]
-    seg = Segment("system", 0, 2100, "Sounds good. I disagree though.", 0.8, "SPEAKER_01", words)
-    turns = [Turn(0, 900, 7), Turn(1100, 2200, 3)]
-    out = relabel([seg], {("system", 0): words}, {"system": turns}, {"system"})
-    assert [(s.speaker, s.text) for s in out] == [("SPEAKER_01", "Sounds good."),
-                                                  ("SPEAKER_02", "I disagree though.")]
-    assert out[1].start_ms == 1200 and out[1].end_ms == 2100
+def words_from(text: str, start: int = 0, ms_per_word: int = 250, pauses: dict[int, int] | None = None):
+    """Build Word timings for a sentence; ``pauses`` adds a gap before word index i."""
+    out, t = [], start
+    for i, w in enumerate(text.split()):
+        t += (pauses or {}).get(i, 0)
+        out.append(Word(t, t + ms_per_word, " " + w))
+        t += ms_per_word
+    return out
+
+
+def run_relabel(words, turns):
+    seg = Segment("system", words[0].start_ms, words[-1].end_ms, "".join(w.text for w in words).strip(),
+                  0.8, "SPEAKER_01", words)
+    out = relabel([seg], {("system", seg.start_ms): words}, {"system": turns}, {"system"})
+    return [(s.speaker, s.text) for s in out]
+
+
+def test_relabel_splits_at_sentence_boundary_on_speaker_change():
+    words = words_from("We should ship it on Friday. I disagree, we need one more week of testing.")
+    split = words[5].end_ms  # end of "Friday."
+    assert run_relabel(words, [Turn(0, split, 7), Turn(split, 99999, 3)]) == [
+        ("SPEAKER_01", "We should ship it on Friday."),
+        ("SPEAKER_02", "I disagree, we need one more week of testing.")]
+
+
+def test_relabel_does_not_split_mid_sentence():
+    # Test #2: "...we can't do it like right" / "now, which I understand." was split mid-sentence.
+    words = words_from("But she said we can't do it like right now, which I understand.")
+    boundary = words[8].end_ms  # between "right" and "now,"
+    assert run_relabel(words, [Turn(0, boundary, 0), Turn(boundary, 99999, 4)]) == [
+        ("SPEAKER_01", "But she said we can't do it like right now, which I understand.")]
+
+
+def test_relabel_folds_word_level_flip_flops():
+    # Test #1: "Who could look at first? I found it. I found it. So this is the one." came out as
+    # four segments alternating between two speakers.
+    words = words_from("Who could look at first? I found it. I found it. So this is the one.")
+    turns = [Turn(0, 1250, 0), Turn(1250, 2000, 2), Turn(2000, 2750, 0), Turn(2750, 99999, 2)]
+    out = run_relabel(words, turns)
+    assert len(out) <= 2
+    assert out[-1][1].endswith("So this is the one.")
+
+
+def test_relabel_splits_at_pause_without_punctuation():
+    words = words_from("okay so that covers the roadmap items we discussed and then the budget review",
+                       pauses={9: 600})  # pause before "and"
+    split = words[8].end_ms + 300
+    out = run_relabel(words, [Turn(0, split, 1), Turn(split, 99999, 5)])
+    assert [s for s, _ in out] == ["SPEAKER_01", "SPEAKER_02"]
+    assert out[1][1] == "and then the budget review"
+
+
+def test_merge_small_speakers_uses_similarity():
+    from huddle_helper.diarize import merge_small_speakers
+
+    turns = [Turn(0, 60000, 0), Turn(60000, 62000, 3), Turn(62000, 120000, 1), Turn(120000, 129000, 2)]
+    a, b = unit(0), unit(1)
+    near_a = (a * 0.9 + unit(2) * 0.3) / np.linalg.norm(a * 0.9 + unit(2) * 0.3)
+    centroids = {0: a, 1: b, 2: near_a, 3: unit(3)}  # 2 sounds like 0; 3 sounds like nobody
+    out = merge_small_speakers(turns, centroids)
+    assert sorted({t.speaker for t in out}) == [0, 1, 3]
+    assert [t for t in out if t.start_ms == 120000][0].speaker == 0
+
+
+def test_merge_small_speakers_keeps_short_meetings_intact():
+    from huddle_helper.diarize import merge_small_speakers
+
+    # Two genuinely different voices, both "small" because the meeting is short.
+    turns = [Turn(0, 13000, 0), Turn(13000, 25000, 1)]
+    out = merge_small_speakers(turns, {0: unit(0), 1: unit(1)})
+    assert {t.speaker for t in out} == {0, 1}
 
 
 def test_relabel_undiarized_and_failed_streams():

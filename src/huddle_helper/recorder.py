@@ -140,6 +140,10 @@ class Recorder:
         self._in_flight = 0
         self.latencies_ms: list[int] = []  # utterance end -> line written (wall clock)
         self._utt_end_wall: dict[tuple[str, int], float] = {}
+        self._speech_peaks: dict[str, list[float]] = {src: [] for src in SOURCES}
+        self._quiet_mic_warned = False
+        self._max_backlog = 0
+        self._max_lag_s = 0.0
 
     # -- public API -----------------------------------------------------
     @property
@@ -177,9 +181,11 @@ class Recorder:
             self._workers[src] = _StreamWorker(src, self, scorer_factory(),
                                                FlacBuffer(self.folder.audio_file(src)), s)
         if s.diarize_system:
-            self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, s.live_speaker_threshold)
+            self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, s.live_speaker_threshold,
+                                                         s.live_min_new_speaker_s)
         if s.diarize_mic:
-            self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, s.live_speaker_threshold)
+            self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, s.live_speaker_threshold,
+                                                      s.live_min_new_speaker_s)
 
         capture_factory = self.c.capture_factory
         if capture_factory is None:
@@ -192,6 +198,12 @@ class Recorder:
 
         self._stop_tick.clear()
         self._seq = 0
+        self.latencies_ms = []
+        self._utt_end_wall = {}
+        self._speech_peaks = {src: [] for src in SOURCES}
+        self._quiet_mic_warned = False
+        self._max_backlog = 0
+        self._max_lag_s = 0.0
         self.status = Status(state="recording", meeting_id=self.folder.meeting_id)
         for w in self._workers.values():
             w.thread.start()
@@ -235,6 +247,7 @@ class Recorder:
             status=mt.STATUS_PROCESSING, ended_at=mt.iso(ended), clean_exit=True, segments=count,
             echo_segments_dropped=self._merger.dropped_echo,
             duration_s=round(time.perf_counter() - self._t0, 1),
+            live_stats=self.live_stats(),
         )
         folder = self.folder
         self._workers.clear()
@@ -243,6 +256,24 @@ class Recorder:
         self._publish()
         log.info("Recording stopped: %s (%d segments)", folder.path, count)
         return folder
+
+    def live_stats(self) -> dict:
+        """Delay and level figures saved to meta.json, so every recording measures itself."""
+        lat = sorted(self.latencies_ms)
+
+        def pct(p: float) -> int | None:
+            return lat[min(len(lat) - 1, int(p * len(lat)))] if lat else None
+
+        return {
+            # Wall-clock time from the end of an utterance to its line being on disk (PRD: p90 <= 5 s).
+            "line_delay_ms": {"median": pct(0.5), "p90": pct(0.9), "max": lat[-1] if lat else None,
+                              "lines": len(lat)},
+            "max_backlog": self._max_backlog,
+            "max_lag_s": round(self._max_lag_s, 1),
+            # Median peak level of detected speech, 0-1. Below ~0.05 the mic is too quiet.
+            "speech_peak_median": {src: round(float(np.median(p)), 3) if p else None
+                                   for src, p in self._speech_peaks.items()},
+        }
 
     # -- callbacks ------------------------------------------------------
     def _on_audio(self, source: str, samples: np.ndarray) -> None:
@@ -259,7 +290,7 @@ class Recorder:
             self._seq += 1
             self._writer.write(seg.to_event(self._seq))
             wall = self._utt_end_wall.pop((seg.source, seg.start_ms), None)
-            if wall is not None:
+            if wall is not None and getattr(self._capture, "realtime", True):
                 self.latencies_ms.append(int((time.perf_counter() - wall) * 1000))
 
     # -- workers --------------------------------------------------------
@@ -297,6 +328,7 @@ class Recorder:
                     append_words(self.folder.words_path, seg)
                     self._utt_end_wall[(seg.source, seg.start_ms)] = self._wall_for(utt.end)
                     self._merger.add(seg)
+                    self._track_level(utt)
             except Exception:  # noqa: BLE001 - one bad utterance must not stop the meeting
                 log.exception("Transcription failed for %s utterance at %d ms", utt.source, utt.start_ms)
             finally:
@@ -304,6 +336,18 @@ class Recorder:
                 self._in_flight = 0
                 self._utterances.task_done()
                 self._push_watermarks()
+
+    QUIET_MIC_PEAK = 0.05
+
+    def _track_level(self, utt: Utterance) -> None:
+        peaks = self._speech_peaks[utt.source]
+        peaks.append(float(np.abs(utt.audio).max()) if len(utt.audio) else 0.0)
+        if (utt.source == "mic" and not self._quiet_mic_warned and len(peaks) >= 2
+                and float(np.median(peaks)) < self.QUIET_MIC_PEAK):
+            self._quiet_mic_warned = True
+            log.warning("Microphone speech peaks at %.3f; input level is very low", float(np.median(peaks)))
+            self._on_error("Your microphone is very quiet. Raise its input level in Windows Sound "
+                           "settings for more accurate transcripts.")
 
     def _wall_for(self, sample: int) -> float:
         return self._t0 + sample / SAMPLE_RATE
@@ -331,6 +375,9 @@ class Recorder:
             st.lag_s = max(0.0, st.elapsed_s - min(ends) / SAMPLE_RATE) if ends else 0.0
             st.backlog = self._utterances.qsize() + self._in_flight
             st.segments = self._seq
+            if st.state == "recording":
+                self._max_backlog = max(self._max_backlog, st.backlog)
+                self._max_lag_s = max(self._max_lag_s, st.lag_s)
         try:
             self._on_status(st)
         except Exception:  # noqa: BLE001

@@ -77,38 +77,77 @@ def speaker_at(start: int, end: int, turns: list[Turn], max_gap_ms: int = 2000) 
     return None
 
 
-def _split_by_words(seg: Segment, words: list[Word], turns: list[Turn]) -> list[tuple[int | None, list[Word]]]:
-    speakers = [speaker_at(w.start_ms, w.end_ms, turns) for w in words]
-    # Words with no nearby turn inherit their neighbour's speaker.
-    for i in range(len(speakers)):
-        if speakers[i] is None and i > 0:
-            speakers[i] = speakers[i - 1]
-    for i in range(len(speakers) - 2, -1, -1):
-        if speakers[i] is None:
-            speakers[i] = speakers[i + 1]
+PHRASE_PAUSE_MS = 300  # a gap this long between words is a place a speaker could change
+MIN_RUN_MS = 1000  # shorter same-speaker pieces are treated as boundary jitter
+MIN_RUN_WORDS = 3
+_SENTENCE_END = (".", "?", "!")
 
-    runs: list[tuple[int | None, list[Word]]] = []
-    for spk, w in zip(speakers, words):
-        if runs and runs[-1][0] == spk:
-            runs[-1][1].append(w)
+Run = tuple[int | None, list[Word]]
+
+
+def _phrases(words: list[Word]) -> list[list[Word]]:
+    """Split words at sentence ends and pauses: the only places a split is allowed."""
+    phrases: list[list[Word]] = [[]]
+    for i, w in enumerate(words):
+        phrases[-1].append(w)
+        nxt = words[i + 1] if i + 1 < len(words) else None
+        if nxt is not None and (w.text.strip().endswith(_SENTENCE_END)
+                                or nxt.start_ms - w.end_ms >= PHRASE_PAUSE_MS):
+            phrases.append([])
+    return [p for p in phrases if p]
+
+
+def _phrase_speaker(phrase: list[Word], turns: list[Turn]) -> int | None:
+    """Speaker with the most overlap across the phrase's words; else the nearest turn."""
+    totals: dict[int, int] = {}
+    for w in phrase:
+        for t in turns:
+            if t.start_ms > w.end_ms:
+                break
+            ov = _overlap(w.start_ms, w.end_ms, t.start_ms, t.end_ms)
+            if ov:
+                totals[t.speaker] = totals.get(t.speaker, 0) + ov
+    if totals:
+        return max(totals, key=totals.get)
+    return speaker_at(phrase[0].start_ms, phrase[-1].end_ms, turns)
+
+
+def _is_short(run: Run) -> bool:
+    ws = run[1]
+    return ws[-1].end_ms - ws[0].start_ms < MIN_RUN_MS or len(ws) < MIN_RUN_WORDS
+
+
+def _join_same(runs: list[Run]) -> list[Run]:
+    out: list[Run] = []
+    for spk, ws in runs:
+        if out and out[-1][0] == spk:
+            out[-1][1].extend(ws)
         else:
-            runs.append((spk, [w]))
-    # Single-word runs are usually boundary jitter: fold them into a neighbour.
-    if len(runs) > 1:
-        merged: list[tuple[int | None, list[Word]]] = []
-        for i, (spk, ws) in enumerate(runs):
-            if len(ws) == 1 and len(runs) > 1:
-                if merged:
-                    merged[-1][1].extend(ws)
-                    continue
-                nxt = runs[i + 1]
-                runs[i + 1] = (nxt[0], ws + nxt[1])
-                continue
-            if merged and merged[-1][0] == spk:
-                merged[-1][1].extend(ws)
-            else:
-                merged.append((spk, list(ws)))
-        runs = merged or runs
+            out.append((spk, list(ws)))
+    return out
+
+
+def _split_by_words(seg: Segment, words: list[Word], turns: list[Turn]) -> list[Run]:
+    runs: list[Run] = [(_phrase_speaker(p, turns), p) for p in _phrases(words)]
+    # Phrases with no nearby turn inherit their neighbour's speaker.
+    for i in range(1, len(runs)):
+        if runs[i][0] is None:
+            runs[i] = (runs[i - 1][0], runs[i][1])
+    for i in range(len(runs) - 2, -1, -1):
+        if runs[i][0] is None:
+            runs[i] = (runs[i + 1][0], runs[i][1])
+    runs = _join_same(runs)
+
+    # Fold short pieces into a neighbour, shortest first, until none are left.
+    while len(runs) > 1:
+        short = [i for i, r in enumerate(runs) if _is_short(r)]
+        if not short:
+            break
+        i = min(short, key=lambda k: runs[k][1][-1].end_ms - runs[k][1][0].start_ms)
+        target = i - 1 if i > 0 else i + 1
+        spk = runs[target][0]
+        runs[i] = (spk, runs[i][1])
+        runs = _join_same(runs)
     return runs
 
 

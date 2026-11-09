@@ -65,6 +65,19 @@ def test_purge_old_audio(tmp_path):
     assert not old.audio_dir.exists() and new.audio_dir.exists()
 
 
+def test_settings_migration_resets_old_live_threshold(tmp_path):
+    path = tmp_path / "s.json"
+    # A v1 file as saved by the Settings dialog before Test #2's tuning.
+    path.write_text('{"live_speaker_threshold": 0.6, "keep_audio": true}', encoding="utf-8")
+    s = config.load(path)
+    assert s.live_speaker_threshold == 0.75 and s.keep_audio is True
+    assert s.settings_version == config.SETTINGS_VERSION
+    # A value saved on purpose under the current version is respected.
+    s.live_speaker_threshold = 0.8
+    config.save(s, path)
+    assert config.load(path).live_speaker_threshold == 0.8
+
+
 def test_settings_roundtrip_ignores_unknown_keys(tmp_path):
     path = tmp_path / "s.json"
     s = config.Settings(whisper_model="small.en", keep_audio=True)

@@ -13,8 +13,19 @@ from . import paths
 log = logging.getLogger(__name__)
 
 
+# Bump when a tuning default changes; ``_MIGRATIONS`` lists the keys whose saved values
+# from older versions are dropped so the new default applies. (Those keys aren't in the
+# Settings dialog; the dialog saves every field, so old defaults would otherwise stick.)
+SETTINGS_VERSION = 2
+_MIGRATIONS = {
+    2: ("live_speaker_threshold",),  # 0.6 -> 0.75, measured on real meeting audio (Test #2)
+}
+
+
 @dataclass
 class Settings:
+    settings_version: int = SETTINGS_VERSION
+
     # Devices (F11). None means "follow the Windows default device".
     mic_device: str | None = None
     output_device: str | None = None
@@ -28,7 +39,8 @@ class Settings:
     # Speaker labels (F5).
     diarize_system: bool = True
     diarize_mic: bool = False
-    live_speaker_threshold: float = 0.6
+    live_speaker_threshold: float = 0.75
+    live_min_new_speaker_s: float = 1.5
     final_cluster_threshold: float = 0.6
 
     # Echo handling.
@@ -54,6 +66,12 @@ class Settings:
     def from_dict(cls, data: dict) -> "Settings":
         known = {f.name for f in fields(cls)}
         clean = {k: v for k, v in data.items() if k in known}
+        saved_version = int(clean.get("settings_version", 1))
+        for version, keys in _MIGRATIONS.items():
+            if saved_version < version:
+                for key in keys:
+                    clean.pop(key, None)
+        clean["settings_version"] = SETTINGS_VERSION
         return cls(**clean)
 
     def to_dict(self) -> dict:

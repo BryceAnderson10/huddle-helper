@@ -56,7 +56,7 @@ class WhisperTranscriber:
 
     def transcribe(self, audio: np.ndarray) -> Transcription:
         segments, _info = self._model.transcribe(
-            audio.astype(np.float32), language="en", beam_size=self._beam, vad_filter=False,
+            normalize_level(audio), language="en", beam_size=self._beam, vad_filter=False,
             word_timestamps=True, condition_on_previous_text=False, without_timestamps=False,
             temperature=[0.0, 0.2, 0.4],
         )
@@ -78,6 +78,9 @@ class WhisperTranscriber:
                 if w.word.strip():
                     words.append(Word(int(w.start * 1000), int(w.end * 1000), w.word))
         text = _clean(" ".join(texts))
+        if words:
+            words = drop_hallucinated(words)
+            text = _clean("".join(w.text for w in words))
         if not text or text.lower() in _HALLUCINATIONS:
             return Transcription("", 0.0, [])
         confidence = math.exp(logprob_sum / weight) if weight else 0.0
@@ -86,3 +89,56 @@ class WhisperTranscriber:
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+TARGET_PEAK = 0.5
+MAX_GAIN = 30.0  # about +30 dB; louder boosts mostly amplify noise
+
+
+def normalize_level(audio: np.ndarray) -> np.ndarray:
+    """Boost quiet audio toward a target peak before transcription.
+
+    Test #2's microphone peaked at 0.047; Whisper is less reliable (and hallucinated a
+    repetition loop) on audio that quiet. Loud audio is left untouched.
+    """
+    audio = audio.astype(np.float32)
+    peak = float(np.abs(audio).max()) if len(audio) else 0.0
+    if peak <= 0 or peak >= TARGET_PEAK:
+        return audio
+    return audio * min(TARGET_PEAK / peak, MAX_GAIN)
+
+
+MIN_MEAN_WORD_MS = 60  # real speech is ~150-400 ms per word; hallucinated words are ~0 ms
+MAX_REPEATS = 2  # "I found it. I found it." is real; a third identical sentence is a loop
+
+
+def _sentences(words: list[Word]) -> list[list[Word]]:
+    out: list[list[Word]] = [[]]
+    for w in words:
+        out[-1].append(w)
+        if w.text.strip().endswith((".", "?", "!")):
+            out.append([])
+    return [s for s in out if s]
+
+
+def drop_hallucinated(words: list[Word]) -> list[Word]:
+    """Remove Whisper loops: sentences squeezed into near-zero time, and runaway repeats.
+
+    In Test #2 a quiet mic line ended with "Alright, let's go check this one." five times,
+    every word 0-20 ms long and crammed into the last second of the audio.
+    """
+    kept: list[list[Word]] = []
+    repeats = 0
+    for sent in _sentences(words):
+        if len(sent) >= 2:
+            mean_ms = sum(w.end_ms - w.start_ms for w in sent) / len(sent)
+            if mean_ms < MIN_MEAN_WORD_MS:
+                log.debug("Dropped implausibly fast sentence: %r", "".join(w.text for w in sent))
+                continue
+        key = _clean(" ".join(w.text for w in sent)).lower().strip(".?!")
+        prev = _clean(" ".join(w.text for w in kept[-1])).lower().strip(".?!") if kept else None
+        repeats = repeats + 1 if key == prev else 1
+        if repeats > MAX_REPEATS:
+            continue
+        kept.append(sent)
+    return [w for sent in kept for w in sent]

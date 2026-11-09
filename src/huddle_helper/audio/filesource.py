@@ -39,6 +39,7 @@ class FileCapture:
                 self._data[src] = np.concatenate([arr, np.zeros(length - len(arr), np.float32)])
         self.length = length
         self._realtime = realtime
+        self.realtime = realtime  # line-delay stats are only meaningful at real-time speed
         self._chunk = SAMPLE_RATE * chunk_ms // 1000
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
