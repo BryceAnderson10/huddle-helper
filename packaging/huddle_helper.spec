@@ -1,10 +1,12 @@
 # PyInstaller spec for Huddle Helper (one-folder build).
 # Build with:  powershell -File packaging\build.ps1
+import os
+
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
 for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "sherpa_onnx", "pyaudiowpatch", "soxr",
-            "soundfile", "pystray", "pycaw", "comtypes", "tokenizers"):
+            "soundfile", "pystray", "comtypes", "tokenizers"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -17,7 +19,10 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["torch", "matplotlib", "scipy", "pandas", "IPython", "pytest"],
+    # av: replaced by a stub in rthook_no_av.py. hf_xet: only used by huggingface_hub
+    # downloads, and models are fetched with urllib (huddle_helper.models).
+    runtime_hooks=[os.path.join(SPECPATH, "rthook_no_av.py")],
+    excludes=["torch", "matplotlib", "scipy", "pandas", "IPython", "pytest", "av", "hf_xet"],
     noarchive=False,
 )
 
@@ -25,8 +30,6 @@ a = Analysis(
 # CTranslate2 are built with a newer toolset and crash (access violation in
 # std::mutex) when that old copy is loaded first, so ship the system's
 # up-to-date runtime instead.
-import os
-
 _sys32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
 _vc_runtime = {"msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll",
                "concrt140.dll"}

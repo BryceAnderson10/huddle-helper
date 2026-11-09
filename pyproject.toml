@@ -18,7 +18,7 @@ dependencies = [
     "soundfile>=0.12",
     "pystray>=0.19",
     "Pillow>=10",
-    "pycaw>=20240210",
+    "comtypes>=1.4",
 ]
 
 [project.optional-dependencies]

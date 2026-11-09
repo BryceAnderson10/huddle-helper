@@ -102,16 +102,9 @@ def _resolve_devices(p, pyaudio, mic_name: str | None, output_name: str | None):
 
 def _default_endpoint_ids() -> tuple[str | None, str | None]:
     """IDs of the Windows default microphone and speakers (via Core Audio)."""
-    from pycaw.pycaw import AudioUtilities
+    from .endpoints import default_endpoint_ids
 
-    def _id(getter):
-        try:
-            dev = getter()
-            return getattr(dev, "id", None) or (dev.GetId() if hasattr(dev, "GetId") else None)
-        except Exception:  # noqa: BLE001 - no device or COM hiccup
-            return None
-
-    return _id(AudioUtilities.GetMicrophone), _id(AudioUtilities.GetSpeakers)
+    return default_endpoint_ids()
 
 
 class _Stream:

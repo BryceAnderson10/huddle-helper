@@ -20,6 +20,10 @@ from . import paths
 log = logging.getLogger(__name__)
 
 WHISPER_MODELS = ("tiny.en", "base.en", "small.en", "medium.en")
+_WHISPER_REPOS = "https://huggingface.co/Systran/faster-whisper"
+# model.bin comes last: whisper_installed() looks for it, so an interrupted
+# download is picked up again instead of being mistaken for a complete model.
+WHISPER_FILES = ("config.json", "tokenizer.json", "vocabulary.txt", "model.bin")
 
 _SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 SEGMENTATION_NAME = "pyannote-segmentation-3-0"
@@ -87,12 +91,11 @@ def install_whisper(name: str, root: Path | None = None, progress: Progress | No
     target = whisper_dir(name, root)
     if whisper_installed(name, root):
         return target
-    from faster_whisper import download_model
-
     if progress:
         progress(f"Downloading whisper model {name}")
-    target.mkdir(parents=True, exist_ok=True)
-    download_model(name, output_dir=str(target))
+    for filename in WHISPER_FILES:
+        if not (target / filename).exists():
+            _download(f"{_WHISPER_REPOS}-{name}/resolve/main/{filename}", target / filename, None)
     return target
 
 
