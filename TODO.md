@@ -46,6 +46,8 @@ Stop), final transcript 35 s after Stop, and the final pass found 4 distinct voi
 - [ ] **Mic segment timing is squeezed:** 5 words in 0.56 s (57048–57608 ms). The start and
   end come from Whisper word timestamps clamped to the utterance; one of them is probably
   wrong. Code: `recorder.py` `_transcribe_loop`.
+  → Not seen in Test #3: all 6 mic lines have normal word lengths (60–500 ms). Likely the
+  quiet-audio problem behind Test #2's hallucination; close if Test #4 is also clean.
 
 ### Measurement
 
@@ -145,6 +147,75 @@ in the correct time order. No echo lines were dropped, which is correct with a h
 
 - [ ] A 21-second false start ("Test #2", 13:34:09–13:34:30, 4 lines) appears in the log, but its
   folder is gone. If it was deleted by hand, nothing to do. Otherwise, find out why.
+
+## From Test #3: `2026-11-09_1441_test-3`
+
+Setup: rebuilt exe with the 079d8c9 fixes, Keep audio on, same headset. Recorded meeting
+video plus three spoken mic passages (start, one over the video, end). 1 min 47 s; 21 lines.
+
+What went well:
+- **First `live_stats` from a real recording:** line delay median 1.0 s, **p90 1.4 s**
+  (PRD target 5 s), max 2.0 s; backlog never above 1; max lag 1.8 s. No gaps or errors.
+- **Mic:** speech peaks at 0.074, about double Test #2. No quiet-mic warning, which is
+  correct. Every mic speech region was transcribed; no hallucinations.
+- **Final pass:** no segment was split (final text and timings equal the live file).
+- **Overlap:** the mic line spoken over the video (32.3 s) is captured and in order.
+
+### Final pass merged two different people (regression risk in the new merge)
+
+- [ ] **The offline clustering put two speakers together, and the small-speaker merge hid
+  the rest.** The voice evidence for the remote lines:
+
+  | Line group (live label) | Similarity within group | Similarity to the other group |
+  | --- | --- | --- |
+  | B: lines 10–12 (`SPEAKER_04`) | 0.83–0.88 | 0.49–0.74 to C |
+  | C: lines 15–18 (`SPEAKER_05`) | 0.81–0.95 | 0.49–0.74 to B |
+
+  So B and C are different people, and the live labels had them right. The sherpa clustering
+  (threshold 0.6) put most of B (lines 11–12) in one cluster with C, and B's first 6 s
+  (line 10) in its own cluster. The 079d8c9 merge then folded that 6 s cluster into the B+C
+  cluster (similarity 0.71, just over 0.7), so the final file says lines 10–18 are all
+  `SPEAKER_02`.
+
+  *Proposed fix (tested offline, not implemented):* label final lines by clustering the
+  transcript lines themselves over the whole meeting. Use average-linkage clustering of each
+  line's voice fingerprint (weighted by duration), with the same embedding model as the live
+  pass. Results on the three kept recordings:
+
+  | Threshold | Test #3 (B ≠ C expected) | Test #2 | TTS sample (truth known) |
+  | --- | --- | --- | --- |
+  | 0.60 | 2 clusters, B+C merged ✗ | 3 (2 main + 1 single line) | correct |
+  | **0.65** | **3: A / B / C** ✓ | 4 (same 2 main as today + 2 single short lines) | correct |
+  | 0.70 | 5 (A split, short lines alone) | 5 | correct |
+
+  So: 0.65, then fold clusters that are only one or two short lines into the closest
+  cluster. Keep sherpa's turn boundaries only for splitting a line where the speaker
+  changes mid-line, which the 079d8c9 phrase rules already limit. Then re-run all three
+  recordings and the TTS e2e test. Code: `finalize.py`, `diarize.py`.
+- [ ] Until then, consider raising the small-speaker merge's `min_similarity` from 0.7 to
+  about 0.75. Test #3's wrong merge was at 0.71; Test #2's justified merges were 0.83–0.90.
+
+### Live labels
+
+- [ ] **Short opening lines create extra live speakers.** Lines 3 (1.0 s) and 4 (1.6 s) became
+  `SPEAKER_01` and `SPEAKER_02`, then the first long line of the same voice became
+  `SPEAKER_03`. Fingerprints of lines this short are unreliable (0.57–0.70 similar to their
+  own speaker's long lines). The rest of the live labels were right: A, B and C each got one
+  label. *Ideas:* don't let a line under ~2 s found a new speaker unless no speaker exists yet,
+  and let a provisional speaker built from short lines be absorbed by the next confident
+  match. Live labels are provisional, so this is lower priority than the final pass.
+
+### Readability
+
+- [ ] **Mic sentences are broken into fragments at natural pauses.** "Alright, this is to kick
+  off and initiate test number three." / "of Huddle Helper." and "we're going to close out." /
+  "the" / "Test number three." The pauses are real (0.8–1.2 s, longer than the 500 ms that
+  ends an utterance), and Whisper adds a full stop to each piece.
+  *Fix (final file only, since the live file is append-only):* join consecutive lines from the same
+  source and speaker when the gap is under ~1.5 s and the next line starts in lower case or the
+  previous one has no closing punctuation, and drop the spurious full stop. Expected result:
+  "…initiate test number three of Huddle Helper." and "we're going to close out the test
+  number three." Code: `finalize.py`.
 
 ## Still open from the PRD milestones
 
