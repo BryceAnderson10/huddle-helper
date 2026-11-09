@@ -171,7 +171,8 @@ What went well:
   | B: lines 10–12 (`SPEAKER_04`) | 0.83–0.88 | 0.49–0.74 to C |
   | C: lines 15–18 (`SPEAKER_05`) | 0.81–0.95 | 0.49–0.74 to B |
 
-  So B and C are different people, and the live labels had them right. The sherpa clustering
+  So B and C are different people, and the live labels had them right. **Confirmed by Bryce:**
+  "I was timing myself" and "Eric pointed this out" are two different people. The sherpa clustering
   (threshold 0.6) put most of B (lines 11–12) in one cluster with C, and B's first 6 s
   (line 10) in its own cluster. The 079d8c9 merge then folded that 6 s cluster into the B+C
   cluster (similarity 0.71, just over 0.7), so the final file says lines 10–18 are all
