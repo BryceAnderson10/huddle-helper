@@ -71,6 +71,10 @@ def test_settings_migration_resets_old_live_threshold(tmp_path):
     path.write_text('{"live_speaker_threshold": 0.6, "keep_audio": true}', encoding="utf-8")
     s = config.load(path)
     assert s.live_speaker_threshold == 0.75 and s.keep_audio is True
+    # A v2 file saved after the Test #2 fixes carries min-new-speaker 1.5; v3 makes it 2.0.
+    path.write_text('{"settings_version": 2, "live_speaker_threshold": 0.75, "live_min_new_speaker_s": 1.5}',
+                    encoding="utf-8")
+    assert config.load(path).live_min_new_speaker_s == 2.0
     assert s.settings_version == config.SETTINGS_VERSION
     # A value saved on purpose under the current version is respected.
     s.live_speaker_threshold = 0.8

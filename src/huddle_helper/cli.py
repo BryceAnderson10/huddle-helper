@@ -67,14 +67,15 @@ def _ensure_models(s: config.Settings) -> None:
 
 
 def _finalize(folder, s: config.Settings) -> None:
-    from .diarize import SherpaOfflineDiarizer
+    from .diarize import SherpaEmbedder, SherpaOfflineDiarizer
     from .finalize import finalize_meeting
 
     def progress(stage, frac):
         print(f"\r{stage}: {frac:4.0%}   ", end="", flush=True)
 
     count = finalize_meeting(folder, lambda: SherpaOfflineDiarizer(threshold=s.final_cluster_threshold),
-                             keep_audio=s.keep_audio, progress=progress)
+                             keep_audio=s.keep_audio, progress=progress, embedder_factory=SherpaEmbedder,
+                             voice_threshold=s.final_voice_threshold)
     print(f"\nFinal transcript: {folder.final_path} ({count} segments)")
 
 

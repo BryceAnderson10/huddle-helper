@@ -149,7 +149,7 @@ class AppController:
 
     # -- after-Stop pass ------------------------------------------------
     def _finalize_worker(self) -> None:
-        from .diarize import SherpaOfflineDiarizer
+        from .diarize import SherpaEmbedder, SherpaOfflineDiarizer
         from .finalize import finalize_meeting
 
         while True:
@@ -167,7 +167,8 @@ class AppController:
                 keep = folder.read_meta().get("settings", {}).get("keep_audio", self.settings.keep_audio)
                 finalize_meeting(
                     folder, lambda: SherpaOfflineDiarizer(threshold=self.settings.final_cluster_threshold),
-                    keep_audio=keep, progress=progress)
+                    keep_audio=keep, progress=progress, embedder_factory=SherpaEmbedder,
+                    voice_threshold=self.settings.final_voice_threshold)
                 self._notify(f"Final transcript ready: {folder.meeting_id}")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Finalizing %s failed", folder.meeting_id)

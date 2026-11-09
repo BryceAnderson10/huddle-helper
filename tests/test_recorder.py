@@ -32,7 +32,8 @@ def run(tmp_path, mic, system, errors=None, **settings):
 
 def test_two_streams_to_jsonl_contract(tmp_path):
     mic = np.concatenate([silence(0.5), tone(300, 1.5), silence(4), tone(300, 1.0), silence(1)])
-    system = np.concatenate([silence(2.5), tone(1100, 1.5), silence(0.8), tone(1600, 1.5), silence(2)])
+    # Remote lines are 2 s: shorter ones can't found a new live speaker (live_min_new_speaker_s).
+    system = np.concatenate([silence(2.5), tone(1100, 2.0), silence(0.8), tone(1600, 2.0), silence(2)])
     folder, events = run(tmp_path, mic, system)
 
     assert events[0]["type"] == "meeting_start" and events[0]["meeting_id"] == folder.meeting_id
@@ -99,8 +100,8 @@ def test_echo_dedupe_drops_mic_copy(tmp_path):
 
 
 def test_diarize_mic_and_no_system_diarization(tmp_path):
-    mic = np.concatenate([silence(0.5), tone(300, 1.5), silence(1), tone(1300, 1.5), silence(1)])
-    system = np.concatenate([silence(5.5), tone(900, 1.0), silence(1)])
+    mic = np.concatenate([silence(0.5), tone(300, 2.0), silence(1), tone(1300, 2.0), silence(1)])
+    system = np.concatenate([silence(6.5), tone(900, 1.0), silence(1)])
     _folder, events = run(tmp_path, mic, system, diarize_mic=True, diarize_system=False)
     speakers = [e["speaker"] for e in events if e["type"] == "segment"]
     assert speakers == ["MIC_SPEAKER_01", "MIC_SPEAKER_02", "Remote"]

@@ -61,42 +61,64 @@ class SherpaEmbedder:
 class OnlineClusterer:
     """Incremental speaker grouping for provisional live labels."""
 
-    def __init__(self, prefix: str, threshold: float = 0.75, min_new_speaker_s: float = 1.5):
+    def __init__(self, prefix: str, threshold: float = 0.75, min_new_speaker_s: float = 2.0,
+                 weak_speaker_s: float = 2.0, adopt_threshold: float = 0.6):
         self.prefix = prefix
         self.threshold = threshold
         self.min_new_speaker_s = min_new_speaker_s
+        # A speaker known only from short clips (under weak_speaker_s of speech) has an
+        # unreliable fingerprint. Test #3 opened with a 1.0 s line that founded SPEAKER_01, so
+        # the same voice's first long line (0.70 alike) became a new SPEAKER_03.
+        self.weak_speaker_s = weak_speaker_s
+        self.adopt_threshold = adopt_threshold
         self._centroids: list[np.ndarray | None] = []  # None: speaker seen without a fingerprint yet
+        self._weights: list[float] = []  # seconds of speech behind each fingerprint
         self._last: int | None = None
 
     def assign(self, embedding: np.ndarray | None, duration_s: float) -> str:
         weight = max(duration_s, 0.1)
         if embedding is None or not len(embedding):
             if self._last is None:
-                self._new(None)
+                self._new(None, 0.0)
             return label(self.prefix, self._last + 1)
 
         scored = [(i, float(np.dot(embedding, c / (np.linalg.norm(c) or 1.0))))
                   for i, c in enumerate(self._centroids) if c is not None]
         if not scored:
             if self._centroids:  # fill the placeholder speaker
-                self._centroids[0] = embedding * weight
-                self._last = 0
+                self._update(0, embedding, weight)
                 return label(self.prefix, 1)
-            return label(self.prefix, self._new(embedding * weight) + 1)
+            return label(self.prefix, self._new(embedding * weight, weight) + 1)
 
         idx, sim = max(scored, key=lambda item: item[1])
         if sim >= self.threshold:
             # Confident match: refine that speaker's fingerprint.
-            self._centroids[idx] = self._centroids[idx] + embedding * weight
-        elif duration_s >= self.min_new_speaker_s:
-            return label(self.prefix, self._new(embedding * weight) + 1)
-        # Otherwise too short to trust as a new voice: attach to the closest match
-        # without letting it blur that speaker's fingerprint.
+            self._update(idx, embedding, weight)
+            return label(self.prefix, idx + 1)
+        if duration_s >= self.min_new_speaker_s:
+            # Before founding a new speaker, let a weakly-known speaker that is reasonably
+            # close adopt this line; its fingerprint was built from too little audio to trust.
+            weak = [(i, s) for i, s in scored
+                    if self._weights[i] < self.weak_speaker_s and s >= self.adopt_threshold]
+            if weak:
+                widx, _ = max(weak, key=lambda item: item[1])
+                self._update(widx, embedding, weight)
+                return label(self.prefix, widx + 1)
+            return label(self.prefix, self._new(embedding * weight, weight) + 1)
+        # Too short to trust as a new voice: attach to the closest match without letting
+        # it blur that speaker's fingerprint.
         self._last = idx
         return label(self.prefix, idx + 1)
 
-    def _new(self, centroid: np.ndarray | None) -> int:
+    def _update(self, idx: int, embedding: np.ndarray, weight: float) -> None:
+        current = self._centroids[idx]
+        self._centroids[idx] = embedding * weight if current is None else current + embedding * weight
+        self._weights[idx] += weight
+        self._last = idx
+
+    def _new(self, centroid: np.ndarray | None, weight: float) -> int:
         self._centroids.append(centroid)
+        self._weights.append(weight)
         self._last = len(self._centroids) - 1
         return self._last
 
@@ -116,14 +138,94 @@ class OfflineDiarizer(Protocol):
     def diarize(self, audio: np.ndarray, progress: Callable[[float], None] | None = None) -> list[Turn]: ...
 
 
+def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: float = 0.65) -> list[int]:
+    """Average-linkage clustering of voice fingerprints over a whole meeting.
+
+    Unlike the live pass, every line is compared with every other line, so the order lines
+    arrive in doesn't matter. Cluster similarity is the weight-averaged cosine similarity of
+    all cross pairs (weights are line durations, so long lines count more than "Yeah.").
+    Merging stops when no two clusters are at least ``threshold`` alike.
+
+    Threshold 0.65 was chosen on kept recordings: it separates the two people Test #3's old
+    final pass merged (confirmed different), keeps Test #2's two main speakers, and gets the
+    synthetic two-voice meeting exactly right.
+    """
+    n = len(vecs)
+    if n == 0:
+        return []
+    X = np.stack(vecs).astype(np.float64)
+    w = np.asarray(weights, dtype=np.float64)
+    S = X @ X.T  # line-to-line similarity
+    np.fill_diagonal(S, -np.inf)
+    W = w.copy()  # total weight per cluster
+    active = np.ones(n, dtype=bool)
+    members: list[list[int]] = [[i] for i in range(n)]
+    while active.sum() > 1:
+        flat = int(np.argmax(S))
+        i, j = divmod(flat, n)
+        if S[i, j] < threshold:
+            break
+        # Lance-Williams update for weighted average linkage: merge j into i.
+        new = (W[i] * S[i] + W[j] * S[j]) / (W[i] + W[j])
+        S[i, :] = new
+        S[:, i] = new
+        S[i, i] = -np.inf
+        S[j, :] = -np.inf
+        S[:, j] = -np.inf
+        W[i] += W[j]
+        members[i] += members[j]
+        members[j] = []
+        active[j] = False
+    labels = [0] * n
+    clusters = sorted((m for m in members if m), key=min)
+    for k, m in enumerate(clusters):
+        for idx in m:
+            labels[idx] = k
+    return labels
+
+
+def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list[float],
+                        min_s: float = 4.0, min_fraction: float = 0.03) -> list[int]:
+    """Give clusters with very little speech to their most similar larger cluster.
+
+    A cluster of one or two short lines ("I don't know.", 1.3 s) is usually a known voice
+    whose short-clip fingerprint came out unusual, not a new person.
+    """
+    totals: dict[int, float] = {}
+    for lab, wt in zip(labels, weights):
+        totals[lab] = totals.get(lab, 0.0) + wt
+    speech = sum(totals.values())
+    limit = max(min_s, min_fraction * speech)
+    large = [k for k, v in totals.items() if v >= limit]
+    if not large or len(large) == len(totals):
+        return list(labels)
+    cents = {}
+    for k in large:
+        c = np.sum([vecs[i] * weights[i] for i in range(len(labels)) if labels[i] == k], axis=0)
+        cents[k] = c / (np.linalg.norm(c) or 1.0)
+    out = list(labels)
+    for k in totals:
+        if k in large:
+            continue
+        idx = [i for i in range(len(labels)) if labels[i] == k]
+        c = np.sum([vecs[i] * weights[i] for i in idx], axis=0)
+        c = c / (np.linalg.norm(c) or 1.0)
+        target = max(large, key=lambda j: float(np.dot(c, cents[j])))
+        for i in idx:
+            out[i] = target
+    return out
+
+
 def merge_small_speakers(turns: list[Turn], centroids: dict[int, np.ndarray], min_s: float = 15.0,
-                         min_fraction: float = 0.05, min_similarity: float = 0.7) -> list[Turn]:
+                         min_fraction: float = 0.05, min_similarity: float = 0.75) -> list[Turn]:
     """Fold speakers with little speech into the most similar larger speaker.
 
     Offline clustering tends to spin off small clusters from a main voice (Test #2: three
     "speakers" with 2-10 s each, at 0.83-0.90 similarity to a main speaker). A small
     cluster is merged only if it really sounds like a larger one, so a genuinely
-    different person who speaks briefly keeps their own label.
+    different person who speaks briefly keeps their own label. (Test #3 had a wrong
+    merge at 0.71, hence 0.75.) These turns now only decide where a line may be split;
+    the final labels come from ``cluster_voices``.
     """
     totals: dict[int, float] = {}
     for t in turns:
