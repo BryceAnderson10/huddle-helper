@@ -118,9 +118,9 @@ P0 items define this feature's first release; P1 items follow.
 | ID | Requirement | Priority |
 | --- | --- | --- |
 | **Live view, export, speakers, playback** | | |
-| L1 | A Transcript window shows the live transcript of the current meeting, both streams in time order, updating within 1 s of a line being written | P0 |
+| L1 | A Transcript window shows the live transcript of the current meeting, both streams in time order, updating within 1 s of a line being written, without pushing live line delay past the PRD target on the target laptop | P0 |
 | L2 | The window shows recording health: elapsed time, line count, lag, backlog, device gaps | P0 |
-| L3 | After Stop, the window shows the after-Stop pass's progress, then switches to the final transcript | P0 |
+| L3 | After Stop, the window shows the after-Stop pass's progress and an estimate of the time left, then switches to the final transcript | P0 |
 | L4 | The window opens any past meeting read-only | P0 |
 | L5 | One press adds a bookmark at the current point in the meeting, from the window, the tray menu, or a global hotkey | P0 |
 | L6 | Bookmarks are written to `marks.jsonl` in the meeting folder as soon as they are made, and shown in the transcript | P0 |
@@ -131,7 +131,7 @@ P0 items define this feature's first release; P1 items follow.
 | L11 | Name a speaker or a single line during or after the meeting; names are written to `speaker_tags.jsonl` | P0 |
 | L12 | The after-Stop pass turns tags into `speakers.json` for the final labels, and reports conflicts | P0 |
 | L13 | Attendee list at Start, number-key shortcuts, "Who is this?" prompt for new voices | P1 |
-| L14 | Tags act as rules in the final pass's voice clustering | Later |
+| L14 | Lines the user named as different people are never put in the same final speaker | P0 |
 | L15 | Click a line's play control to hear that line from the buffered audio of its own stream | P0 |
 | L16 | Playback works during the meeting, between Stop and `DONE`, and after `DONE` when the meeting's audio was kept; otherwise the control is disabled and says why | P0 |
 | L17 | A clip played while recording must not become a transcript line or a voice in the speaker labels; the user is warned that, without headphones, the call can hear it | P0 |
@@ -150,8 +150,8 @@ P0 items define this feature's first release; P1 items follow.
 | L28 | Up to four user-defined types (name and hotkey) in Settings | P1 |
 | **Meetings and housekeeping** | | |
 | L29 | A Meetings view lists every meeting with date, title, length, status, speakers, bookmarks and kept-audio size; open, export or show it in Explorer from there | P0 |
-| L30 | Delete a meeting, or only its kept audio, to the Recycle Bin, after a confirmation that says what will go; not allowed while it is recording or processing | P0 |
-| L31 | A meeting whose final pass failed shows the error and a Retry button that runs the final pass again | P0 |
+| L30 | Delete a meeting, or only its kept audio, to the Recycle Bin, or permanently as a separate choice, after a confirmation that says what will go and whether it can be restored; not allowed while it is recording or processing | P0 |
+| L31 | A meeting whose final pass failed shows the error and a Retry button that runs the final pass again, waiting until no meeting is recording | P0 |
 | L32 | A Storage panel shows disk use of the meetings folder (transcripts vs kept audio), the auto-purge setting, and "Delete kept audio older than N days" now, with a preview | P1 |
 | **Custom vocabulary** | | |
 | L33 | A Vocabulary list in Settings (acronyms, product names, people's names, one per line) is given to Whisper for every utterance on both streams; changes apply from the next utterance, including during a meeting | P0 |
@@ -160,6 +160,9 @@ P0 items define this feature's first release; P1 items follow.
 | L36 | Vocabulary never adds words that weren't said: no measurable rise in hallucinated lines, and live line delay stays within the PRD target, measured on kept real audio before release | P0 |
 | L37 | "Add to vocabulary…" on a line's right-click menu, with the selected words prefilled for the user to correct | P1 |
 | L38 | Import and export the vocabulary as a plain text file, so a team can share one list | P1 |
+| **Speaker naming, continued** | | |
+| L39 | Lines the user named as the same person always end up in the same final speaker | P1 |
+| L40 | Final speakers with little speech are shown dimmed and marked "short", never hidden | P1 |
 
 ## The core problem: live labels are not final labels
 
@@ -186,11 +189,31 @@ gets the name whose tagged speech overlaps it most.
 - Mic: with mic diarization off, every mic line is `You`. Tagging `You` sets a display
   name for the mic (it can default to a "My name" setting).
 
-**Later (milestone 8): tags as clustering constraints.** The final pass's line clustering
-(`cluster_voices`, average linkage) can take tags as rules: two lines tagged with
-different names may not share a cluster; lines tagged with the same name always do.
-This would have fixed Test #3's B+C merge outright with two clicks from the user. It is
-a bigger change to `finalize.py`, so it comes after the mapping works.
+**Why mapping alone isn't enough: the final pass merges people.** Both real failures so
+far were two different people put into one final speaker, not one person split in two:
+Test #3 merged B and C, and Test #4 merged Remote D (6 lines, 28 s) into Remote B (377 s).
+With mapping alone, if the user names both Remote D and Remote B, the merged speaker is
+called "Remote B" (more overlap), Remote D's name is lost, and re-tagging can't help because
+the merge happens before names are applied. So names must also steer the clustering.
+
+**Names as rules in the final pass (L14, P0; L39, P1).** The final pass's line
+clustering (`cluster_voices`, average linkage) and the small-cluster fold
+(`fold_small_clusters`) take the tags as rules:
+- **Different names, different speakers (L14).** Two clusters whose lines carry
+  different names are never merged, and a named cluster is never folded into a cluster
+  with another name. This is the part that fixes Tests #3 and #4: two clicks during the
+  call keep Remote D and Remote B apart even when their voices are 0.64–0.75 alike.
+- **Same name, same speaker (L39).** Lines with the same name start in one cluster
+  before clustering begins. Less urgent: when this fails, the result is one person
+  under two labels, which the mapping already names correctly.
+- **Limit.** The rules only protect people the user named. An unnamed Remote D can still
+  be merged into a named Remote B. The "Who is this?" prompt for every new live voice (L13)
+  is what gets both named; the fixed-threshold problem itself is tracked in TODO (Test #4).
+- **Which lines are named.** Line-level tags name that line; speaker-level tags name
+  every live line with that label. A speaker-level tag on a live label that mixes two
+  people (see Risks) would push wrong lines into a cluster, so speaker-level
+  tags count as rules only for lines whose voice is at least 0.7 like the rest of that
+  name's lines; the others are left to the clustering.
 
 ## Output contract changes
 
@@ -221,8 +244,15 @@ from the tags, **before** `DONE`, adding the mapping evidence:
 ```
 
 Names the user enters after `DONE` (final view) are written straight to `speakers.json`,
-as Rename speakers does today. If the downstream app has already written
-`speakers.json`, names it set are kept unless the user tagged that same speaker.
+as Rename speakers does today.
+
+**Decision: when both apps write `speakers.json`, the user's names win.** For a speaker
+the user named (by tag or in the final view), the user's name is written. For every
+other speaker, a name the downstream app set is kept. The file is already replaced
+atomically (`write_json_atomic`: temp file + rename), so a reader never sees half a
+file. To avoid one writer overwriting the other's names, Huddle Helper re-reads the file
+immediately before each write and merges into what it finds. Downstream apps that write
+the file should do the same.
 
 Order of the end of the after-Stop pass becomes: final file renamed into place →
 `speakers.json` → `meta.json` complete → `DONE`.
@@ -267,6 +297,15 @@ a new reason, so readers that already handle device gaps handle mutes too:
   follower knows right away that mic silence is deliberate. It is `null` otherwise.
 - No line is added to `transcript.jsonl`: the contract says everything between
   `meeting_start` and `meeting_end` is a `segment`, and that stays true.
+- **Readers must check `reason`.** Until now every gap meant lost audio (a device
+  change). A `muted` gap is deliberate: the user chose not to be recorded, so a
+  downstream app must not report it as a fault or try to recover it. OUTPUT_SPEC gets
+  this note in the same change that adds mute.
+
+**Downstream app changes.** Names (`speaker_tags.jsonl`, `speakers.json` from tags)
+and bookmarks (`marks.jsonl`) reach summaries only once the downstream app reads them.
+Its reader should be updated alongside milestones 2 and 5, not after; otherwise the
+features work in the window but change nothing downstream.
 
 **`meta.json`: vocabulary.** `"vocabulary": ["KoVa", "QDM", "ETL", "Zentrix"]` holds the
 terms passed to Whisper (after the token budget; empty list if none), and
@@ -341,8 +380,9 @@ two either way is bad. The system stream (the call) keeps recording.
   tray menu, and a global hotkey (default `Ctrl+Alt+M`, same rules and AltGr check as
   the bookmark hotkeys). Press again to unmute.
 - **Nothing is kept.** From the press, mic samples are replaced with silence *before*
-  the audio buffer, VAD, transcription and voice fingerprinting, so the muted audio is
-  never written or analysed, not even in `audio\mic.flac`. Replacing (rather than
+  the audio buffer, the in-memory playback window (click-to-hear), VAD, transcription
+  and voice fingerprinting, so the muted audio is never written, analysed or played
+  back, not even in `audio\mic.flac`. Replacing (rather than
   stopping capture) keeps the mic and system streams on one clock, the way device gaps
   are handled today (`audio/aligner.py`).
 - **Speech in progress.** Whatever the user said up to the press is kept: the silence
@@ -539,9 +579,14 @@ view. Multi-select for delete.
 - **Delete meeting** moves the whole folder to the Recycle Bin. **Delete audio** moves
   only `audio\` and sets `audio_kept: false` and `audio_deleted_at` in `meta.json`
   (auto-purge sets `audio_purged_at` the same way). Click-to-hear then explains that the audio was deleted.
-- The confirmation names what goes: "Delete 2 meetings (test-2-2, test-3), 33 MB,
-  to the Recycle Bin?" It warns more strongly for meetings finished in the last 24 hours
-  (the downstream app may not have processed them yet).
+- The confirmation names what goes and whether it can come back: "Move 2 meetings
+  (test-2-2, test-3), 33 MB, to the Recycle Bin? They can be restored from there until
+  the Recycle Bin is emptied." It warns more strongly for meetings finished in the last
+  24 hours (the downstream app may not have processed them yet).
+- **Delete permanently** is a separate choice (Shift+Delete, or a check box in the
+  confirmation), for a sensitive meeting the user wants gone now. Recycle Bin is the
+  default, but it means "deleted" transcripts and audio stay on disk until it is
+  emptied, and the confirmation says so.
 - Not available for a meeting that is recording or processing.
 - Recycle Bin via the Windows shell (`SHFileOperationW` with `FOF_ALLOWUNDO`, through
   ctypes; no new dependency). If the meetings folder is on a drive without a Recycle
@@ -555,7 +600,10 @@ view. Multi-select for delete.
 and `meta.json` `error`. The row shows "Final pass failed" with the error on hover and a
 **Retry** button that queues `finalize_meeting` for it, exactly as after Stop. It can
 only work if the buffered audio is still there (it always is for a failed meeting: the
-final pass deletes audio only after success). Interrupted meetings are already
+final pass deletes audio only after success). On the target laptop the final pass takes
+about 0.6× the meeting's length (Test #4: 13.5 min for 22.7 min) and competes with live
+transcription for the CPU, so a retry requested while a meeting is recording waits and
+starts after Stop; the row says "Retry queued until recording stops". Interrupted meetings are already
 recovered at start-up and need no button.
 
 **Storage (L32, P1).** A small panel: total size of the meetings folder, split into
@@ -616,6 +664,12 @@ real audio (Tests #2–#4) with and without vocabulary:
   under ~1 s whose only word is a vocabulary term needs `confidence` above a floor.
 - **Speed:** live line delay p90 stays under the PRD's 5 s on the target laptop (it was
   2.4 s in Test #4 without vocabulary).
+- **Names:** people's names are the riskiest terms, because a wrongly inserted name is
+  a wrong fact ("Thank you, Remote D" when nobody said Remote D), and attendee names are
+  added automatically (L34). Test #4 has known names on the call (Remote A, Remote B, Remote C,
+  Remote D), so count names that appear where the run without vocabulary had none, and
+  check each against the audio. If names misfire, keep attendee names out of the prompt
+  by default.
 
 Vocabulary is plain text in settings and `meta.json`, like the transcript; nothing
 leaves the PC.
@@ -655,8 +709,16 @@ While muted, an amber bar sits under the header:
   levels, gaps (device rebind) shown inline as "— 4 s gap (device changed) —".
 - **After Stop.** The status bar shows the after-Stop pass's stage and fraction (already
   reported by `finalize_meeting`'s progress callback; the tray only shows the name
-  today). On `DONE` the view reloads from `transcript.final.jsonl`, applies
-  `speakers.json`, and highlights changed lines and any conflicts for ~10 s.
+  today) and an estimate of the time left ("about 20 min left"). The estimate comes from
+  the speed of earlier final passes on this PC (final-pass time ÷ meeting length, stored
+  in `meta.json`), refined by the pass's own progress; the first meeting on a PC shows
+  only the stage. This matters on the target laptop, where an hour-long meeting takes
+  about 35 minutes (Test #4). The live transcript stays usable throughout. On `DONE`
+  the view reloads from `transcript.final.jsonl`, applies `speakers.json`, and
+  highlights changed lines and any conflicts for ~10 s.
+- **Short speakers (L40).** In the final view, a speaker with little speech (under
+  ~30 s or a few lines) is shown dimmed and marked "short", never hidden: Test #4's
+  Remote D had only 28 s, and a second possible person 13 s.
 - **Past meetings.** The Meetings view (above) opens any meeting read-only with names;
   speaker naming works there too. This replaces the Rename speakers dialog.
 - **Bookmarks** are drawn as a row between lines, by `at_ms`, with the type's symbol and
@@ -682,7 +744,12 @@ show that the call is active, but who is speaking is only known once the line la
   (`tray.py`). No new UI framework; PyInstaller build unchanged.
 - **Data source.** The window tails the meeting's files (`transcript.jsonl`,
   `speaker_tags.jsonl`, then `transcript.final.jsonl` and `speakers.json`) on a 250 ms
-  Tk timer, using `writer.read_events`. It reads exactly what the downstream app reads,
+  Tk timer. It keeps a byte offset per file and parses only lines appended since the
+  last read (a complete line ends in `\n`; a partial last line waits for the next
+  tick), and only redraws what changed. Re-reading a 2-hour file with
+  `writer.read_events` every tick would cost CPU the transcriber needs: on the target
+  laptop live delay already reached a max of 6.8 s in Test #4. `read_events` is used
+  once, to open a past or final transcript. It reads exactly what the downstream app reads,
   works the same for past meetings, and adds no coupling to recorder threads. Status
   (lag, backlog, levels, finalize progress) comes from `AppController.state`, which the
   tray already polls.
@@ -690,9 +757,12 @@ show that the call is active, but who is speaking is only known once the line la
   `speaker_tags.jsonl` through a small writer (flush per line, same lock discipline as
   the transcript writer). Tags made after Stop but before `DONE` are picked up because
   the final pass reads the tags file at its end.
-- **Final pass.** New step in `finalize.py` after the final file is in place: read tags,
-  compute overlaps against final segments, write `speakers.json` with `from_tags` and
-  `conflicts`. Crash recovery (`housekeeping.py`) runs the same step.
+- **Final pass.** `_voice_labels` reads the tags first and passes "cannot share a
+  cluster" pairs (L14) to `cluster_voices` and `fold_small_clusters`: average linkage
+  skips any merge that would join two names, and the fold skips any target with a
+  different name. After the final file is in place, a new step computes overlaps
+  against final segments and writes `speakers.json` with `from_tags` and `conflicts`.
+  Crash recovery (`housekeeping.py`) runs the same steps.
 - **Bookmarks.** `AppController.bookmark(kind, via)` reads the recorder's meeting clock
   and appends to `marks.jsonl` (same flush-per-line writer as tags). Hotkeys (all
   bookmark types and mute) are registered with `RegisterHotKey` via ctypes on one small
@@ -730,8 +800,10 @@ show that the call is active, but who is speaking is only known once the line la
 1. **Read-only live view and export** (L1–L4, L8–L10). Window, tailing, auto-scroll,
    status bar, after-Stop progress, swap to final file, past meetings. Export to `.txt`
    and `.md` from the window and the CLI. Export only reads files, so it can ship first.
-   *Check:* export Tests #1–#3 and the TTS sample; open the `.md` in a Markdown viewer
-   and the `.txt` in Notepad.
+   *Check:* export Tests #1–#4 and the TTS sample; open the `.md` in a Markdown viewer
+   and the `.txt` in Notepad. Record a real call on the target laptop with the window
+   open the whole time: `live_stats` line delay p90 and max must be no worse than
+   Test #4 without the window (p90 2.4 s, max 6.8 s).
 2. **Bookmarks, types and mute** (L5–L7, L21–L27). One hotkey thread for all of them,
    AltGr check, button, tray menu, `marks.jsonl` with `kind`, bookmarks in the view
    and in exports, labels, type changes and deletion, line bookmarks. Mute in the
@@ -746,29 +818,37 @@ show that the call is active, but who is speaking is only known once the line la
 3. **Meetings view and housekeeping** (L29–L31). List, open, export, delete to the
    Recycle Bin, delete audio, retry failed final passes.
    *Check:* force a final-pass failure (e.g. remove the diarization model), confirm
-   the error shows, restore the model, Retry, and the meeting completes. Delete a
-   meeting and restore it from the Recycle Bin.
+   the error shows, restore the model, Retry, and the meeting completes. Retry during a
+   recording waits until Stop. Delete a meeting and restore it from the Recycle Bin;
+   delete one permanently and confirm it isn't in the Recycle Bin.
 4. **Click to hear** (L15–L18, L20). Playback after Stop first (no capture risk), then
    during the meeting from the in-memory window with the drop rule and the headphone
    warning. Keep this meeting's audio. Spike on reading older audio mid-meeting.
    *Check:* on Test #2/#3 kept audio, every line's clip starts and ends on its words.
-   During a real call with a headset, play 10 clips; confirm none appear in
-   `transcript.jsonl`, none create a live speaker, and `playback_segments_dropped`
-   matches. Repeat once without headphones and record what the call heard.
-5. **Tagging** (L11–L12). Speaker chips and per-line tags, `speaker_tags.jsonl`, mapping
-   to `speakers.json` in the final pass, conflict display, names in exports.
-   OUTPUT_SPEC update.
-   *Check:* replay Test #3's kept audio (`simulate`) with tags on lines 10 and 15 as two
-   different people; the final `speakers.json` must name B and C separately or report the
-   conflict.
-6. **P1 polish** (L13, L19, L24, L28, L32). Attendee list at Start, number-key
+   During a real call with a headset, play at least 20 clips (short and long, mic and
+   call lines); count how many got through as lines or created a live speaker, and how
+   many real remote lines were dropped with them. The replayed clip is transcribed
+   afresh, so its words won't always match the original; the result decides whether
+   the drop rule is good enough until milestone 7. Repeat once without headphones and
+   record what the call heard.
+5. **Naming speakers** (L11, L12, L14). Speaker chips and per-line tags,
+   `speaker_tags.jsonl`, different-names rule in the final pass's clustering and fold,
+   mapping to `speakers.json` (user's names win, merge on write), conflict display,
+   names in exports. OUTPUT_SPEC update; downstream reader updated in step.
+   *Check:* replay Test #3's kept audio (`simulate`) with lines 10 and 15 named as two
+   different people, and Test #4's with one of Remote D's lines (e.g. 102) and one of
+   Remote B's named. B and C, and Remote D and Remote B, must come out as separate final
+   speakers with the right names. Re-run Tests #2–#4 and the TTS sample with no names
+   to confirm the result is unchanged when nobody names anyone.
+6. **P1 polish** (L13, L19, L24, L28, L32, L40). Attendee list at Start, number-key
    shortcuts (1–9 = attendee) for the latest line, "Who is this?" prompt for new voices,
    Play from here, Play clips on, mute reminders and Start muted, user-defined bookmark
    types, Storage panel.
 7. **Clips never captured** (L17 layer 1). Process-loopback capture that excludes
    Huddle Helper; re-run the device-switch test and a soak test.
-8. **Tags guide the final pass** (L14). Constraints in the line clustering; re-run Tests
-   #2, #3 and the TTS sample.
+8. **Same name, same speaker** (L39). Lines with the same name start in one cluster;
+   re-run Tests #2–#4 and the TTS sample. (The different-names rule, L14, moved into
+   milestone 5 after Test #4.)
 9. **Custom vocabulary** (L33–L36, then L37–L38). Independent of the window: the Settings
    box, Start dialog box and `meta.json` field work without it, so this can ship before
    milestone 1. Starts with a spike: `hotwords` vs `initial_prompt`, and the token
@@ -783,32 +863,49 @@ show that the call is active, but who is speaking is only known once the line la
 
 | Risk / question | Notes |
 | --- | --- |
-| Live label is wrong for some lines, so a speaker-level tag names the wrong person on them | Overlap mapping is by majority, so a few wrong lines don't win; conflicts are shown. Per-line tags override. |
-| User tags a live label that the final pass splits between two people | Only one final speaker gets the name; the other stays `SPEAKER_nn` and is shown as untagged. |
-| Downstream app also writes `speakers.json` | Merge rule above; needs a decision on who wins. |
+| **The final pass merges two people the user named, and one name is lost** | The failure seen in practice (Test #3: B+C; Test #4: Remote D into Remote B). Mapping alone can't fix it. The different-names rule (L14, P0, milestone 5) keeps named people apart; checked on Tests #3 and #4. |
+| The final pass merges an *unnamed* person into a named one | L14 only protects people the user named. "Who is this?" for every new live voice (L13) gets both named; the threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
+| Live label is wrong for some lines, so a speaker-level tag names the wrong person on them | Overlap mapping is by majority, so a few wrong lines don't win the name. For the clustering rules, a speaker-level tag only counts for lines whose voice is at least 0.7 like the rest of that name's lines. Per-line tags override. This does *not* cover a whole person being merged; see the first row. |
+| User tags a live label that the final pass splits between two people | Only one final speaker gets the name; the other stays `SPEAKER_nn` and is shown as untagged. Less likely than a merge so far; L39 (same name, same speaker) fixes it later. |
+| Downstream app also writes `speakers.json` | Decided: the user's names win for speakers the user named, the downstream app's names are kept for the rest. Writes are atomic; Huddle Helper re-reads and merges just before writing. |
+| **The window slows live transcription on the target laptop** | Test #4 already reached max delay 6.8 s and max lag 6.6 s without the window. The window reads only appended lines and redraws only changes; milestone 1 checks live delay with the window open on the target laptop (L1). |
+| **Long wait before the final transcript on the target laptop** | 0.6× the meeting's length (13.5 min for 22.7 min; ~35 min for an hour). The window shows an estimate of the time left (L3) and the live transcript stays usable. Making the pass faster is tracked in TODO (Test #4). |
 | Window distracts during the meeting | Compact mode and a setting to not auto-open. Bookmarks work from the hotkey with the window closed. |
 | Bookmark hotkey clashes with the call app or another tool | Registered only while recording; changeable or off in Settings; failure shown in Settings, button and tray item still work. |
-| User presses the bookmark a few seconds after the moment | Export and view show the bookmark after the paragraph it falls in, so the line just before is right there. Open: add an optional "look back N s" setting? |
-| A clip played during the meeting is captured by loopback and transcribed again | Drop rule on playback windows (first release); process-loopback exclusion removes it at the source (milestone 7). |
+| User presses the bookmark a few seconds after the moment | Export and view show the bookmark after the paragraph it falls in, so the line just before is right there. Open: a "look back N s" setting, decided after milestone 2's real-call test. |
+| A clip played during the meeting is captured by loopback and transcribed again | Drop rule on playback windows (first release); process-loopback exclusion removes it at the source (milestone 7). The replayed clip is transcribed afresh, so its words may not match the original; milestone 4 measures how many get through. |
 | Without headphones, people on the call hear the clip | One-time warning, confirmation when echo has been seen, Play clips on a different device. Can't be prevented in software while the mic is live. |
 | Remote speech over a playing clip is dropped with it | Known gap of the drop rule; counted in `meta.json`; fixed by milestone 7. |
 | User forgets they muted and loses part of the meeting | Amber bar, tray icon, tooltip, 10-minute reminders (P1); Stop always unmutes. |
 | User thinks "Mute me" mutes them in the call (or the reverse) | Every label says "in the recording" and the bar says "the call still hears you". |
 | Mute in an in-room meeting mutes the whole room | Tooltip says so when mic speaker separation is on. |
+| Muted audio could still be played back | Silence replaces the mic samples before the in-memory playback window as well as the buffer and transcription. |
+| **The downstream app reads a muted gap as lost audio** | Until now every `gaps` entry meant a device fault. OUTPUT_SPEC tells readers to check `reason`; `muted` is deliberate. |
+| **The downstream app ignores the new files** | Names and bookmarks never reach summaries. Update its reader alongside milestones 2 and 5, not after. |
 | `Ctrl+Alt+letter` hotkeys swallow AltGr characters on non-US layouts | Layout check in Settings with a suggested alternative; hotkeys only registered while recording. |
 | Too many bookmark types to remember under pressure | Four built-in, plain Bookmark always the easiest; a different-type press within 2 s retypes the last one. |
 | Deleting the wrong meeting, or one the downstream app hasn't read | Recycle Bin, confirmation naming each meeting, stronger warning for the last 24 hours, not allowed while recording or processing. |
+| **"Deleted" meetings stay on disk in the Recycle Bin** | The opposite of deleting the wrong one: a sensitive meeting the user thinks is gone. The confirmation says it can be restored; Delete permanently is a separate choice (L30). |
 | Retry on a failed meeting fails again the same way | Error stays visible; retry is manual, never automatic in a loop. |
+| Retry slows a meeting that is recording | The final pass competes with live transcription; a retry waits until no meeting is recording (L31). |
 | Users expect to hear lines later but Keep audio was off | Greyed control explains why; Keep this meeting's audio during the meeting. |
 | Memory for the in-memory audio window | ~38 MB for 10 min of both streams; length is a constant that can shrink. |
 | Exported files spread transcripts outside the meetings folder | User picks the location each time; nothing is exported automatically. Same privacy as copying the JSONL. |
 | Names are personal data | Stored only in the meeting folder like the transcript; no network. |
 | Vocabulary makes Whisper write terms that weren't said (on noise or short sounds) | Measured before release (L36); existing hallucination filters stay on; a confidence floor for very short vocabulary-only lines if needed. |
+| **Names in the vocabulary appear where nobody said them** | A wrong name is a wrong fact downstream, and attendee names are added automatically (L34). Measured on Test #4, which has known names; if names misfire, attendee names stay out of the prompt by default. |
 | A long vocabulary slows every utterance or crowds out the audio | Token budget with a visible counter; meeting terms first; speed checked on the target laptop. |
 | Vocabulary helps less than expected on base.en | Measure in the milestone 9 spike; pair with the small.en benchmark (TODO) if base.en still misses the terms. |
-| Open: should vocabulary also correct known mishears ("Quodium" → "QDM") after transcription? | That edits transcript text, which is a PRD non-goal; prompt-only for now. |
-| Open: should a speaker tag also apply to later lines of that live label? | Proposed yes until untagged; alternative is past lines only. |
-| Open: should the final view hide `SPEAKER_nn` for speakers with under N seconds? | Would hide noise but could hide a real short speaker. |
+
+**Decided in the risk review (Nov 9, 2026)**
+
+| Question | Decision |
+| --- | --- |
+| Should a speaker tag also apply to later lines of that live label? | Yes, until the user changes or removes it. |
+| Should the final view hide `SPEAKER_nn` for speakers with little speech? | No. Show them dimmed and marked "short" (L40). Test #4's Remote D had only 28 s, and another possible person 13 s. |
+| Who wins when both apps write `speakers.json`? | The user, for speakers the user named; the downstream app's names are kept for the rest. |
+| Should vocabulary also correct known mishears ("Quodium" → "QDM") after transcription? | No. That edits transcript text, a PRD non-goal; prompt-only. |
+| When should names steer the final pass? | Now: the different-names rule (L14) is P0 in milestone 5, not "Later". Same name, same speaker (L39) stays P1 in milestone 8. |
 
 ## Brainstorm: other things a GUI would make possible
 
