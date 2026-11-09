@@ -163,7 +163,7 @@ What went well:
 
 ### Final pass merged two different people (regression risk in the new merge)
 
-- [ ] **The offline clustering put two speakers together, and the small-speaker merge hid
+- [x] **The offline clustering put two speakers together, and the small-speaker merge hid
   the rest.** The voice evidence for the remote lines:
 
   | Line group (live label) | Similarity within group | Similarity to the other group |
@@ -193,22 +193,40 @@ What went well:
   cluster. Keep sherpa's turn boundaries only for splitting a line where the speaker
   changes mid-line, which the 079d8c9 phrase rules already limit. Then re-run all three
   recordings and the TTS e2e test. Code: `finalize.py`, `diarize.py`.
-- [ ] Until then, consider raising the small-speaker merge's `min_similarity` from 0.7 to
+  **Fixed in 601d147** as proposed (`final_voice_threshold` 0.65). Re-running the final pass
+  on the kept recordings:
+  - **Test #3:** A, B and C are three separate speakers. B ("I was timing myself") and
+    C ("Eric pointed this out") are no longer merged. Line 3 ("Really want to go deep.", 1 s)
+    goes with B; that hasn't been checked.
+  - **Test #2:** the same two main speakers as before.
+  - **TTS sample:** correct.
+
+  Line 3 is checked against the confirmed answer in a unit test that uses the measured
+  similarities.
+- [x] Until then, consider raising the small-speaker merge's `min_similarity` from 0.7 to
   about 0.75. Test #3's wrong merge was at 0.71; Test #2's justified merges were 0.83–0.90.
+  Done in 601d147. The merge now only affects where lines may split, not labels.
 
 ### Live labels
 
-- [ ] **Short opening lines create extra live speakers.** Lines 3 (1.0 s) and 4 (1.6 s) became
+- [x] **Short opening lines create extra live speakers.** Lines 3 (1.0 s) and 4 (1.6 s) became
   `SPEAKER_01` and `SPEAKER_02`, then the first long line of the same voice became
   `SPEAKER_03`. Fingerprints of lines this short are unreliable (0.57–0.70 similar to their
   own speaker's long lines). The rest of the live labels were right: A, B and C each got one
   label. *Ideas:* don't let a line under ~2 s found a new speaker unless no speaker exists yet,
   and let a provisional speaker built from short lines be absorbed by the next confident
   match. Live labels are provisional, so this is lower priority than the final pass.
+  Partly fixed in 601d147: both ideas are in (new speaker needs 2.0 s; a speaker known from
+  under 2 s of audio adopts a long line at 0.6+ similarity). The Test #3 replay goes from 5 live
+  speakers to 4, with A, B and C each on one label.
+- [ ] **One spurious live speaker remains on the Test #3 replay:** line 4 ("Maybe it's
+  technically complex.", 1.6 s of speech). The live pass measures the utterance including its
+  VAD padding and trailing silence, so it counted as over 2 s. *Idea:* measure from the first
+  to the last word. Low priority; the final file has it right.
 
 ### Readability
 
-- [ ] **Mic sentences are broken into fragments at natural pauses.** "Alright, this is to kick
+- [x] **Mic sentences are broken into fragments at natural pauses.** "Alright, this is to kick
   off and initiate test number three." / "of Huddle Helper." and "we're going to close out." /
   "the" / "Test number three." The pauses are real (0.8–1.2 s, longer than the 500 ms that
   ends an utterance), and Whisper adds a full stop to each piece.
@@ -217,6 +235,11 @@ What went well:
   previous one has no closing punctuation, and drop the spurious full stop. Expected result:
   "…initiate test number three of Huddle Helper." and "we're going to close out the test
   number three." Code: `finalize.py`.
+  Fixed in 601d147, with a 2 s gap limit (the first example's pause was 1.6 s). On the replay,
+  the final file reads "Alright, this is to kick off and initiate test number three of Huddle
+  Helper." and "Alright, we're going to close out the Test number three." The same rule
+  also joins remote lines cut mid-sentence, e.g. "and that feels about average, but we've had"
+  / "how many speakers…".
 
 ## Still open from the PRD milestones
 
