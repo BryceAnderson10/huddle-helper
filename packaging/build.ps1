@@ -10,6 +10,9 @@ $py = Join-Path $root ".venv\Scripts\python.exe"
 & $py -m pip install -q -e ".[dev]"
 & $py -m PyInstaller --noconfirm --clean --distpath dist --workpath build packaging\huddle_helper.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+# build\ is PyInstaller's scratch area. Its HuddleHelper.exe has no _internal\ folder
+# beside it and fails with "Failed to load Python DLL", so don't leave it lying around.
+Remove-Item -Recurse -Force (Join-Path $root "build") -ErrorAction SilentlyContinue
 
 if (-not $NoModels) {
     $env:PYTHONPATH = "src"

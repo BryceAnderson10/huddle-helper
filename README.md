@@ -69,6 +69,9 @@ powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -NoModels  # smalle
 ```
 
 Produces `dist\HuddleHelper\` with `HuddleHelper.exe` (tray) and `huddle-helper-cli.exe`.
+Run the exe from inside that folder (or a shortcut to it): it needs the `_internal\` and
+`models\` folders next to it. To install or share it, copy or zip the whole
+`dist\HuddleHelper\` folder, not just the exe.
 
 ## Code map
 
