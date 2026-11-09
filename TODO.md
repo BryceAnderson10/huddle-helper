@@ -14,41 +14,47 @@ Stop), final transcript 35 s after Stop, and the final pass found 4 distinct voi
 
 ### Speaker labels
 
-- [ ] **Live labels don't separate real voices.** All 29 system lines in `transcript.jsonl`
+- [x] **Live labels don't separate real voices.** All 29 system lines in `transcript.jsonl`
   are `SPEAKER_01`; the final pass found 4 speakers. Real voices over compressed call audio
   are more similar than the synthetic TTS voices `live_speaker_threshold` (0.6) was tuned on.
   *Investigate:* measure same-speaker and different-speaker embedding similarity on kept
   real audio, then retune the threshold and `min_new_speaker_s`, or compare against the
   centroids from the last N utterances. Code: `diarize.py` `OnlineClusterer`.
-  → Investigated in Test #2 (see "Live labels: threshold is too low" below).
-- [ ] **Final pass splits sentences mid-way.** The refined labels split a sentence between
+  → Investigated in Test #2 (see "Live labels: threshold is too low" below). Fixed in 079d8c9.
+- [x] **Final pass splits sentences mid-way.** The refined labels split a sentence between
   speakers: "…part of 12.x I think so I did" (`SPEAKER_03`) / "the same with that as well."
   (`SPEAKER_02`).
   *Fix:* only split at a pause or sentence boundary, and don't split off pieces shorter than
-  about 1 s / 3 words. Code: `finalize.py` `_split_by_words`.
-- [ ] **Final pass flips speaker word by word.** "Who could look at first? I found it. I
+  about 1 s / 3 words. Code: `finalize.py` `_split_by_words`. Fixed in 079d8c9.
+- [x] **Final pass flips speaker word by word.** "Who could look at first? I found it. I
   found it. So this is the one…" came out as 4 segments alternating `SPEAKER_01` /
   `SPEAKER_03`. Same fix as above: fold short runs into the neighbouring speaker.
+  Fixed in 079d8c9 (this exact case is a unit test).
 - [ ] **Check whether 4 speakers is right** for this clip (it was 1 in live, 4 in final).
   Needs a recording with known speakers and Keep audio on. `final_cluster_threshold` is 0.6.
+  Small look-alike speakers are now merged (079d8c9), which may change the count. The best
+  check is a recording where you know how many people speak.
 
 ### Microphone
 
-- [ ] **Only one mic line was captured:** "This is a test. Yes." (confidence 0.39).
+- [x] **Only one mic line was captured:** "This is a test. Yes." (confidence 0.39).
   *Investigate:* confirm how much was said into the mic. If more, check the mic input level
   and the VAD threshold (`vad_threshold` 0.5) and minimum-speech rule on real mic audio.
   → Test #2 showed the mic records very quietly (see "Mic level is very low" below). That is
-  the likely cause here too.
+  the likely cause here too. Quiet audio is now boosted before transcription, and the tray
+  warns when the mic is too quiet (079d8c9).
 - [ ] **Mic segment timing is squeezed:** 5 words in 0.56 s (57048–57608 ms). The start and
   end come from Whisper word timestamps clamped to the utterance; one of them is probably
   wrong. Code: `recorder.py` `_transcribe_loop`.
 
 ### Measurement
 
-- [ ] **Record line delay for tray recordings.** The tray app doesn't save how long lines take
+- [x] **Record line delay for tray recordings.** The tray app doesn't save how long lines take
   to land after speech ends, so the PRD's p90 under 5 s can't be checked from a meeting
   folder. Write median/p90 delay and maximum backlog to `meta.json` at Stop. (`record` and
   `simulate` on the command line already print it.)
+  Fixed in 079d8c9: `meta.json` → `live_stats` has `line_delay_ms` (median, p90, max),
+  `max_backlog`, `max_lag_s` and `speech_peak_median` per stream.
 
 ### Transcription quality
 
@@ -73,7 +79,9 @@ in the correct time order. No echo lines were dropped, which is correct with a h
 
 ### Live labels: threshold is too low (root cause of Test #1 item)
 
-- [ ] **Raise `live_speaker_threshold` from 0.6 to about 0.72–0.75.** Measured on the kept
+- [x] **Raise `live_speaker_threshold` from 0.6 to about 0.72–0.75.** Fixed in 079d8c9: 0.75,
+  `min_new_speaker_s` 1.5, and a settings version so the 0.6 already saved in
+  `settings.json` is replaced. Measured on the kept
   system audio, grouping lines by the after-Stop pass's speakers:
 
   | Line pairs | Similarity p10 / p50 / p90 |
@@ -90,33 +98,45 @@ in the correct time order. No echo lines were dropped, which is correct with a h
 
 ### Final pass
 
-- [ ] **Mid-sentence splits are frequent** (same issue as Test #1, more examples): "…we
+- [x] **Mid-sentence splits are frequent** (same issue as Test #1, more examples): "…we
   can't do it like right" / "now, which I understand." · "Yeah, that's the" / "goal is we
   want to…" · "…but I did want to" / "share one thing that kind of came in." · "Oh you like" /
   "that's what I was going for." Splits fall between words with no pause, so they come from
   diarization turn boundaries rather than real speaker changes. Fix as in Test #1.
-- [ ] **Tiny spurious speakers.** The offline pass found 5 speakers, but 3 of them have only
+  Fixed in 079d8c9; on the Test #2 replay, all four of these now stay whole.
+- [x] **Tiny spurious speakers.** The offline pass found 5 speakers, but 3 of them have only
   2 s, 9 s and 10 s of speech in total; they show up as `SPEAKER_03`–`SPEAKER_05` on a few
   fragments. *Fix:* merge clusters with under about 10 s total (or under ~5% of speech) into the
   nearest larger speaker, or raise `final_cluster_threshold`. Code: `finalize.py`.
+  Fixed in 079d8c9: a speaker with under max(15 s, 5% of speech) is merged into the most
+  similar larger speaker if they're at least 0.7 alike. Raising the threshold instead would
+  have merged the two synthetic test voices (0.50 alike). The Test #2 replay now has 2 speakers.
 - [ ] **Final pass also relabels lines the live pass got right**, e.g. line 1 is split into
   `SPEAKER_01` "…less descriptive than that." / `SPEAKER_02` "So, so.". Revisit after the
-  two fixes above.
+  two fixes above. On the replay the split remains, but now at the sentence end; whether
+  it's right needs someone who knows who said "So, so, so." Re-check on the next test.
 
 ### Microphone
 
-- [ ] **Mic level is very low.** In `mic.flac` the peak is 0.047 (about −27 dBFS) and the
+- [x] **Mic level is very low.** In `mic.flac` the peak is 0.047 (about −27 dBFS) and the
   overall RMS is 0.0006. Silero VAD still found both spoken lines, and they were the only
   sound above the noise floor (140–142 s and 165–167 s), so nothing said was lost this time.
   But Whisper is less reliable on audio this quiet. *Fix:* normalize each mic utterance to
   a target level (with a gain cap) before transcription, and warn in the tray when the
   mic stays very quiet. Also check the Windows input level for the HyperX mic.
-- [ ] **Whisper hallucinated a repetition loop on the quiet mic.** Live line 26: "Good to see
+  Fixed in 079d8c9: utterances are boosted toward a 0.5 peak (max 30×), and the tray warns
+  once per meeting when mic speech peaks below 0.05. Raising the Windows input level is
+  still the best fix.
+- [x] **Whisper hallucinated a repetition loop on the quiet mic.** Live line 26: "Good to see
   how does it handle overlapping voices? Alright, let's go. Alright, let's go check this
   one." ×5, squeezed into 2.5 s. Re-transcribing the same kept audio offline gives the clean
   "…to see how does it handle overlapping voices?". *Fix:* level normalization (above),
   plus a repeated-phrase filter, and try faster-whisper's `no_repeat_ngram_size`,
   `repetition_penalty` and `hallucination_silence_threshold`. Code: `transcribe.py`.
+  Fixed in 079d8c9: the looped words were 0–20 ms long, so sentences averaging under 60 ms
+  per word are dropped, and a third identical sentence in a row is dropped. Replaying
+  Test #2 gives "Good to see how does it handle overlapping voices?". The faster-whisper
+  options weren't needed.
 - [ ] **Mic timing.** The two mic lines here had sensible timings (2.1 s and 2.5 s). The
   squeezed timing from Test #1 may also be a hallucination artifact; re-check after the
   fixes above.
