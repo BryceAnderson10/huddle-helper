@@ -402,10 +402,54 @@ What went well:
   - *Names are not safe:* with names in the prompt, "Well," became "Remote A," three times and
     two lines gained an invented name on the end ("and Remote D.", "Remote B."). Attendee
     names stay out of the prompt by default (L34's automatic add becomes opt-in).
-  *Next:* re-time on an idle PC; find out whether the tails come with the retries
-  (log temperature per utterance); try trimming words after the last word that falls inside
-  the utterance's speech, and a `compression_ratio`/log-prob check on the tail. The extra
-  "KoVa" hits (12 with the list, 7 with the sentence) haven't been checked against the audio.
+  → **Follow-up (`tools/vocab_spike.py run|diag|table`, one job at a time on the PC).**
+  Clean timing confirms the slowdown: no prompt 162 s (median 0.56 s, p90 0.68 s per
+  utterance), plain list as `hotwords` 578 s (median 1.68 s, p90 5.16 s), 3.6× overall.
+  **Cause:** the junk is not in the speech. With word timings on, faster-whisper moves on
+  to the end of the last word and decodes one more window over the 0.2 s of padding left.
+  Without a prompt that window comes back empty; with a prompt the model invents words
+  there (echoes of the list, "Mm.", "SOT", "Thank you"), the low score triggers the
+  temperature retries, and each retry is a full decode. 129 of 253 utterances retried with
+  the list, 11 without; all 16 lines with 4+ extra words had the extras in a later window
+  decoded at a temperature above 0.
+  **Fix that works on Test #4** (variant `e5` plus trim `T`):
+
+  | | No prompt | List, `hotwords` | Sentence + stop 1.0 + trim | Sentence + stop 0.5 + trim |
+  | --- | --- | --- | --- | --- |
+  | Expected terms found | 47 | 72 (65 without the echoed junk) | 67 | 67 |
+  | Known mishears left (of 12) | 12 | 2 | 2 | 2 |
+  | Lines with 4+ / 2+ extra words | – | 16 / 76 | 2 / 8 | 2 / 9 |
+  | Lines lost | – | 1 | 0 | 0 |
+  | Time, total / median / p90 | 162 / 0.56 / 0.68 s | 578 / 1.68 / 5.16 s | 151 / 0.55 / 0.65 s | 194 / 0.59 / 1.27 s |
+
+  - *Sentence prompt:* "This call is about KoVa, QDM, …, zone codes and Zentrix." as
+    `hotwords`. (`initial_prompt` is not the same: it is 30% faster than `hotwords` with
+    the list but still 2.5× the plain run.)
+  - *Stop:* stop reading Whisper's segments once one ends within N seconds of the end of
+    the utterance, so the leftover window is never decoded. This is what gets the time back.
+  - *Trim:* drop any segment after the first whose average log-probability is below −0.8,
+    compression ratio above 2.4, or no-speech probability above 0.2. Real later segments in
+    the plain run sit at −0.77 or better and 0.06 or less; junk sits at −0.9 or worse and
+    0.2 or more.
+  - Turning off the temperature retries alone does not help (2.1×, 24 junk lines).
+  **Costs and open points:**
+  - The stop rule can drop a real last word. Without a prompt, stop 1.0 shortened 8 of 253
+    lines ("Nope.", "Yeah.", "Okay.", "and", "the names."). Only 0.2 s of padding follows
+    the speech, so up to 0.8 s of real speech can sit inside a 1.0 s stop. Use the stop
+    only when a vocabulary is set.
+  - The prompt can break a word the plain run got right: on Test #3 "Huddle Helper" became
+    "Of HIDL helper".
+  - The 8 lines that still gain 2+ words (system 03:15, 05:37, 08:18, 08:24, 16:10, 20:06,
+    20:29, 22:32) look like real corrections ("co-trees" → "a prod code freeze") but have
+    not been checked by ear. Nor have the extra "KoVa" hits.
+  - Retries are random, so figures can move between runs. A second run of stop 1.0 gave
+    the same counts (158 s). Names in the prompt were not retried.
+  **Chosen for the build: sentence prompt, stop 0.7, trim** (`e8+T`). On Test #4 it gives
+  the same result as stop 1.0 (67 terms, 2 mishears left, 2 / 8 lines with extra words,
+  none lost) in 164 s (median 0.57 s, p90 0.71 s), and leaves less room to cut a real
+  last word. On Test #2 (41 utterances, none of these terms): no lines lost, one line
+  gains 2 words, 26 s against 32 s for the plain run. With no vocabulary set, nothing
+  changes.
 
 ### Microphone
 
