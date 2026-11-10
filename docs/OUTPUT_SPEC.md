@@ -98,7 +98,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `settings` | Diarization, echo and Keep audio settings in force for this meeting. |
 | `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio, e.g. while re-binding after the default device changed. Silence is inserted so the clock stays aligned. |
 | `audio_kept`, `refined_streams`, `echo_segments_dropped`, `duration_s` | Diagnostics. |
-| `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+| `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
 
 ## `speakers.json` (optional)
 

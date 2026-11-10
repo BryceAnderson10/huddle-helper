@@ -149,7 +149,7 @@ class AppController:
 
     # -- after-Stop pass ------------------------------------------------
     def _finalize_worker(self) -> None:
-        from .diarize import SherpaEmbedder, SherpaOfflineDiarizer
+        from .diarize import SherpaEmbedder, SherpaOfflineDiarizer, final_threads
         from .finalize import finalize_meeting
 
         while True:
@@ -165,9 +165,13 @@ class AppController:
             try:
                 self._set(finalizing="Identifying speakers")
                 keep = folder.read_meta().get("settings", {}).get("keep_audio", self.settings.keep_audio)
+                # Read when the models load, so a meeting started meanwhile gets 1 thread.
                 finalize_meeting(
-                    folder, lambda: SherpaOfflineDiarizer(threshold=self.settings.final_cluster_threshold),
-                    keep_audio=keep, progress=progress, embedder_factory=SherpaEmbedder,
+                    folder, lambda: SherpaOfflineDiarizer(
+                        threshold=self.settings.final_cluster_threshold, merge_small=False,
+                        num_threads=final_threads(self.is_recording)),
+                    keep_audio=keep, progress=progress,
+                    embedder_factory=lambda: SherpaEmbedder(num_threads=final_threads(self.is_recording)),
                     voice_threshold=self.settings.final_voice_threshold)
                 self._notify(f"Final transcript ready: {folder.meeting_id}")
             except Exception as exc:  # noqa: BLE001

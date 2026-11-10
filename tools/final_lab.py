@@ -466,9 +466,12 @@ def cmd_finalize(args) -> int:
         (dest / name).unlink(missing_ok=True)
     folder = mt.MeetingFolder(dest)
     s = Settings()
-    count = finalize_meeting(folder, lambda: SherpaOfflineDiarizer(threshold=s.final_cluster_threshold),
-                             keep_audio=True, embedder_factory=SherpaEmbedder,
-                             voice_threshold=s.final_voice_threshold)
+    n = args.threads  # 0: the old defaults (diarizer 2 threads, embedder 1)
+    count = finalize_meeting(
+        folder, lambda: SherpaOfflineDiarizer(threshold=s.final_cluster_threshold, num_threads=n or 2,
+                                              merge_small=args.merge_small),
+        keep_audio=True, embedder_factory=lambda: SherpaEmbedder(num_threads=n or 1),
+        voice_threshold=s.final_voice_threshold)
     print(f"{count} segments -> {folder.final_path}")
     print("final_stats:", json.dumps(folder.read_meta().get("final_stats")))
     totals: dict[str, float] = {}
@@ -514,6 +517,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("finalize", help="run the real final pass on a copy of the folder")
     p.add_argument("folder")
     p.add_argument("--out", required=True)
+    p.add_argument("--merge-small", action=argparse.BooleanOptionalAction, default=True,
+                   help="sherpa diarizer's merge_small step (default on)")
+    p.add_argument("--threads", type=int, default=0, help="threads for embedder and diarizer; 0 = old defaults")
     p.set_defaults(fn=cmd_finalize)
     args = ap.parse_args(argv)
     return args.fn(args)

@@ -163,18 +163,24 @@ Embed = Callable[[str, int, int], "np.ndarray | None"]  # (source, start_ms, end
 Pieces = list[tuple[int, Segment]]  # (live line index, piece)
 
 
-def embed_pieces(pieces: Pieces, embed: Embed) -> tuple[list[np.ndarray], list[float], list[int]]:
+def embed_pieces(pieces: Pieces, embed: Embed, progress: Callable[[float], None] | None = None
+                 ) -> tuple[list[np.ndarray], list[float], list[int]]:
     """Fingerprint each piece. Returns (vectors, weights in seconds, index of each vector's piece).
 
-    Pieces too short to fingerprint are left out of all three lists.
+    Pieces too short to fingerprint are left out of all three lists. ``progress`` gets the
+    fraction of pieces done after each one.
     """
     vecs, weights, idx = [], [], []
     for i, (_line, seg) in enumerate(pieces):
+        if progress:
+            progress(i / len(pieces))
         vec = embed(seg.source, seg.start_ms, seg.end_ms)
         if vec is not None:
             vecs.append(vec)
             weights.append(max((seg.end_ms - seg.start_ms) / 1000, 0.1))
             idx.append(i)
+    if progress:
+        progress(1.0)
     return vecs, weights, idx
 
 
@@ -199,7 +205,8 @@ def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
 
 
 def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
-                  timings: dict[str, float] | None = None) -> None:
+                  timings: dict[str, float] | None = None,
+                  progress: Callable[[float], None] | None = None) -> None:
     """Label one stream's pieces by clustering their voices over the whole meeting.
 
     Labels are written to segment.speaker as "#v<cluster>". ``timings`` collects seconds
@@ -207,7 +214,7 @@ def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
     """
     t0 = time.perf_counter()
     try:
-        vecs, weights, idx = embed_pieces(pieces, embed)
+        vecs, weights, idx = embed_pieces(pieces, embed, progress)
     finally:
         if timings is not None:
             timings["embed_pieces"] = timings.get("embed_pieces", 0.0) + time.perf_counter() - t0
@@ -275,20 +282,29 @@ def split_pieces(segments: list[Segment], words: dict[tuple[str, int], list[Word
 def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
             embed: Embed | None = None, voice_threshold: float = 0.70,
-            timings: dict[str, float] | None = None) -> list[Segment]:
+            timings: dict[str, float] | None = None,
+            progress: Callable[[float], None] | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
     With ``embed`` (the buffered audio is available), each line is split where the offline
     diarizer saw a speaker change at a phrase boundary, and every piece is then labelled by
     whole-meeting voice clustering (``cluster_voices``). Without it, the diarizer's own
     speaker ids are used. ``turns_by_source[src] is None`` and no ``embed`` keeps live labels.
-    ``timings`` (optional) collects seconds under "embed_pieces" and "cluster".
+    ``timings`` (optional) collects seconds under "embed_pieces" and "cluster"; ``progress``
+    (optional) gets the fraction of all pieces fingerprinted.
     """
     out, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, embed is not None)
+    total = sum(len(p) for p in pieces_by_source.values()) or 1
+    done = 0
 
     for source, pieces in pieces_by_source.items():
+        def part(f: float, base: int = done, n: int = len(pieces)) -> None:
+            if progress:
+                progress((base + f * n) / total)
+
+        done += len(pieces)
         try:
-            _voice_labels(pieces, embed, voice_threshold, timings)
+            _voice_labels(pieces, embed, voice_threshold, timings, part)
         except Exception:  # noqa: BLE001 - fall back to the diarizer's labels
             log.exception("Voice clustering failed for %s; using diarizer labels", source)
         out.extend(_rejoin_lines(pieces, words))
@@ -433,7 +449,11 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
         except Exception:  # noqa: BLE001 - fall back rather than lose the meeting
             log.exception("Refined diarization failed for %s", src)
             turns_by_source[src] = None
-        stages[f"diarize_{src}"] = time.perf_counter() - t0
+        took_src = time.perf_counter() - t0
+        merge_s = (getattr(diarizer, "last_timings", None) or {}).get("merge_small", 0.0)
+        if merge_s:
+            stages[f"merge_small_{src}"] = merge_s
+        stages[f"diarize_{src}"] = max(took_src - merge_s, 0.0)  # excludes merge_small_<src>
 
     audio_s = max((len(a) / SAMPLE_RATE for a in audio_by_source.values()), default=None)
     embed = None
@@ -450,10 +470,10 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             log.exception("Voice fingerprints unavailable; using diarizer labels")
             embed = None
 
-    progress("Grouping voices", 1.0)
+    progress("Grouping voices", 0.0)
     voice_timings: dict[str, float] = {}
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
-                             voice_timings)
+                             voice_timings, lambda f: progress("Grouping voices", f))
     final_segments = join_fragments(final_segments)
     if embed is not None:
         stages.update(voice_timings)

@@ -10,6 +10,8 @@ Refined pass (after Stop): full offline diarization over the buffered audio
 from __future__ import annotations
 
 import logging
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -29,6 +31,13 @@ REMOTE = "Remote"
 
 def label(prefix: str, n: int) -> str:
     return f"{prefix}{n:02d}"
+
+
+def final_threads(recording: bool = False, cpu_count: int | None = None) -> int:
+    """Threads for the after-Stop embedder and diarizer: half the cores up to 4, 1 while recording."""
+    if recording:
+        return 1
+    return min(4, max(1, (cpu_count or os.cpu_count() or 2) // 2))
 
 
 class Embedder(Protocol):
@@ -293,6 +302,8 @@ class SherpaOfflineDiarizer:
 
         self._models_root = models_root
         self._merge_small = merge_small
+        self._num_threads = num_threads
+        self.last_timings: dict[str, float] = {}  # seconds of the last diarize(): "merge_small"
 
         cfg = sherpa_onnx.OfflineSpeakerDiarizationConfig(
             segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
@@ -311,6 +322,7 @@ class SherpaOfflineDiarizer:
         self._sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
 
     def diarize(self, audio: np.ndarray, progress: Callable[[float], None] | None = None) -> list[Turn]:
+        self.last_timings = {}
         if len(audio) < SAMPLE_RATE:
             return []
 
@@ -322,6 +334,8 @@ class SherpaOfflineDiarizer:
         result = self._sd.process(audio.astype(np.float32), callback=cb).sort_by_start_time()
         turns = [Turn(int(r.start * 1000), int(r.end * 1000), int(r.speaker)) for r in result]
         if self._merge_small and len({t.speaker for t in turns}) > 1:
-            centroids = speaker_centroids(audio, turns, SherpaEmbedder(self._models_root))
+            t0 = time.perf_counter()
+            centroids = speaker_centroids(audio, turns, SherpaEmbedder(self._models_root, self._num_threads))
             turns = merge_small_speakers(turns, centroids)
+            self.last_timings["merge_small"] = time.perf_counter() - t0
         return turns

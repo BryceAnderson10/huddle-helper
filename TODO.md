@@ -363,6 +363,25 @@ What went well:
   `merge_small_speakers`. Run the embedders with more than 1 thread (`SherpaEmbedder`
   defaults to `num_threads=1`), skip `merge_small_speakers` (it no longer affects labels), or
   find split points from per-word voice changes instead. Measure each stage before choosing.
+  → **WP2 (dev PC, 12 logical cores, Test #4, 1361 s of audio).** The final pass now skips
+  `merge_small_speakers` and runs the diarizer and the fingerprinting on
+  `min(4, cores // 2)` threads, or 1 thread if a recording is running when the pass loads
+  its models. Output is identical to the WP1 reference in every run (190 of 190 lines;
+  Tests #2 and #3 also unchanged with the merge step off).
+
+  | | Total | × meeting length | Diarization | merge_small | Fingerprinting |
+  | --- | --- | --- | --- | --- | --- |
+  | Before (2 and 1 threads, merge on) | 319 s | 0.23 | 259 s | 25.5 s | 34 s |
+  | Merge off, same threads | 308 s | 0.23 | 273 s | – | 34 s |
+  | Merge off, 1 thread | 398 s | 0.29 | 363 s | – | 34 s |
+  | Merge off, 2 threads | 271 s | 0.20 | 248 s | – | 22 s |
+  | Merge off, 4 threads (new default here) | 197 s | 0.15 | 180 s | – | 17 s |
+
+  Timings vary by 10–15 s between runs. **Still open:** 0.15× is above the 0.1× target,
+  and 180 of the 197 s is sherpa's own diarization, so the remaining gain needs the bigger
+  change (split points from per-word voice changes). Not yet measured on the laptop, and
+  Tests #2 and #3 were not timed at 4 threads. "Grouping voices" now shows progress while
+  the pieces are fingerprinted, and `final_stats` has a `merge_small_<source>` stage.
 
 ### Transcription quality
 

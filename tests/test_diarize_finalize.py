@@ -463,3 +463,47 @@ def test_join_fragments_does_not_attach_reply_after_trailing_off():
             Segment("system", 2300, 3000, "Sounds good.", 0.9, "SPEAKER_02")]
     out = join_fragments(segs)
     assert [(s.speaker, s.text) for s in out] == [("SPEAKER_01", "Right, so…"), ("SPEAKER_02", "Sounds good.")]
+
+
+def test_final_threads_half_the_cores_up_to_four_and_one_while_recording():
+    from huddle_helper.diarize import final_threads
+
+    assert [final_threads(False, n) for n in (1, 2, 4, 6, 8, 16)] == [1, 1, 2, 3, 4, 4]
+    assert final_threads(True, 16) == 1
+    assert 1 <= final_threads() <= 4
+
+
+def test_embed_pieces_reports_progress():
+    from huddle_helper.finalize import embed_pieces
+
+    steps = [(i, Segment("system", i * 5000, i * 5000 + 4000, "x", 0.9, "#0")) for i in range(4)]
+    seen = []
+    embed_pieces(steps, UnitEmbedder({}), seen.append)
+    assert seen[:4] == [0.0, 0.25, 0.5, 0.75] and seen[-1] == 1.0
+    embed_pieces([], UnitEmbedder({}), seen.append)  # nothing to embed: no division by zero
+
+
+def test_finalize_reports_grouping_progress_and_merge_small_stage(tmp_path):
+    class FlatEmbedder:
+        def embed(self, audio):
+            return unit(0)
+
+    class TimedDiarizer(FakeDiarizer):
+        last_timings = {"merge_small": 1.5}
+
+    folder = _make_meeting(tmp_path)
+    seen = []
+    finalize_meeting(folder, TimedDiarizer, keep_audio=False, embedder_factory=FlatEmbedder,
+                     progress=lambda stage, frac: seen.append((stage, frac)))
+    grouping = [f for stage, f in seen if stage == "Grouping voices"]
+    assert grouping[0] == 0.0 and grouping[-1] == 1.0 and grouping == sorted(grouping) and len(grouping) > 2
+    stages = folder.read_meta()["final_stats"]["stages"]
+    assert stages["merge_small_system"] == 1.5 and "diarize_system" in stages
+
+
+def test_finalize_works_with_a_diarizer_without_last_timings(tmp_path):
+    folder = _make_meeting(tmp_path)
+    assert not hasattr(FakeDiarizer(), "last_timings")
+    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    stages = folder.read_meta()["final_stats"]["stages"]
+    assert "diarize_system" in stages and not any(k.startswith("merge_small") for k in stages)
