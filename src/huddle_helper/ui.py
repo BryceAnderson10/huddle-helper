@@ -154,12 +154,15 @@ class SettingsDialog:
         self.diar_mic = tk.BooleanVar(value=settings.diarize_mic)
         self.echo = tk.BooleanVar(value=settings.echo_dedupe)
         self.keep = tk.BooleanVar(value=settings.keep_audio)
+        self.open_window = tk.BooleanVar(value=settings.open_window_on_start)
         row("", ttk.Checkbutton(frm, text="Separate speakers in meeting audio", variable=self.diar_sys))
         row("", ttk.Checkbutton(frm, text="Separate speakers on my microphone (in-room meetings)",
                                 variable=self.diar_mic))
         row("", ttk.Checkbutton(frm, text="Drop mic lines that echo the speakers (no headphones)",
                                 variable=self.echo))
         row("", ttk.Checkbutton(frm, text="Keep audio after the final transcript", variable=self.keep))
+        row("", ttk.Checkbutton(frm, text="Open the transcript window when recording starts",
+                                variable=self.open_window))
 
         self.purge = tk.StringVar(value=str(settings.auto_purge_days))
         purge_frame = ttk.Frame(frm)
@@ -195,6 +198,7 @@ class SettingsDialog:
         s.diarize_mic = self.diar_mic.get()
         s.echo_dedupe = self.echo.get()
         s.keep_audio = self.keep.get()
+        s.open_window_on_start = self.open_window.get()
         s.auto_purge_days = days
         s.vocabulary = self.vocab.terms()
         self.win.destroy()

@@ -12,6 +12,10 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "sherpa_onnx", "pyau
     binaries += b
     hiddenimports += h
 hiddenimports += ["pystray._win32", "huddle_helper.tray"]
+# The Transcript window is imported lazily from tray.py (and the replay driver from cli.py).
+hiddenimports += ["huddle_helper.gui", "huddle_helper.gui.window", "huddle_helper.gui.transcript_view",
+                  "huddle_helper.gui.dialogs", "huddle_helper.gui.logic", "huddle_helper.gui.theme",
+                  "huddle_helper.session", "huddle_helper.replay"]
 
 a = Analysis(
     ["launcher.py"],

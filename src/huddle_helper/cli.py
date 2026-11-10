@@ -7,6 +7,7 @@
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
     huddle-helper finalize <meeting folder>             re-run the after-Stop pass
     huddle-helper recover                               close out meetings left by a crash
+    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--no-window] [--open-latest]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
     huddle-helper devices | download-models
 """
@@ -286,7 +287,26 @@ def cmd_download(args) -> int:
 def cmd_tray(args) -> int:
     from .tray import run_tray
 
-    return run_tray()
+    overrides = {}
+    if getattr(args, "out", None):
+        overrides["meetings_dir"] = str(Path(args.out).resolve())
+    replay = None
+    if getattr(args, "replay", None):
+        from .replay import Replay
+
+        meetings_dir = Path(overrides["meetings_dir"]) if overrides else config.load().resolved_meetings_dir()
+        try:
+            replay = Replay.create(Path(args.replay), meetings_dir, title=args.title, auto=args.auto,
+                                   keep_open=args.keep_open)
+        except (OSError, ValueError) as exc:
+            print(f"Cannot replay: {exc}", file=sys.stderr)
+            return 1
+        print(f"Replaying {replay.folder} into {meetings_dir}", flush=True)
+    elif args.auto:
+        print("--auto needs --replay", file=sys.stderr)
+        return 1
+    return run_tray(replay, overrides or None, auto_open_window=not args.no_window,
+                    open_latest=args.open_latest)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -303,6 +323,18 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--no-echo-dedupe", action="store_true")
 
     sp = sub.add_parser("tray", help="run the tray app")
+    sp.add_argument("--replay", metavar="FOLDER",
+                    help="dev aid: feed this kept meeting's audio\\*.flac through the recorder in real time "
+                         "instead of the live devices (the folder is only read)")
+    sp.add_argument("--out", help="meetings folder for this run only (not saved to settings)")
+    sp.add_argument("--title", default="replay", help="title of the replay recording")
+    sp.add_argument("--auto", action="store_true",
+                    help="with --replay: start at once, stop when the audio ends, quit after the final pass")
+    sp.add_argument("--keep-open", action="store_true",
+                    help="with --auto: do not quit after the final pass (to look at the window)")
+    sp.add_argument("--no-window", action="store_true",
+                    help="do not open the transcript window when recording starts")
+    sp.add_argument("--open-latest", action="store_true", help="open the transcript window at startup")
     sp.set_defaults(func=cmd_tray)
 
     sp = sub.add_parser("record", help="record from live devices without the tray")

@@ -10,6 +10,7 @@ import ctypes
 import logging
 import os
 import queue
+import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -17,6 +18,7 @@ from PIL import Image, ImageDraw
 
 from . import __version__
 from .app import AppController
+from .replay import Replay, next_step
 
 log = logging.getLogger(__name__)
 
@@ -63,16 +65,27 @@ def _fmt_elapsed(sec: float) -> str:
 
 
 class TrayApp:
-    def __init__(self):
+    def __init__(self, replay: Replay | None = None, overrides: dict | None = None,
+                 auto_open_window: bool = True, open_latest: bool = False):
         import pystray
 
+        from .gui import theme
+
+        theme.make_dpi_aware()  # before the first Tk window, or text is blurry at 125-150% scaling
         self.pystray = pystray
         self.root = tk.Tk()
         self.root.withdraw()
         self.calls: queue.Queue = queue.Queue()
         self.icons = {k: make_icon(k) for k in COLORS}
         self._kind = None
-        self.app = AppController(on_change=self._changed, notify=self._notify)
+        self.window = None  # gui.window.MainWindow, built on first use
+        self._auto_opened: str | None = None  # meeting id the window was last opened for on Start
+        self._auto_open_window = auto_open_window
+        self._open_latest = open_latest
+        self.replay = replay
+        self._replay_started_at: float | None = None
+        self.app = AppController(on_change=self._changed, notify=self._notify, overrides=overrides,
+                                 capture_factory=replay.capture_factory if replay else None)
         menu = pystray.Menu(
             pystray.MenuItem(lambda item: self._status_text(), None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -81,6 +94,7 @@ class TrayApp:
             pystray.MenuItem("Stop recording", self._ui(self.stop),
                              enabled=lambda item: self.app.is_recording),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Transcript window", self._ui(self.show_window)),
             pystray.MenuItem("Open meetings folder", self._ui(self.open_folder)),
             pystray.MenuItem("Rename speakers…", self._ui(self.show_speakers)),
             pystray.MenuItem("Settings…", self._ui(self.show_settings)),
@@ -133,6 +147,11 @@ class TrayApp:
 
     def _changed(self) -> None:
         st = self.app.state
+        # Called from worker threads: only queue the window opening for the Tk thread.
+        if (st.phase == "recording" and st.last_meeting and st.last_meeting != self._auto_opened
+                and self._auto_open_window and self.app.settings.open_window_on_start):
+            self._auto_opened = st.last_meeting
+            self.calls.put(self.show_window)
         if st.phase == "recording":
             kind = "recording"
         elif st.phase == "error":
@@ -160,6 +179,14 @@ class TrayApp:
 
     def stop(self) -> None:
         self.app.stop()
+
+    def show_window(self) -> None:
+        """Open (or raise) the Transcript window on the meeting being recorded, else the last one."""
+        from .gui.window import MainWindow
+
+        if self.window is None:
+            self.window = MainWindow(self.root, self.app, on_stop=self.stop)
+        self.window.show(self.app.current_folder())
 
     def open_folder(self) -> None:
         path = self.app.settings.resolved_meetings_dir()
@@ -196,6 +223,42 @@ class TrayApp:
         self.icon.stop()
         self.root.quit()
 
+    # -- unattended replay (dev aid) -------------------------------------------
+    def _replay_tick(self) -> None:
+        r, st = self.replay, self.app.state
+        step = next_step(phase=st.phase, started=r.started, stopped=r.stopped, audio_finished=r.audio_finished,
+                         finalizing=bool(st.finalizing), finalize_queue=st.finalize_queue)
+        if step == "start":
+            r.started = True
+            self._replay_started_at = time.monotonic()
+            log.info("Replay: starting %s", r.folder)
+            self.app.start(r.title)
+        elif step == "stop":
+            r.stopped = True
+            log.info("Replay: audio finished, stopping")
+            self.app.stop()
+        elif step == "quit" and r.keep_open:
+            log.info("Replay: finished (%s); leaving the app open", st.last_meeting)
+            print(f"Replay finished: {self.app.settings.resolved_meetings_dir() / (st.last_meeting or '')}",
+                  flush=True)
+            return
+        elif step == "quit":
+            log.info("Replay: finished (%s)", st.last_meeting)
+            print(f"Replay finished: {self.app.settings.resolved_meetings_dir() / (st.last_meeting or '')}",
+                  flush=True)
+            self.app.shutdown()
+            self.icon.stop()
+            self.root.quit()
+            return
+        elif (r.started and not r.stopped and r.capture is None and st.phase == "ready"
+              and time.monotonic() - (self._replay_started_at or 0) > 20):
+            log.error("Replay: the recording did not start")
+            print("Replay: the recording did not start (see the log).", flush=True)
+            self.icon.stop()
+            self.root.quit()
+            return
+        self.root.after(500, self._replay_tick)
+
     def _purge_daily(self) -> None:
         self.app.purge()
         self.root.after(6 * 3600 * 1000, self._purge_daily)
@@ -205,15 +268,21 @@ class TrayApp:
         self._changed()
         self.app.boot()
         self.root.after(100, self._pump)
+        if self.replay is not None and self.replay.auto:
+            self.root.after(1000, self._replay_tick)
+        if self._open_latest:
+            self.root.after(500, self.show_window)
         self.root.after(6 * 3600 * 1000, self._purge_daily)
         log.info("Huddle Helper %s running in the tray", __version__)
         self.root.mainloop()
         return 0
 
 
-def run_tray() -> int:
-    if not _single_instance():
+def run_tray(replay: Replay | None = None, overrides: dict | None = None, auto_open_window: bool = True,
+             open_latest: bool = False) -> int:
+    # A replay is a dev aid and may run next to the real app, so it skips the single-instance check.
+    if replay is None and not _single_instance():
         ctypes.windll.user32.MessageBoxW(None, "Huddle Helper is already running in the system tray.",
                                          "Huddle Helper", 0x40)
         return 1
-    return TrayApp().run()
+    return TrayApp(replay, overrides, auto_open_window, open_latest).run()

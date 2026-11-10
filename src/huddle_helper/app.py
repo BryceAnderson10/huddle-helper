@@ -10,7 +10,7 @@ import queue
 import statistics
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -126,8 +126,17 @@ def _same_apart_from_vocabulary(a: config.Settings, b: config.Settings) -> bool:
 
 class AppController:
     def __init__(self, on_change: Callable[[], None] | None = None,
-                 notify: Callable[[str], None] | None = None):
+                 notify: Callable[[str], None] | None = None,
+                 overrides: dict | None = None, capture_factory: Callable[..., object] | None = None):
+        """``overrides`` (dev aids such as ``tray --out``) replace Settings fields for this run only:
+        they are never written back to settings.json. ``capture_factory`` replaces the live devices
+        (``tray --replay``)."""
         self.settings = config.load()
+        self._overrides = dict(overrides or {})
+        self._persisted = {k: getattr(self.settings, k) for k in self._overrides}
+        for k, v in self._overrides.items():
+            setattr(self.settings, k, v)
+        self._capture_factory = capture_factory
         self.state = AppState()
         self._on_change = on_change or (lambda: None)
         self._notify = notify or (lambda msg: None)
@@ -178,6 +187,8 @@ class AppController:
                 log.info("Loading models for %s", key)
                 self._components = load_components(s)
                 self._components_key = key
+            if self._capture_factory is not None:
+                self._components.capture_factory = self._capture_factory
             return self._components
 
     def purge(self) -> None:
@@ -194,6 +205,11 @@ class AppController:
     @property
     def is_recording(self) -> bool:
         return self.state.phase == "recording"
+
+    def current_folder(self) -> mt.MeetingFolder | None:
+        """The meeting being recorded (also while it is stopping), else None."""
+        rec = self._recorder
+        return rec.folder if rec is not None and self.state.phase in ("recording", "stopping") else None
 
     def start(self, title: str, terms: list[str] | tuple[str, ...] = ()) -> None:
         if not self.can_start:
@@ -301,9 +317,9 @@ class AppController:
 
     # -- settings -------------------------------------------------------
     def update_settings(self, new: config.Settings) -> None:
-        config.save(new)
+        config.save(replace(new, **self._persisted) if self._persisted else new)
         old = self.settings
-        self.settings = new
+        self.settings = replace(new, **self._overrides) if self._overrides else new
         rec = self._recorder
         vocab_changed = list(old.vocabulary) != list(new.vocabulary)
         if self.is_recording and rec is not None and vocab_changed:

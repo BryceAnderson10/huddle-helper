@@ -33,6 +33,10 @@ class Settings:
     output_device: str | None = None
     meetings_dir: str = ""
 
+    # Transcript window (WP4): open it when a recording starts. Additive: older files lack the key and
+    # get the default, so no SETTINGS_VERSION bump.
+    open_window_on_start: bool = True
+
     # Transcription (F4, F13: English-only models in v1).
     whisper_model: str = "base.en"
     beam_size: int = 1
