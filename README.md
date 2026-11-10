@@ -24,7 +24,9 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
    dot while recording. Tell participants you're recording; laws vary by place.
 3. **Stop recording** when done. The icon turns amber while speaker labels are refined
    (a few minutes for a long meeting on a laptop CPU), then you get a notification.
-4. **Open meetings folder** shows the output; **Rename speakers…** maps `SPEAKER_02` to
+4. **Meetings…** lists every meeting (status, length, speakers, bookmarks, audio size) to open,
+   export, show in Explorer, retry a failed final pass, or delete (to the Recycle Bin, or
+   permanently; kept audio can be deleted on its own). **Rename speakers…** maps `SPEAKER_02` to
    a name (saved as `speakers.json`); **Settings…** picks devices, folder, model,
    diarization, echo handling, Keep audio and auto-purge.
 
@@ -89,6 +91,8 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `recorder.py` | Threads and lifecycle of one recording |
 | `finalize.py` | After-Stop pass: refined labels, final file, cleanup, DONE |
 | `housekeeping.py` | Crash recovery, audio auto-purge |
+| `library.py` | Meetings list: `MeetingInfo`, cached `scan` (sizes measured on a worker thread), status mapping, filter and search, `delete_meeting` / `delete_audio` (never while busy; only real folders inside the meetings folder) |
+| `shell.py` | Recycle Bin delete through `SHFileOperationW` (`recycle`), `has_recycle_bin` |
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
 | `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits) |
@@ -97,9 +101,11 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `export.py` | Meeting to Markdown / plain text (`huddle-helper export`) |
 | `session.py` | `MeetingSession`: the Transcript window's polling of one meeting (tails, meta, `DONE`, live-to-final swap), no Tk |
 | `replay.py` | `tray --replay <folder>` dev aid: feeds a kept meeting's audio through the recorder; unattended-run logic |
-| `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Transcript window: header, notice bar, status bar, read-only transcript text, Export and Open-meeting dialogs (thin Tk) |
-| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, picker list, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute), tray icon and menu (Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
+| `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Main window: header, notice bar, status bar, read-only transcript text, Export, bookmark and delete-confirmation dialogs (thin Tk); the window swaps between the Transcript and Meetings pages |
+| `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
+| `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
+| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
 
 ## Status against the PRD milestones
 

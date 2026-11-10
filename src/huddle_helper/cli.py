@@ -7,7 +7,7 @@
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
     huddle-helper finalize <meeting folder>             re-run the after-Stop pass
     huddle-helper recover                               close out meetings left by a crash
-    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--no-window] [--open-latest]
+    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--no-window] [--open-latest] [--open-meetings]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
     huddle-helper devices | download-models
 """
@@ -308,7 +308,7 @@ def cmd_tray(args) -> int:
         print("--auto needs --replay", file=sys.stderr)
         return 1
     return run_tray(replay, overrides or None, auto_open_window=not args.no_window,
-                    open_latest=args.open_latest)
+                    open_latest=args.open_latest, open_meetings=args.open_meetings)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--no-window", action="store_true",
                     help="do not open the transcript window when recording starts")
     sp.add_argument("--open-latest", action="store_true", help="open the transcript window at startup")
+    sp.add_argument("--open-meetings", action="store_true", help="open the Meetings list at startup")
     sp.set_defaults(func=cmd_tray)
 
     sp = sub.add_parser("record", help="record from live devices without the tray")

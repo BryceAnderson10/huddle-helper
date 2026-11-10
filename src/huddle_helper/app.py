@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import config, housekeeping, marks as marks_mod, meeting as mt, models, vocab
+from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -91,16 +91,7 @@ def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | Non
     return max(0.0, (1.0 - overall) * expected)
 
 
-def meeting_length_s(meta: dict) -> float | None:
-    """How long the meeting was, from meta.json (the recorder's duration_s, else start to end)."""
-    if meta.get("duration_s"):
-        return float(meta["duration_s"])
-    try:
-        start = datetime.fromisoformat(meta["started_at"])
-        end = datetime.fromisoformat(meta["ended_at"])
-        return max(0.0, (end - start).total_seconds()) or None
-    except (KeyError, TypeError, ValueError):
-        return None
+meeting_length_s = library.meeting_length_s  # how long the meeting was (kept here for the callers of app.*)
 
 
 def recent_final_speeds(meetings_dir: Path, exclude: str | None = None, limit: int = HISTORY) -> list[float]:
@@ -147,6 +138,9 @@ class AppController:
         self._lock = threading.Lock()
         self._jobs: queue.Queue = queue.Queue()
         self._live_ids: set[str] = set()
+        self._jobs_lock = threading.Lock()
+        self._queued: set[str] = set()  # meeting ids queued for, or in, the after-Stop pass
+        self._retry_waiting: list[mt.MeetingFolder] = []  # retries held back while a meeting records
         threading.Thread(target=self._finalize_worker, name="finalize", daemon=True).start()
 
     # -- lifecycle ------------------------------------------------------
@@ -161,8 +155,7 @@ class AppController:
             go_offline()
             meetings_dir = self.settings.resolved_meetings_dir()
             for meeting_id in housekeeping.recover(meetings_dir, None, skip=self._live_ids):
-                self._jobs.put(mt.MeetingFolder(meetings_dir / meeting_id))
-                self.state.finalize_queue += 1
+                self._enqueue(mt.MeetingFolder(meetings_dir / meeting_id))
             self.purge()
             self._get_components()
             self._set(phase="ready", message="")
@@ -333,14 +326,14 @@ class AppController:
             try:
                 folder = rec.stop()
                 self._live_ids.discard(folder.meeting_id)
-                self._jobs.put(folder)
-                self.state.finalize_queue += 1
+                self._enqueue(folder)
             except Exception as exc:  # noqa: BLE001
                 log.exception("Stop failed")
                 self._notify(f"Problem stopping the recording: {exc}")
             finally:
                 self._recorder = None
                 self._set(phase="ready", message="", recording=None)
+                self._release_retries()
 
         t = threading.Thread(target=run, name="stop", daemon=True)
         t.start()
@@ -404,8 +397,116 @@ class AppController:
                     pass
                 self._notify(f"Could not finish {folder.meeting_id}: {exc}")
             finally:
+                with self._jobs_lock:
+                    self._queued.discard(folder.meeting_id)
                 self.state.finalize_queue = max(0, self.state.finalize_queue - 1)
                 self._set(finalizing="", finalize=None)
+
+    def _enqueue(self, folder: mt.MeetingFolder) -> None:
+        with self._jobs_lock:
+            self._queued.add(folder.meeting_id)
+        self.state.finalize_queue += 1
+        self._jobs.put(folder)
+
+    # -- meetings (WP6) ---------------------------------------------------------------------
+    def is_busy(self, meeting_id: str) -> bool:
+        """Recording, waiting for or in the after-Stop pass, or a retry waiting for a recording to stop:
+        such a meeting cannot be deleted or retried."""
+        rec = self.current_folder()
+        with self._jobs_lock:
+            return (meeting_id in self._live_ids or meeting_id in self._queued
+                    or any(f.meeting_id == meeting_id for f in self._retry_waiting)
+                    or (rec is not None and rec.meeting_id == meeting_id))
+
+    def live_state(self) -> library.LiveState:
+        """What the Meetings view needs to label each row (see ``library.status_of``)."""
+        rec = self.current_folder()
+        fin = self.state.finalize
+        with self._jobs_lock:
+            return library.LiveState(
+                recording=rec.meeting_id if rec is not None else None,
+                finalizing=fin.meeting_id if fin is not None else None,
+                progress=fin.overall if fin is not None else None,
+                queued=frozenset(self._queued),
+                waiting=frozenset(f.meeting_id for f in self._retry_waiting))
+
+    def _recording_now(self) -> bool:
+        return self._recorder is not None or self.state.phase in ("recording", "stopping")
+
+    def retry_final(self, meeting_id: str) -> str:
+        """Run the after-Stop pass again for a meeting whose final pass failed. Returns "started" (queued
+        now), "queued" (a meeting is recording: it starts after Stop, so the retry does not slow the
+        live transcript) or "refused" (unknown meeting, or it is already busy or finished). The error in
+        meta.json is cleared when the job is queued."""
+        try:
+            folder = library.meeting_folder(self.settings.resolved_meetings_dir(), meeting_id)
+            meta = folder.read_meta()
+        except (library.DeleteRefused, OSError, ValueError):
+            return "refused"
+        if self.is_busy(meeting_id) or folder.is_done or meta.get("status") != mt.STATUS_FAILED:
+            return "refused"
+        with self._jobs_lock:
+            if self._recording_now():
+                self._retry_waiting.append(folder)
+                waiting = True
+            else:
+                waiting = False
+        if waiting:
+            self._on_change()
+            return "queued"
+        self._start_retry(folder)
+        return "started"
+
+    def _start_retry(self, folder: mt.MeetingFolder) -> None:
+        try:
+            folder.drop_meta("error")
+        except (OSError, ValueError):
+            log.exception("Could not clear the error of %s", folder.meeting_id)
+        self._enqueue(folder)
+        self._on_change()
+
+    def _release_retries(self) -> None:
+        """Stop has completed: queue the retries that were waiting for it."""
+        with self._jobs_lock:
+            waiting, self._retry_waiting = self._retry_waiting, []
+            for folder in waiting:  # busy from here on, without a gap
+                self._queued.add(folder.meeting_id)
+        for folder in waiting:
+            try:
+                folder.drop_meta("error")
+            except (OSError, ValueError):
+                log.exception("Could not clear the error of %s", folder.meeting_id)
+            self.state.finalize_queue += 1
+            self._jobs.put(folder)
+        if waiting:
+            self._on_change()
+
+    def delete_meetings(self, ids, *, audio_only: bool = False, permanent: bool = False) -> library.DeleteResult:
+        """Delete meetings (or only their kept audio) to the Recycle Bin, or for good. Refuses a meeting that
+        is busy. Slow for big folders: call it from a worker thread, not from Tk."""
+        meetings_dir = self.settings.resolved_meetings_dir()
+        op = library.delete_audio if audio_only else library.delete_meeting
+        result = library.DeleteResult()
+        hows: set[str] = set()
+        for mid in ids:
+            try:
+                how = op(meetings_dir, mid, is_busy=self.is_busy, permanent=permanent)
+            except library.DeleteRefused as exc:
+                log.warning("Not deleting %s: %s", mid, exc)
+                result.refused.append(mid)
+            except OSError as exc:
+                log.exception("Could not delete %s", mid)
+                result.failed.append((mid, str(exc)))
+            else:
+                if how == "none":
+                    result.skipped.append(mid)
+                else:
+                    result.done.append(mid)
+                    hows.add(how)
+        result.how = "deleted" if "deleted" in hows else ("recycled" if hows else "")
+        if result.done:
+            self._on_change()
+        return result
 
     # -- settings -------------------------------------------------------
     def update_settings(self, new: config.Settings) -> None:

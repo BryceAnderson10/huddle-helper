@@ -1,4 +1,4 @@
-"""Small dialogs of the Transcript window: Export, Open meeting and the bookmark editor. Thin Tk over ``logic``."""
+"""Small dialogs of the Transcript window: Export, the bookmark editor and the delete confirmation. Thin Tk over ``logic``."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Callable
 from .. import export as export_mod, meeting as mt
 from .. import marks as marks_mod
 from ..transcript_model import MarkRow, TranscriptModel
-from . import logic, theme
+from . import confirm, logic, theme
 
 log = logging.getLogger(__name__)
 
@@ -144,60 +144,85 @@ class MarkEditor:
         self._on_delete()
 
 
-class MeetingPicker:
-    """Simple 'Open meeting' list (replaced by the Meetings view in a later work package)."""
+class DeleteDialog:
+    """The delete confirmation. All wording comes from ``confirm.delete_view``; this only lays it out.
+    ``on_confirm(permanent)`` runs after the user presses the red button; Cancel and Esc do nothing.
+    With a Recycle Bin there is a check box for permanent delete (ticked when the user pressed Shift+Delete)."""
 
-    def __init__(self, parent: tk.Misc, meetings_dir: Path, on_open: Callable[[mt.MeetingFolder], None]):
-        self.on_open = on_open
-        self.entries = logic.list_meetings(meetings_dir)
+    def __init__(self, parent: tk.Misc, items: list[confirm.Item], *, audio_only: bool, has_bin: bool,
+                 permanent: bool, on_confirm: Callable[[bool], None]):
+        self.items, self.audio_only, self.has_bin = items, audio_only, has_bin
+        self._on_confirm = on_confirm
         self.win = tk.Toplevel(parent)
-        self.win.title("Open meeting")
         self.win.transient(parent.winfo_toplevel())
-        frm = ttk.Frame(self.win, padding=12)
-        frm.grid(sticky="nsew")
-        self.win.columnconfigure(0, weight=1)
-        self.win.rowconfigure(0, weight=1)
-        frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(1, weight=1)
-        ttk.Label(frm, text=f"Meetings in {meetings_dir}" if self.entries else
-                  f"No meetings in {meetings_dir}").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        self.box = tk.Listbox(frm, width=78, height=14, activestyle="dotbox", exportselection=False,
-                              font=(theme.FONT_FAMILY, theme.FONT_SIZE))
-        sb = ttk.Scrollbar(frm, orient="vertical", command=self.box.yview)
-        self.box.configure(yscrollcommand=sb.set)
-        self.box.grid(row=1, column=0, sticky="nsew")
-        sb.grid(row=1, column=1, sticky="ns")
-        for e in self.entries:
-            self.box.insert("end", e.label)
-        if self.entries:
-            self.box.selection_set(0)
+        self.win.resizable(False, False)
+        scale = max(1.0, parent.winfo_fpixels("1i") / 96)
+        self._wrap = int(440 * scale)
+        self.view = confirm.delete_view(items, audio_only=audio_only, has_bin=has_bin, permanent=permanent)
+        self.permanent = tk.BooleanVar(value=self.view.permanent and has_bin)
+        frm = ttk.Frame(self.win, padding=16)
+        frm.grid()
+        self.heading = ttk.Label(frm, wraplength=self._wrap, justify="left",
+                                 font=(theme.FONT_FAMILY, theme.FONT_SIZE, "bold"))
+        self.heading.grid(row=0, column=0, sticky="w")
+        self.body = ttk.Frame(frm)
+        self.body.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.check = None
+        if has_bin:
+            self.check = ttk.Checkbutton(frm, text="Delete permanently (skip the Recycle Bin)",
+                                         variable=self.permanent, command=self._rebuild)
+            self.check.grid(row=2, column=0, sticky="w", pady=(10, 0))
         btns = ttk.Frame(frm)
-        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="Browse for a folder…", command=self._browse).pack(side="left", padx=4)
-        ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side="left", padx=4)
-        ttk.Button(btns, text="Open", command=self._open).pack(side="left", padx=4)
-        self.box.bind("<Double-Button-1>", lambda e: self._open())
-        self.box.bind("<Return>", lambda e: self._open())
+        btns.grid(row=3, column=0, sticky="e", pady=(14, 0))
+        self.cancel_btn = ttk.Button(btns, text="Cancel", command=self.win.destroy)
+        self.cancel_btn.pack(side="left", padx=(0, 8))
+        self.ok_btn = ttk.Button(btns, command=self._ok)
+        self.ok_btn.pack(side="left")
         self.win.bind("<Escape>", lambda e: self.win.destroy())
+        self.win.bind("<Return>", self._return)
+        self._rebuild()
         _place_over(self.win, parent)
-        self.box.focus_set()
+        self.win.grab_set()
+        (self.cancel_btn if self.view.cancel_default else self.ok_btn).focus_set()
 
-    def _open(self) -> None:
-        sel = self.box.curselection()
-        if not sel:
-            return
-        folder = mt.MeetingFolder(self.entries[sel[0]].path)
-        self.win.destroy()
-        self.on_open(folder)
+    def _rebuild(self) -> None:
+        self.view = confirm.delete_view(self.items, audio_only=self.audio_only, has_bin=self.has_bin,
+                                        permanent=self.permanent.get())
+        v = self.view
+        self.win.title(v.title)
+        self.heading.configure(text=v.heading)
+        for child in self.body.winfo_children():
+            child.destroy()
+        for text in v.details:
+            ttk.Label(self.body, text=text, wraplength=self._wrap, justify="left").pack(anchor="w", pady=(0, 4))
+        for text in v.warnings:
+            tk.Label(self.body, text=text, wraplength=self._wrap, justify="left", anchor="w",
+                     bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG, padx=8, pady=5,
+                     font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL)).pack(anchor="w", fill="x", pady=(2, 4))
+        self.ok_btn.configure(text=v.confirm)
 
-    def _browse(self) -> None:
-        chosen = filedialog.askdirectory(parent=self.win, title="Choose a meeting folder")
-        if not chosen:
-            return
-        folder = mt.MeetingFolder(Path(chosen))
-        if not folder.meta_path.exists():
-            messagebox.showerror("Huddle Helper", "That folder has no meta.json, so it is not a meeting.",
-                                 parent=self.win)
-            return
+    def _return(self, _event) -> str:
+        """Enter presses the focused button; with focus elsewhere, the safe one when there is a warning."""
+        focused = self.win.focus_get()
+        if focused is self.ok_btn or (focused is not self.cancel_btn and not self.view.cancel_default):
+            self._ok()
+        else:
+            self.win.destroy()
+        return "break"
+
+    def _ok(self) -> None:
+        permanent = self.view.permanent
         self.win.destroy()
-        self.on_open(folder)
+        self._on_confirm(permanent)
+
+
+def browse_for_meeting(parent: tk.Misc) -> mt.MeetingFolder | None:
+    """Ask for any meeting folder (one outside the meetings folder, such as a copy)."""
+    chosen = filedialog.askdirectory(parent=parent, title="Choose a meeting folder")
+    if not chosen:
+        return None
+    folder = mt.MeetingFolder(Path(chosen))
+    if not folder.meta_path.exists():
+        messagebox.showerror("Huddle Helper", "That folder has no meta.json, so it is not a meeting.", parent=parent)
+        return None
+    return folder

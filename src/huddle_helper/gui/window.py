@@ -10,6 +10,10 @@ Timers (all on the Tk thread, all skipped while the window is hidden)
     500 ms  header, notice bar, status bar from app.state (no file I/O)
     1 s     meta.json / speakers.json if changed; DONE -> swap to the final transcript
 
+Two pages share the window and are swapped in place (plan 4.5): the Transcript page (everything above)
+and the Meetings page (``MeetingsView``: the list, filter, delete, retry). The header's "Meetings" button
+and the tray's "Meetings…" show the list; opening a meeting there switches back to the transcript.
+
 Bookmarks and mute (WP5): the header's mute toggle and the amber bar, the status bar's Bookmark split
 button, the bookmark editor on a mark row, and "Bookmark this line as…" on a line's right-click menu all
 call ``AppController`` (``bookmark``, ``edit_mark``, ``toggle_mic_muted``); the changes come back through
@@ -19,6 +23,7 @@ the same file tails as everything else.
 from __future__ import annotations
 
 import logging
+import queue
 import time
 import tkinter as tk
 from pathlib import Path
@@ -29,7 +34,8 @@ from .. import marks as marks_mod, meeting as mt
 from ..session import MeetingSession
 from ..transcript_model import LineRow, MarkRow, Reset
 from . import logic, theme
-from .dialogs import ExportDialog, MarkEditor, MeetingPicker
+from .dialogs import ExportDialog, MarkEditor
+from .meetings_view import MeetingsView
 from .transcript_view import TranscriptView
 
 log = logging.getLogger(__name__)
@@ -70,10 +76,16 @@ class Tip:
 
 
 class MainWindow:
-    def __init__(self, root: tk.Tk, app, on_stop: Callable[[], None] | None = None):
+    def __init__(self, root: tk.Tk, app, on_stop: Callable[[], None] | None = None,
+                 post: Callable[[Callable[[], None]], None] | None = None):
+        """``post`` hands a callable from a worker thread to the Tk thread (``TrayApp.calls.put``). Without
+        one the window keeps its own inbox and drains it on its 250 ms timer."""
         self.root = root
         self.app = app
         self._on_stop = on_stop
+        self._inbox: queue.Queue = queue.Queue()
+        self._post = post or self._inbox.put
+        self.page = "transcript"
         self.session: MeetingSession | None = None
         self._autoscroll = True
         self._highlight_job: str | None = None
@@ -88,24 +100,27 @@ class MainWindow:
         style = ttk.Style(self.win)
         style.configure("Header.TLabel", font=(theme.FONT_FAMILY, 11, "bold"))
 
+        self.tpage = ttk.Frame(self.win)  # the Transcript page: header .. status bar
+        self.tpage.pack(fill="both", expand=True)
+
         # header
-        head = ttk.Frame(self.win, padding=(10, 8))
+        head = ttk.Frame(self.tpage, padding=(10, 8))
         head.pack(fill="x")
         self.dot = tk.Label(head, text="●", fg=theme.IDLE, font=(theme.FONT_FAMILY, 12))
         self.dot.pack(side="left")
         self.head_text = ttk.Label(head, text="No meeting open", style="Header.TLabel")
         self.head_text.pack(side="left", padx=(6, 0))
-        self.open_btn = ttk.Button(head, text="Open meeting…", command=self.pick_meeting)
+        self.open_btn = ttk.Button(head, text="Meetings", command=self.show_meetings)
         self.open_btn.pack(side="right")
         self.export_btn = ttk.Button(head, text="Export…", command=self.export, state="disabled")
         self.export_btn.pack(side="right", padx=(0, 6))
         self.mute_btn = ttk.Button(head, text="Mute me in the recording", command=self._toggle_mute)
         self.mute_tip = Tip(self.mute_btn)
         self._mute_shown = False
-        ttk.Separator(self.win, orient="horizontal").pack(fill="x")
+        ttk.Separator(self.tpage, orient="horizontal").pack(fill="x")
 
         # amber mute bar (packed only while muted)
-        self.mute_bar = tk.Frame(self.win, bg=theme.MUTE_BAR_BG)
+        self.mute_bar = tk.Frame(self.tpage, bg=theme.MUTE_BAR_BG)
         tk.Label(self.mute_bar, text="MIC MUTED", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
                  font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL, "bold")).pack(side="left", padx=(10, 8), pady=4)
         self.mute_bar_text = tk.Label(self.mute_bar, text="", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
@@ -115,13 +130,13 @@ class MainWindow:
         self._mute_bar_shown = False
 
         # notice bar (packed only when there is a notice)
-        self.notice = tk.Label(self.win, text="", anchor="w", justify="left", font=base,
+        self.notice = tk.Label(self.tpage, text="", anchor="w", justify="left", font=base,
                                padx=int(10 * scale), pady=int(4 * scale), wraplength=int(740 * scale))
         self._notice_shown = False
 
         # status bar (packed before the transcript so it keeps its place when the window is small)
-        ttk.Separator(self.win, orient="horizontal").pack(side="bottom", fill="x")
-        bar = ttk.Frame(self.win, padding=(10, 6))
+        ttk.Separator(self.tpage, orient="horizontal").pack(side="bottom", fill="x")
+        bar = ttk.Frame(self.tpage, padding=(10, 6))
         bar.pack(side="bottom", fill="x")
         self.mic_lbl = ttk.Label(bar, text="", font=base)
         self.call_lbl = ttk.Label(bar, text="", font=base)
@@ -135,12 +150,16 @@ class MainWindow:
         self._bar_right: tuple = (False, False)
         self._feedback: tuple[str, float] = ("", 0.0)
 
-        self.view = TranscriptView(self.win)
+        self.view = TranscriptView(self.tpage)
         self.view.pack(fill="both", expand=True)
         self.view.on_edit_mark = self._edit_mark
         self.view.on_delete_mark = self._delete_mark
         self.view.on_bookmark_line = self._bookmark_line
         self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
+
+        self.meetings = MeetingsView(self.win, app, post=self._post, on_open=self.open_meeting,
+                                     on_back=self.show_transcript, has_session=lambda: self.session is not None,
+                                     on_deleted=self._meetings_deleted)
 
         self._after: dict[str, str] = {}
         self._schedule("fast", FAST_MS, self._tick_fast)
@@ -168,6 +187,8 @@ class MainWindow:
                 finalizing_id=st.finalize.meeting_id if st.finalize else None, last_id=st.last_meeting)
         if folder is not None and (self.session is None or self.session.folder.path != folder.path):
             self.open_meeting(folder)
+        elif self.page != "transcript":
+            self._show_page("transcript")
         self.win.deiconify()
         self.win.lift()
         self.win.focus_force()
@@ -185,7 +206,41 @@ class MainWindow:
         self.win.destroy()
 
     # -- meeting ----------------------------------------------------------------------
+    def show_meetings(self) -> None:
+        """Bring the window up on the Meetings page."""
+        self._show_page("meetings")
+        self.win.deiconify()
+        self.win.lift()
+        self.win.focus_force()
+
+    def show_transcript(self) -> None:
+        if self.session is not None:
+            self._show_page("transcript")
+
+    def _show_page(self, page: str) -> None:
+        if page == self.page:
+            return
+        self.page = page
+        if page == "meetings":
+            self.tpage.pack_forget()
+            self.meetings.pack(fill="both", expand=True)
+            self.win.title("Meetings — Huddle Helper")
+            self.meetings.activate()
+        else:
+            self.meetings.pack_forget()
+            self.tpage.pack(fill="both", expand=True)
+            self._refresh_all()
+
+    def _meetings_deleted(self, ids: list[str]) -> None:
+        """Meetings were deleted: forget the open one if it was among them."""
+        if self.session is not None and self.session.meeting_id in ids:
+            self.session = None
+            self.view.clear()
+            self.export_btn.configure(state="disabled")
+            self._cancel_highlight()
+
     def open_meeting(self, folder: mt.MeetingFolder) -> None:
+        self._show_page("transcript")
         self.view.clear()
         self.session = MeetingSession(folder)
         st = self.app.state
@@ -201,9 +256,6 @@ class MainWindow:
         self.view.apply([Reset()], self.session.model, self._autoscroll)  # gap rows already in meta
         self._apply(self.session.poll())
         self._refresh_all()
-
-    def pick_meeting(self) -> None:
-        MeetingPicker(self.win, self.app.settings.resolved_meetings_dir(), self.open_meeting)
 
     def export(self) -> None:
         if self.session is not None:
@@ -278,7 +330,15 @@ class MainWindow:
 
         self._after[name] = self.win.after(ms, run)
 
+    def _drain_inbox(self) -> None:
+        try:
+            while True:
+                self._inbox.get_nowait()()
+        except queue.Empty:
+            pass
+
     def _tick_fast(self) -> int:
+        self._drain_inbox()
         s = self.session
         if s is None:
             return FAST_MS
@@ -297,6 +357,9 @@ class MainWindow:
         return SLOW_MS
 
     def _tick_status(self) -> int:
+        if self.page == "meetings":
+            self.meetings.tick()
+            return STATUS_MS
         self._refresh_all()
         return STATUS_MS
 
@@ -308,7 +371,7 @@ class MainWindow:
     def _placeholder(self) -> None:
         s = self.session
         if s is None:
-            self.view.set_placeholder("No meeting open.\n\nChoose “Open meeting…”, or start a recording.")
+            self.view.set_placeholder("No meeting open.\n\nChoose “Meetings”, or start a recording.")
         elif not s.model.rows:
             phase = logic.meeting_phase(s.meeting_id, s.model, self.app.state)
             self.view.set_placeholder("Listening… lines appear a second or two after someone pauses."

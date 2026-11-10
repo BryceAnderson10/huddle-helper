@@ -216,6 +216,15 @@ class MeetingFolder:
             write_json_atomic(self.meta_path, meta)
             return meta
 
+    def drop_meta(self, *keys: str) -> dict:
+        """Remove keys from meta.json (e.g. ``error`` when a failed final pass is retried)."""
+        with self._lock:
+            meta = self.read_meta()
+            for key in keys:
+                meta.pop(key, None)
+            write_json_atomic(self.meta_path, meta)
+            return meta
+
     def add_gap(self, source: str, start_ms: int, end_ms: int, reason: str) -> None:
         with self._lock:
             meta = self.read_meta()

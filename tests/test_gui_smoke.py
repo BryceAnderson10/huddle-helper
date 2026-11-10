@@ -84,7 +84,7 @@ def test_window_follows_a_meeting_and_shows_header_and_status(root, tmp_path):
 
 
 def test_export_dialog_copies_the_chosen_format_to_the_clipboard(root, tmp_path):
-    from huddle_helper.gui.dialogs import ExportDialog, MeetingPicker
+    from huddle_helper.gui.dialogs import ExportDialog
 
     folder = make_meeting(tmp_path, [("mic", 0, 1000, "You", "hello."), ("system", 2000, 3000, "SPEAKER_00", "hi.")],
                           final=[("mic", 0, 1000, "You", "hello."), ("system", 2000, 3000, "SPEAKER_00", "hi.")],
@@ -100,11 +100,6 @@ def test_export_dialog_copies_the_chosen_format_to_the_clipboard(root, tmp_path)
     dlg.copy()
     assert root.clipboard_get().lstrip().startswith("# Export me")
     dlg.win.destroy()
-    opened = []
-    picker = MeetingPicker(root, tmp_path, opened.append)
-    assert picker.box.size() == 1
-    picker._open()
-    assert opened and opened[0].meeting_id == folder.meeting_id
 
 
 # -- bookmarks and mute (WP5) ---------------------------------------------------------------------
@@ -295,3 +290,171 @@ def test_settings_hotkeys_tab_shows_results_and_validates(root):
     assert tab.status["action"].cget("text") == "Off"
     dlg._save()
     assert saved and saved[0].hotkeys["mute"] == "Ctrl+Alt+U" and saved[0].hotkeys["action"] == ""
+
+
+# -- Meetings view (WP6) -----------------------------------------------------------------------------------
+def pump(root, posted, until, seconds=5.0):
+    """Run Tk and the callbacks the view's worker threads posted (stands in for TrayApp.calls) until ``until()``."""
+    import time
+
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        root.update()
+        while posted:
+            posted.pop(0)()
+        if until():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def labels_in(widget):
+    from tkinter import ttk
+
+    out = []
+    for child in widget.winfo_children():
+        if isinstance(child, (tk.Label, ttk.Label)):
+            out.append(child)
+        out += labels_in(child)
+    return out
+
+
+def meetings_fixture(tmp_path):
+    from datetime import datetime
+
+    lines = [("mic", 0, 1000, "You", "hello."), ("system", 2000, 3000, "SPEAKER_01", "hi.")]
+    done = make_meeting(tmp_path, lines, final=lines, title="Weekly sync")
+    failed = make_meeting(tmp_path, lines, status=mt.STATUS_FAILED, title="Standup",
+                          started_at=datetime(2026, 1, 16, 9, 30).astimezone())
+    failed.update_meta(error="model missing")
+    (failed.audio_dir / "mic.flac").write_bytes(b"x" * 2048)
+    return done, failed
+
+
+def test_meetings_view_lists_filters_selects_retries_and_deletes(root, tmp_path):
+    import shutil
+    from huddle_helper import library
+    from huddle_helper.gui.meetings_view import MeetingsView
+
+    done, failed = meetings_fixture(tmp_path)
+    calls = {"retry": [], "delete": []}
+    live = [library.LiveState()]
+
+    def delete_meetings(ids, *, audio_only=False, permanent=False):
+        calls["delete"].append((list(ids), audio_only, permanent))
+        res = library.DeleteResult(how="recycled")
+        for mid in ids:  # the real library code, with a recycler that never touches the real Recycle Bin
+            (library.delete_audio if audio_only else library.delete_meeting)(
+                tmp_path, mid, is_busy=lambda m: False, recycler=lambda ps: [shutil.rmtree(p) for p in ps],
+                has_bin=lambda p: True)
+            res.done.append(mid)
+        return res
+
+    ctl = SimpleNamespace(state=AppState(phase="ready"), settings=SimpleNamespace(resolved_meetings_dir=lambda: tmp_path),
+                          current_folder=lambda: None, live_state=lambda: live[0],
+                          retry_final=lambda mid: calls["retry"].append(mid) or "started", delete_meetings=delete_meetings)
+    posted, opened, deleted = [], [], []
+    top = tk.Toplevel(root)
+    top.geometry("820x420+30+30")
+    view = MeetingsView(top, ctl, post=posted.append, on_open=opened.append, on_back=lambda: None,
+                        has_session=lambda: False, on_deleted=deleted.extend)
+    view.pack(fill="both", expand=True)
+    view.activate()
+    assert pump(root, posted, lambda: len(view.tree.get_children()) == 2)
+    rows = {view.tree.set(i, "Title"): view.tree.item(i, "values") for i in view.tree.get_children()}
+    assert rows["Standup"][3] == "Final pass failed" and rows["Weekly sync"][3] == "Complete"
+    assert view.tree.get_children()[0] == failed.meeting_id  # newest first
+    assert str(view.buttons["delete_meeting"].cget("state")) == "disabled"  # nothing selected
+    # filter and search
+    view.filter_var.set("Complete")
+    view._render()
+    assert view.tree.get_children() == (done.meeting_id,)
+    view._clear_filters()
+    view.search_var.set("stand")
+    assert view.tree.get_children() == (failed.meeting_id,)
+    view.search_var.set("")
+    # a failed meeting: the error shows, Retry is on, Open/Export are for one meeting
+    view.tree.selection_set(failed.meeting_id)
+    root.update()
+    assert "model missing" in view.detail.cget("text") and str(view.buttons["retry"].cget("state")) == "normal"
+    view.retry_selected()
+    assert calls["retry"] == [failed.meeting_id] and "Final pass started" in view.detail.cget("text")
+    # while it waits for a recording to stop the row says so, and it cannot be deleted
+    live[0] = library.LiveState(waiting=frozenset({failed.meeting_id}))
+    view._render()
+    assert view.tree.set(failed.meeting_id, "Status") == "Retry queued until recording stops"
+    assert str(view.buttons["delete_meeting"].cget("state")) == "disabled"
+    live[0] = library.LiveState()
+    view._message = ("", "", 0.0)
+    # multi-select: Open/Export off, delete on
+    view._select_all()
+    root.update()
+    states = {k: str(b.cget("state")) for k, b in view.buttons.items()}
+    assert states == {"open": "disabled", "export": "disabled", "explorer": "disabled", "retry": "normal",
+                      "delete_audio": "normal", "delete_meeting": "normal"}, states
+    assert all(b.instate(["disabled"]) == (states[k] == "disabled") for k, b in view.buttons.items())
+    view.tree.selection_set(done.meeting_id)
+    view.open_selected()
+    assert opened[-1].meeting_id == done.meeting_id
+    # delete audio of the failed meeting: the confirmation says what goes, then the worker thread deletes
+    view.tree.selection_set(failed.meeting_id)
+    root.update()
+    view.delete(audio_only=True)
+    dlg = [w for w in view.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+    texts = " ".join(label.cget("text") for label in labels_in(dlg))
+    assert "Move the kept audio of 1 meeting (Standup)" in texts and "cannot be retried" in texts
+    view._run_delete([failed.meeting_id], True, False)
+    dlg.destroy()
+    assert pump(root, posted, lambda: not view._working)
+    assert calls["delete"] == [([failed.meeting_id], True, False)] and not failed.audio_dir.exists()
+    assert "Moved the audio of 1 meeting to the Recycle Bin" in view.detail.cget("text")
+    # delete the meeting: it leaves the list and the window is told
+    view.tree.selection_set(done.meeting_id)
+    view._run_delete([done.meeting_id], False, False)
+    assert pump(root, posted, lambda: (view.tick(), not view._working and view.tree.get_children() == (failed.meeting_id,))[1])
+    assert deleted == [done.meeting_id] and not done.path.exists()
+
+
+def test_delete_dialog_toggles_permanent_and_confirms_with_the_choice(root):
+    from huddle_helper.gui.confirm import Item
+    from huddle_helper.gui.dialogs import DeleteDialog
+
+    got = []
+    items = [Item("A", 2_000_000, finished_hours=100), Item("B", 1_000_000, finished_hours=2.0)]
+    dlg = DeleteDialog(root, items, audio_only=False, has_bin=True, permanent=False, on_confirm=got.append)
+    root.update()
+    assert dlg.ok_btn.cget("text") == "Move to Recycle Bin" and "Recycle Bin" in dlg.heading.cget("text")
+    assert any("Finished in the last 24 hours" in label.cget("text") for label in labels_in(dlg.body))
+    dlg.permanent.set(True)
+    dlg._rebuild()
+    assert dlg.ok_btn.cget("text") == "Delete permanently" and dlg.heading.cget("text").startswith("Permanently delete")
+    dlg._ok()
+    assert got == [True]
+    # Shift+Delete starts with the box ticked; no Recycle Bin means no box at all
+    shift = DeleteDialog(root, items[:1], audio_only=False, has_bin=True, permanent=True, on_confirm=got.append)
+    assert shift.permanent.get() and shift.check is not None
+    shift.win.destroy()
+    nobin = DeleteDialog(root, items[:1], audio_only=False, has_bin=False, permanent=False, on_confirm=got.append)
+    assert nobin.check is None and nobin.ok_btn.cget("text") == "Delete permanently"
+    nobin.win.destroy()
+
+
+def test_window_switches_between_the_transcript_and_the_meetings_list(root, tmp_path):
+    from huddle_helper import library
+    from huddle_helper.gui.window import MainWindow
+
+    done, _failed = meetings_fixture(tmp_path)
+    ctl = SimpleNamespace(state=AppState(phase="ready"), settings=SimpleNamespace(resolved_meetings_dir=lambda: tmp_path),
+                          current_folder=lambda: None, live_state=lambda: library.LiveState())
+    w = MainWindow(root, ctl)
+    w.show_meetings()
+    assert w.page == "meetings" and w.meetings.winfo_manager() == "pack" and w.tpage.winfo_manager() == ""
+    assert pump(root, [], lambda: (w._drain_inbox(), len(w.meetings.tree.get_children()))[1] == 2)
+    w.meetings.tree.selection_set(done.meeting_id)
+    w.meetings.open_selected()
+    assert w.page == "transcript" and w.session.meeting_id == done.meeting_id and "hello." in w.view.plain_text()
+    assert w.meetings.winfo_manager() == "" and w.tpage.winfo_manager() == "pack"
+    w.show_meetings()
+    w._meetings_deleted([done.meeting_id])  # the open meeting was deleted from the list
+    assert w.session is None and w.view.plain_text().strip() == ""
+    w.destroy()

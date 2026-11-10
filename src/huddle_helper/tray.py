@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
 import queue
 import time
 import tkinter as tk
@@ -72,7 +71,7 @@ def _single_instance() -> bool:
 
 class TrayApp:
     def __init__(self, replay: Replay | None = None, overrides: dict | None = None,
-                 auto_open_window: bool = True, open_latest: bool = False):
+                 auto_open_window: bool = True, open_latest: bool = False, open_meetings: bool = False):
         import pystray
 
         from .gui import theme
@@ -91,6 +90,7 @@ class TrayApp:
         self._auto_opened: str | None = None  # meeting id the window was last opened for on Start
         self._auto_open_window = auto_open_window
         self._open_latest = open_latest
+        self._open_meetings = open_meetings
         self.replay = replay
         self._replay_started_at: float | None = None
         self.app = AppController(on_change=self._changed, notify=self._notify, overrides=overrides,
@@ -110,7 +110,7 @@ class TrayApp:
                              checked=lambda item: self.app.mic_muted, enabled=lambda item: self.app.is_recording),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Transcript window", self._ui(self.show_window)),
-            pystray.MenuItem("Open meetings folder", self._ui(self.open_folder)),
+            pystray.MenuItem("Meetings…", self._ui(self.show_meetings)),
             pystray.MenuItem("Rename speakers…", self._ui(self.show_speakers)),
             pystray.MenuItem("Settings…", self._ui(self.show_settings)),
             pystray.Menu.SEPARATOR,
@@ -252,18 +252,21 @@ class TrayApp:
     def stop(self) -> None:
         self.app.stop()
 
-    def show_window(self) -> None:
-        """Open (or raise) the Transcript window on the meeting being recorded, else the last one."""
+    def _main_window(self):
         from .gui.window import MainWindow
 
         if self.window is None:
-            self.window = MainWindow(self.root, self.app, on_stop=self.stop)
-        self.window.show(self.app.current_folder())
+            # post=calls.put: the Meetings view's scan and delete threads reach Tk through the same queue.
+            self.window = MainWindow(self.root, self.app, on_stop=self.stop, post=self.calls.put)
+        return self.window
 
-    def open_folder(self) -> None:
-        path = self.app.settings.resolved_meetings_dir()
-        path.mkdir(parents=True, exist_ok=True)
-        os.startfile(path)  # noqa: S606 - opens Explorer
+    def show_window(self) -> None:
+        """Open (or raise) the Transcript window on the meeting being recorded, else the last one."""
+        self._main_window().show(self.app.current_folder())
+
+    def show_meetings(self) -> None:
+        """Open (or raise) the window on the Meetings list."""
+        self._main_window().show_meetings()
 
     def show_settings(self) -> None:
         from .audio.capture import list_devices
@@ -354,6 +357,8 @@ class TrayApp:
             self.root.after(1000, self._replay_tick)
         if self._open_latest:
             self.root.after(500, self.show_window)
+        if self._open_meetings:
+            self.root.after(500, self.show_meetings)
         self.root.after(6 * 3600 * 1000, self._purge_daily)
         log.info("Huddle Helper %s running in the tray", __version__)
         self.root.mainloop()
@@ -361,10 +366,10 @@ class TrayApp:
 
 
 def run_tray(replay: Replay | None = None, overrides: dict | None = None, auto_open_window: bool = True,
-             open_latest: bool = False) -> int:
+             open_latest: bool = False, open_meetings: bool = False) -> int:
     # A replay is a dev aid and may run next to the real app, so it skips the single-instance check.
     if replay is None and not _single_instance():
         ctypes.windll.user32.MessageBoxW(None, "Huddle Helper is already running in the system tray.",
                                          "Huddle Helper", 0x40)
         return 1
-    return TrayApp(replay, overrides, auto_open_window, open_latest).run()
+    return TrayApp(replay, overrides, auto_open_window, open_latest, open_meetings).run()
