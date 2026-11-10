@@ -58,7 +58,7 @@ python tools\make_sample_meeting.py --out sample --echo          # synthetic two
 huddle-helper simulate --mic sample\mic.wav --system sample\system.wav --realtime
 huddle-helper finalize <meeting folder>             # re-run the after-Stop pass
 huddle-helper recover                               # finish meetings left by a crash
-huddle-helper tray --replay <meeting folder> --out <dir>  # dev: run a kept meeting's audio through the tray app (add --auto to run unattended)
+huddle-helper tray --replay <meeting folder> --out <dir> [--keep-audio]  # dev: run a kept meeting's audio through the tray app (add --auto to run unattended)
 huddle-helper devices
 ```
 
@@ -91,12 +91,15 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `housekeeping.py` | Crash recovery, audio auto-purge |
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
+| `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits) |
+| `hotkeys.py` | Global hotkeys: combo parsing, the AltGr check, `HotkeyThread` (`RegisterHotKey` message loop, registered only while recording) |
+| `audio/gate.py` | `MicGate`: replaces the mic with zeros while muted (250 ms tail), counts samples so the muted period matches `mic.flac` exactly |
 | `export.py` | Meeting to Markdown / plain text (`huddle-helper export`) |
 | `session.py` | `MeetingSession`: the Transcript window's polling of one meeting (tails, meta, `DONE`, live-to-final swap), no Tk |
 | `replay.py` | `tray --replay <folder>` dev aid: feeds a kept meeting's audio through the recorder; unattended-run logic |
 | `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Transcript window: header, notice bar, status bar, read-only transcript text, Export and Open-meeting dialogs (thin Tk) |
-| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, picker list) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (with after-Stop progress and time-left estimate), tray icon, dialogs |
+| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, picker list, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute), tray icon and menu (Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
 
 ## Status against the PRD milestones
 

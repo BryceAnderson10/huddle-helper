@@ -13,6 +13,9 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "sherpa_onnx", "pyau
     hiddenimports += h
 hiddenimports += ["pystray._win32", "huddle_helper.tray"]
 # The Transcript window is imported lazily from tray.py (and the replay driver from cli.py).
+# tray.py imports hotkeys.py inside a function (hotkeys exist only while recording); marks.py and
+# audio/gate.py are imported at module level by the recorder and controller. Listed for certainty.
+hiddenimports += ["huddle_helper.hotkeys", "huddle_helper.marks", "huddle_helper.audio.gate"]
 hiddenimports += ["huddle_helper.gui", "huddle_helper.gui.window", "huddle_helper.gui.transcript_view",
                   "huddle_helper.gui.dialogs", "huddle_helper.gui.logic", "huddle_helper.gui.theme",
                   "huddle_helper.session", "huddle_helper.replay"]

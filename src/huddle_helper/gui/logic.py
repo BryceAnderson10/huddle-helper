@@ -7,6 +7,9 @@
 * ``format_eta`` ``level_bars``
 * ``list_meetings`` ``default_meeting``   the "Open meeting..." picker and which meeting to show
 * ``export_text``       the Export dialog's output
+* ``mute_bar_view`` ``mute_button_view`` ``bookmark_items`` ``mark_changes`` ``recording_status_text``
+  bookmarks and mute (WP5): the amber bar, the header button, the Bookmark menu, the tray tooltip
+* ``hotkey_row_status``  what Settings → Hotkeys says next to one combo
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ from datetime import timedelta
 from pathlib import Path
 
 from .. import export as export_mod, meeting as mt
+from .. import marks as marks_mod
 from ..transcript_model import GapRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
+from . import theme
 
 # -- ops ---------------------------------------------------------------------
 
@@ -146,7 +151,11 @@ def notice_view(meeting_id: str, model: TranscriptModel, state) -> NoticeView | 
                           "re-run with: huddle-helper finalize <folder>", "error")
     if phase in (RECORDING, STOPPING, PROCESSING, WAITING, LIVE_ONLY, UNFINISHED):
         tail = " after Stop." if phase in (RECORDING, STOPPING) else "."
-        return NoticeView(f"Provisional: speaker labels may change{tail}", "info")
+        text = f"Provisional: speaker labels may change{tail}"
+        problems = list(getattr(state, "hotkey_problems", None) or []) if phase == RECORDING else []
+        if problems:
+            text += "\nHotkeys not working: " + "; ".join(problems) + ". The buttons and the tray menu still work."
+        return NoticeView(text, "info")
     if model.conflicts:
         n = len(model.conflicts)
         return NoticeView(f"{n} speaker name conflict{'' if n == 1 else 's'} after the final pass.", "info")
@@ -184,6 +193,7 @@ class StatusView:
     text: str  # lag/backlog in a recording; stage, percent and time left while processing
     stop_enabled: bool
     show_stop: bool
+    mic_muted: bool = False  # ``mic`` then reads "muted" in place of the level meter
 
 
 def status_view(meeting_id: str, model: TranscriptModel, state) -> StatusView:
@@ -193,8 +203,9 @@ def status_view(meeting_id: str, model: TranscriptModel, state) -> StatusView:
         if rec is None:
             return StatusView(None, None, "", False, True)
         lv = rec.levels or {}
-        return StatusView(level_bars(lv.get("mic", 0.0)), level_bars(lv.get("system", 0.0)),
-                          f"Lag {rec.lag_s:.1f} s   Backlog {rec.backlog}", phase == RECORDING, True)
+        muted = bool(getattr(rec, "mic_muted", False))
+        return StatusView("muted" if muted else level_bars(lv.get("mic", 0.0)), level_bars(lv.get("system", 0.0)),
+                          f"Lag {rec.lag_s:.1f} s   Backlog {rec.backlog}", phase == RECORDING, True, muted)
     if phase == PROCESSING:
         fin = state.finalize
         parts = [f"{fin.stage} {fin.frac:.0%}" if fin.frac > 0 else fin.stage]
@@ -212,6 +223,137 @@ def status_view(meeting_id: str, model: TranscriptModel, state) -> StatusView:
     if phase == FAILED:
         return StatusView(None, None, "Showing the live transcript", False, False)
     return StatusView(None, None, "", False, False)
+
+
+# -- bookmarks and mute (WP5) ----------------------------------------------------------
+
+
+def _mic_muted(meeting_id: str, model: TranscriptModel, state) -> bool:
+    rec = getattr(state, "recording", None)
+    return (meeting_phase(meeting_id, model, state) == RECORDING and rec is not None
+            and bool(getattr(rec, "mic_muted", False)))
+
+
+@dataclass(frozen=True)
+class MuteBarView:
+    label: str  # "MIC MUTED", bold
+    text: str
+
+
+def _in_room(model: TranscriptModel) -> bool:
+    return bool((model.meta.get("settings") or {}).get("diarize_mic"))
+
+
+def mute_bar_view(meeting_id: str, model: TranscriptModel, state) -> MuteBarView | None:
+    """The amber bar under the header, only while the displayed meeting is recording and muted."""
+    if not _mic_muted(meeting_id, model, state):
+        return None
+    text = "You're muted in the recording (the call still hears you)."
+    if _in_room(model):
+        text += " Everyone in the room is out of the recording too."
+    return MuteBarView("MIC MUTED", text)
+
+
+@dataclass(frozen=True)
+class MuteButtonView:
+    visible: bool
+    text: str
+    tooltip: str
+
+
+def mute_button_view(meeting_id: str, model: TranscriptModel, state, hotkey: str = "") -> MuteButtonView:
+    """The header's mute toggle: shown while the displayed meeting is recording (not while stopping)."""
+    if meeting_phase(meeting_id, model, state) != RECORDING:
+        return MuteButtonView(False, "", "")
+    muted = _mic_muted(meeting_id, model, state)
+    key = f" [{hotkey}]" if hotkey else ""
+    tip = ("Takes your microphone out of this recording only. The call app still hears you."
+           + (" With separate speakers on the mic, everyone in the room is muted." if _in_room(model) else "")
+           + key)
+    return MuteButtonView(True, "Unmute me" if muted else "Mute me in the recording", tip)
+
+
+@dataclass(frozen=True)
+class BookmarkItem:
+    kind: str
+    label: str  # "⚑ Bookmark"
+    hotkey: str  # "Ctrl+Alt+B", "" when off
+
+    @property
+    def menu_text(self) -> str:
+        return f"{self.label}    {self.hotkey}" if self.hotkey else self.label
+
+
+def bookmark_items(hotkeys: dict[str, str] | None = None, custom: dict[str, str] | None = None) -> list[BookmarkItem]:
+    """The four types, in menu order, with symbol and hotkey (Bookmark split button, tray menu, line menu)."""
+    hotkeys = hotkeys or {}
+    items = [BookmarkItem(k, f"{theme.KIND_SYMBOLS[k]} {marks_mod.KIND_NAMES[k]}", hotkeys.get(k, ""))
+             for k in marks_mod.KINDS]
+    items += [BookmarkItem(k, f"{theme.KIND_SYMBOLS['bookmark']} {name}", hotkeys.get(k, ""))
+              for k, name in (custom or {}).items()]
+    return items
+
+
+def mark_changes(row: MarkRow, label: str, kind: str) -> dict:
+    """Keyword arguments for ``AppController.edit_mark`` that turn ``row`` into (label, kind); {} if the
+    same."""
+    out = {}
+    if label.strip() != row.label:
+        out["label"] = label.strip()
+    if kind != row.kind:
+        out["kind"] = kind
+    return out
+
+
+def bookmark_feedback(result: dict, model_kind_names: dict[str, str] | None = None) -> str:
+    """One line for the status bar after a press: what the 2 s rule did."""
+    action, kind = result.get("action"), result.get("kind", "")
+    name = marks_mod.kind_name(kind, model_kind_names)
+    if action == "added":
+        return f"{name} added"
+    if action == "retyped":
+        return f"Changed to {name}"
+    if action == "ignored":
+        return f"{name} already added"
+    return ""
+
+
+def hotkey_row_status(check, registration=None, live: bool = False, duplicate_of: str | None = None
+                      ) -> tuple[str, str]:
+    """(text, level) for one row of Settings → Hotkeys; level is "ok", "warn", "error" or "info".
+
+    ``check`` is a ``hotkeys.ComboCheck``; ``registration`` the ``hotkeys.Registration`` for this exact
+    text (None when not tried); ``live`` says the registration is the running recording's rather than a
+    try-and-release; ``duplicate_of`` names another action with the same combo.
+    """
+    if check.off:
+        return "Off", "info"
+    if not check.valid:
+        return check.error, "error"
+    if duplicate_of:
+        return f"Same combination as “{duplicate_of}”. Each action needs its own.", "error"
+    if registration is None:
+        text, level = "Not checked yet. Click “Check”.", "info"
+    elif registration.ok:
+        text, level = ("Registered now." if live else "Free: it will be registered while recording."), "ok"
+    else:
+        text, level = f"Not registered: {registration.error}. Pick another combination.", "error"
+    if check.altgr:
+        text, level = f"{text} {check.warning}", ("error" if level == "error" else "warn")
+    return text, level
+
+
+def recording_status_text(elapsed_s: float, lines: int, lag_s: float = 0.0, marks: int = 0,
+                          muted: bool = False) -> str:
+    """The tray tooltip while recording: ``● Recording 12:41 · 84 lines · 3 bookmarks · your mic is muted``."""
+    text = f"● Recording {elapsed_text(elapsed_s)} · {lines} lines"
+    if lag_s >= 5:
+        text += f" · {lag_s:.0f}s behind"
+    if marks:
+        text += f" · {marks} bookmark{'' if marks == 1 else 's'}"
+    if muted:
+        text += " · your mic is muted"
+    return text
 
 
 # -- picker -----------------------------------------------------------------------

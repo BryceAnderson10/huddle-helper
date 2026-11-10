@@ -1,4 +1,4 @@
-"""Small Tk dialogs: start recording, settings (with vocabulary), rename speakers."""
+"""Small Tk dialogs: start recording, settings (with vocabulary and hotkeys), rename speakers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import config, meeting as mt, models, vocab
+from . import config, hotkeys, meeting as mt, models, vocab
+from .gui import logic
 from .writer import read_events
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
@@ -94,9 +95,93 @@ class StartDialog:
         self._on_start(title, terms)
 
 
+HotkeyResultsFn = Callable[[dict[str, str]], "tuple[dict[str, hotkeys.Registration], bool]"]
+_LEVEL_COLORS = {"ok": "#047857", "warn": "#92400e", "error": "#b91c1c", "info": "#555555"}
+
+
+class _HotkeysTab:
+    """Settings → Hotkeys: one combo per action with its registration result and the AltGr warning.
+    Thin Tk: the wording is ``logic.hotkey_row_status``, the checks are ``hotkeys.check_combo``."""
+
+    def __init__(self, parent, settings: config.Settings, results_fn: HotkeyResultsFn | None):
+        self._results_fn = results_fn
+        self._results: dict[str, hotkeys.Registration] = {}
+        self._live = False
+        self._checked: dict[str, str] = {}  # action -> the text that was checked
+        ttk.Label(parent, text="Global hotkeys work while another program has the focus. They are held only "
+                               "while a recording is running. Leave a box empty to turn that hotkey off. "
+                               "The window buttons and the tray menu always work.",
+                  wraplength=520, foreground="#555").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        self.vars: dict[str, tk.StringVar] = {}
+        self.status: dict[str, tk.Label] = {}
+        for i, (name, default) in enumerate(hotkeys.DEFAULTS.items(), start=1):
+            ttk.Label(parent, text=hotkeys.ACTION_LABELS[name]).grid(row=i, column=0, sticky="nw", pady=4,
+                                                                   padx=(0, 10))
+            var = tk.StringVar(value=settings.hotkeys.get(name, default))
+            ttk.Entry(parent, textvariable=var, width=22).grid(row=i, column=1, sticky="nw", pady=4)
+            lbl = tk.Label(parent, text="", anchor="w", justify="left", wraplength=300,
+                           font=("Segoe UI", 9))
+            lbl.grid(row=i, column=2, sticky="nw", padx=(10, 0), pady=4)
+            self.vars[name], self.status[name] = var, lbl
+            var.trace_add("write", lambda *_: self.refresh())
+        btns = ttk.Frame(parent)
+        btns.grid(row=len(hotkeys.DEFAULTS) + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Button(btns, text="Check", command=self.check).pack(side="left")
+        ttk.Button(btns, text="Restore defaults", command=self.restore).pack(side="left", padx=8)
+        ttk.Label(parent, text="Write them like Ctrl+Alt+B (Ctrl, Alt, Shift, Win and one key).",
+                  foreground="#555").grid(row=len(hotkeys.DEFAULTS) + 2, column=0, columnspan=3, sticky="w",
+                                         pady=(8, 0))
+        self.check() if results_fn is not None else self.refresh()
+
+    def texts(self) -> dict[str, str]:
+        return {n: v.get().strip() for n, v in self.vars.items()}
+
+    def check(self) -> None:
+        """Ask Windows which of these can be registered (the recording's own result while one runs)."""
+        if self._results_fn is None:
+            return
+        texts = self.texts()
+        try:
+            self._results, self._live = self._results_fn({n: t for n, t in texts.items()})
+        except Exception:  # noqa: BLE001
+            self._results, self._live = {}, False
+        self._checked = texts
+        self.refresh()
+
+    def restore(self) -> None:
+        for name, default in hotkeys.DEFAULTS.items():
+            self.vars[name].set(default)
+
+    def refresh(self) -> None:
+        texts = self.texts()
+        dups = hotkeys.find_duplicates(texts)
+        for name, text in texts.items():
+            check = hotkeys.check_combo(text)
+            reg = self._results.get(name) if self._checked.get(name) == text else None
+            other = dups.get(name)
+            msg, level = logic.hotkey_row_status(check, reg, self._live, hotkeys.ACTION_LABELS.get(other) if other else None)
+            self.status[name].configure(text=msg, fg=_LEVEL_COLORS[level])
+
+    def validate(self) -> tuple[dict[str, str] | None, str]:
+        """(canonical bindings, "") or (None, what is wrong)."""
+        out: dict[str, str] = {}
+        for name, text in self.texts().items():
+            try:
+                out[name] = hotkeys.normalize(text)
+            except ValueError as exc:
+                return None, f"{hotkeys.ACTION_LABELS[name]}: {exc}"
+        dups = hotkeys.find_duplicates(out)
+        if dups:
+            name, other = next(iter(dups.items()))
+            return None, (f"{hotkeys.ACTION_LABELS[name]} and {hotkeys.ACTION_LABELS[other]} have the same "
+                          "combination.")
+        return out, ""
+
+
 class SettingsDialog:
     def __init__(self, root: tk.Tk, settings: config.Settings, devices: dict[str, list[str]],
-                 on_save: Callable[[config.Settings], None], plan: PlanFn | None = None):
+                 on_save: Callable[[config.Settings], None], plan: PlanFn | None = None,
+                 hotkey_results: HotkeyResultsFn | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Settings")
         self.win.resizable(False, False)
@@ -109,6 +194,9 @@ class SettingsDialog:
         tabs.add(frm, text="General")
         vtab = ttk.Frame(tabs, padding=14)
         tabs.add(vtab, text="Vocabulary")
+        htab = ttk.Frame(tabs, padding=14)
+        tabs.add(htab, text="Hotkeys")
+        self.hotkeys_tab = _HotkeysTab(htab, settings, hotkey_results)
         ttk.Label(vtab, text="Words Whisper should expect: acronyms, product names, project code "
                              "names. One per line, spelled as you want them written. Lines starting "
                              "with # are ignored. Changes apply from the next line, even during a "
@@ -188,7 +276,12 @@ class SettingsDialog:
         except ValueError:
             messagebox.showerror("Huddle Helper", "Auto-delete days must be a whole number.", parent=self.win)
             return
+        bindings, problem = self.hotkeys_tab.validate()
+        if bindings is None:
+            messagebox.showerror("Huddle Helper", problem, parent=self.win)
+            return
         s = config.Settings.from_dict(self._orig.to_dict())
+        s.hotkeys = bindings
         s.mic_device = None if self.mic.get() == self._default else self.mic.get()
         s.output_device = None if self.out.get() == self._default else self.out.get()
         folder = self.folder.get().strip()

@@ -7,6 +7,9 @@ Threads:
   (so a lagging transcriber works through the backlog without dropping speech),
   adds live speaker labels and hands segments to the merger;
 - a ticker publishes per-stream watermarks so the merger can release lines.
+
+The mic passes through ``MicGate`` first (``_on_audio``): while the user is muted its samples are
+replaced by zeros before anything else sees them. Bookmarks go through ``MarkLog``.
 """
 
 from __future__ import annotations
@@ -22,9 +25,10 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from . import meeting as mt, vocab
+from . import marks as marks_mod, meeting as mt, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
+from .audio.gate import MicGate
 from .config import Settings
 from .diarize import MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OnlineClusterer
 from .finalize import append_words
@@ -59,6 +63,8 @@ class Status:
     detail: str = ""
     # Decaying peak level (0-1) of each stream for the window's meters; updated every 200 ms.
     levels: dict[str, float] = field(default_factory=lambda: {"mic": 0.0, "system": 0.0})
+    mic_muted: bool = False  # the user has taken their mic out of the recording (MicGate)
+    marks: int = 0  # bookmarks in this meeting
 
 
 class _StreamWorker:
@@ -153,6 +159,11 @@ class Recorder:
         self._terms_used: list[str] = []
         self._prompt: str | None = None
         self._vocab_changed_at_ms: list[int] = []
+        self.gate: MicGate | None = None
+        self.marklog: marks_mod.MarkLog | None = None
+        self._mute_lock = threading.Lock()
+        self._pending_gaps: list[tuple[int, int]] = []  # closed muted periods not yet in meta.json
+        self._written_since: int | None = None
 
     # -- public API -----------------------------------------------------
     @property
@@ -192,7 +203,7 @@ class Recorder:
             self.folder.update_meta(vocabulary=list(self._terms_used),
                                     vocabulary_changed_at_ms=list(self._vocab_changed_at_ms))
 
-    def start(self, title: str, meeting_terms: Iterable[str] = ()) -> mt.MeetingFolder:
+    def start(self, title: str, meeting_terms: Iterable[str] = (), start_muted: bool = False) -> mt.MeetingFolder:
         if self.status.state not in ("idle", "error"):
             raise RuntimeError("Already recording")
         s = self.settings
@@ -217,9 +228,13 @@ class Recorder:
             },
             "vocabulary": list(self._terms_used),
             "vocabulary_changed_at_ms": [],
+            "mic_muted_since_ms": 0 if start_muted else None,
         }
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
         self._writer = JsonlWriter(self.folder.live_path)
+        self.gate = MicGate(muted=start_muted)
+        self.marklog = marks_mod.MarkLog(self.folder)
+        self._pending_gaps, self._written_since = [], 0 if start_muted else None
         self._writer.write(meeting_start_event(self.folder.meeting_id, mt.iso(started)))
 
         self._merger = SegmentMerger(SOURCES, self._write_segment, echo_dedupe=s.echo_dedupe)
@@ -255,7 +270,7 @@ class Recorder:
         self._levels = {}
         self._max_backlog = 0
         self._max_lag_s = 0.0
-        self.status = Status(state="recording", meeting_id=self.folder.meeting_id)
+        self.status = Status(state="recording", meeting_id=self.folder.meeting_id, mic_muted=start_muted)
         for w in self._workers.values():
             w.thread.start()
         self._threads = [
@@ -280,6 +295,9 @@ class Recorder:
         self.status.state = "stopping"
         self._publish()
         self._capture.stop()
+        self.gate.finish()  # Stop always unmutes; an open muted period ends with the audio
+        self.status.mic_muted = False
+        self._sync_mute()
         ended = mt.now_local()
         for w in self._workers.values():
             w.inbox.put(None)
@@ -299,6 +317,7 @@ class Recorder:
             echo_segments_dropped=self._merger.dropped_echo,
             duration_s=round(time.perf_counter() - self._t0, 1),
             live_stats=self.live_stats(),
+            marks=self.marklog.count, mark_kinds=marks_mod.custom_kinds(self.marklog.state().values()),
         )
         folder = self.folder
         self._workers.clear()
@@ -307,6 +326,56 @@ class Recorder:
         self._publish()
         log.info("Recording stopped: %s (%d segments)", folder.path, count)
         return folder
+
+    # -- mute and bookmarks -------------------------------------------------------------
+    def now_ms(self) -> int | None:
+        """The meeting clock (ms since the recording started), None when not recording."""
+        if self.status.state not in ("recording", "stopping") or not self._t0:
+            return None
+        return int((time.perf_counter() - self._t0) * 1000)
+
+    @property
+    def mic_muted(self) -> bool:
+        return self.gate is not None and self.status.state == "recording" and self.gate.muted
+
+    def set_mic_muted(self, muted: bool) -> bool:
+        """Take the mic out of the recording (or put it back). Returns the state afterwards."""
+        if self.status.state != "recording" or self.gate is None:
+            return False
+        if muted:
+            self.gate.mute()
+        else:
+            self.gate.unmute()
+        self.status.mic_muted = self.gate.muted
+        self._sync_mute()
+        self._publish()
+        return self.gate.muted
+
+    def _sync_mute(self) -> None:
+        """Write closed muted periods and ``mic_muted_since_ms`` to meta.json (never on the capture path)."""
+        if self.gate is None or self.folder is None:
+            return
+        with self._mute_lock:
+            self._pending_gaps += self.gate.take_closed()
+            since = self.gate.muted_since_ms
+            if not self._pending_gaps and since == self._written_since:
+                return
+            try:
+                self.folder.record_mute(self._pending_gaps, since)
+            except Exception:  # noqa: BLE001 - tried again at the next tick
+                log.exception("Could not record the muted period in meta.json")
+                return
+            self._pending_gaps, self._written_since = [], since
+
+    def bookmark(self, kind: str = marks_mod.BOOKMARK, via: str = "hotkey", at_ms: int | None = None,
+                 seq: int | None = None, at: str | None = None) -> marks_mod.MarkResult | None:
+        """Add a bookmark at the meeting clock (see ``MarkLog`` for the 2 s rule). None when idle."""
+        if self.marklog is None or self.status.state not in ("recording", "stopping"):
+            return None
+        when_ms = self.now_ms() if at_ms is None else at_ms
+        result = self.marklog.add(kind, when_ms or 0, via, seq=seq, at=at)
+        self.status.marks = self.marklog.count
+        return result
 
     def live_stats(self) -> dict:
         """Delay and level figures saved to meta.json, so every recording measures itself."""
@@ -330,6 +399,8 @@ class Recorder:
     LEVEL_HALF_LIFE_S = 0.3  # how fast a meter falls after a peak
 
     def _on_audio(self, source: str, samples: np.ndarray) -> None:
+        if source == "mic" and self.gate is not None:
+            samples = self.gate.process(samples)  # zeros while muted: nothing downstream sees the real audio
         w = self._workers.get(source)
         if w is not None:
             w.inbox.put(samples)
@@ -432,6 +503,7 @@ class Recorder:
         while not self._stop_tick.wait(0.2):
             try:
                 self._push_watermarks()
+                self._sync_mute()
                 self._publish()
             except Exception:  # noqa: BLE001
                 log.exception("Watermark tick failed")
@@ -446,6 +518,10 @@ class Recorder:
             st.backlog = self._utterances.qsize() + self._in_flight
             st.segments = self._seq
             st.levels = self._current_levels()
+            if self.marklog is not None:
+                st.marks = self.marklog.count
+            if self.gate is not None and st.state == "recording":
+                st.mic_muted = self.gate.muted
             if st.state == "recording":
                 self._max_backlog = max(self._max_backlog, st.backlog)
                 self._max_lag_s = max(self._max_lag_s, st.lag_s)

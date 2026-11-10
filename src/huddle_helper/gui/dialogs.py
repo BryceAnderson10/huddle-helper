@@ -1,4 +1,4 @@
-"""Small dialogs of the Transcript window: Export and Open meeting. Thin Tk over ``logic``."""
+"""Small dialogs of the Transcript window: Export, Open meeting and the bookmark editor. Thin Tk over ``logic``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
 from .. import export as export_mod, meeting as mt
-from ..transcript_model import TranscriptModel
+from .. import marks as marks_mod
+from ..transcript_model import MarkRow, TranscriptModel
 from . import logic, theme
 
 log = logging.getLogger(__name__)
@@ -93,6 +94,54 @@ class ExportDialog:
             self.status.configure(text=f"Saved to {path}")
         except OSError as exc:
             messagebox.showerror("Huddle Helper", f"Could not save the file: {exc}", parent=self.win)
+
+
+class MarkEditor:
+    """Edit a bookmark: label, type, or delete it. ``on_save(changes)`` gets the keyword arguments for
+    ``AppController.edit_mark`` (empty when nothing changed), ``on_delete()`` the delete request."""
+
+    def __init__(self, parent: tk.Misc, model: TranscriptModel, row: MarkRow,
+                 on_save: Callable[[dict], None], on_delete: Callable[[], None]):
+        self.row = row
+        self._on_save, self._on_delete = on_save, on_delete
+        self.win = tk.Toplevel(parent)
+        self.win.title("Edit bookmark")
+        self.win.transient(parent.winfo_toplevel())
+        self.win.resizable(False, False)
+        frm = ttk.Frame(self.win, padding=14)
+        frm.grid()
+        ttk.Label(frm, text=f"At {logic.line_time(model, row.at_ms)}", foreground=theme.MUTED).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(frm, text="Type").grid(row=1, column=0, sticky="w", pady=3, padx=(0, 12))
+        kinds = [*marks_mod.KINDS, *[k for k in model.mark_kinds if k not in marks_mod.KINDS]]
+        self._names = {model.kind_name(k): k for k in kinds}
+        self.kind = tk.StringVar(value=model.kind_name(row.kind))
+        ttk.Combobox(frm, textvariable=self.kind, state="readonly", width=24,
+                     values=list(self._names)).grid(row=1, column=1, sticky="w", pady=3)
+        ttk.Label(frm, text="Label").grid(row=2, column=0, sticky="w", pady=3, padx=(0, 12))
+        self.label = tk.StringVar(value=row.label)
+        self.entry = ttk.Entry(frm, textvariable=self.label, width=40)
+        self.entry.grid(row=2, column=1, sticky="w", pady=3)
+        btns = ttk.Frame(frm)
+        btns.grid(row=3, column=0, columnspan=2, sticky="we", pady=(12, 0))
+        ttk.Button(btns, text="Delete bookmark", command=self._delete).pack(side="left")
+        ttk.Button(btns, text="Save", command=self._save).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side="right", padx=6)
+        self.win.bind("<Return>", lambda e: self._save())
+        self.win.bind("<Escape>", lambda e: self.win.destroy())
+        _place_over(self.win, parent)
+        self.entry.focus_set()
+        self.entry.selection_range(0, "end")
+
+    def _save(self) -> None:
+        changes = logic.mark_changes(self.row, self.label.get(), self._names.get(self.kind.get(), self.row.kind))
+        self.win.destroy()
+        if changes:
+            self._on_save(changes)
+
+    def _delete(self) -> None:
+        self.win.destroy()
+        self._on_delete()
 
 
 class MeetingPicker:

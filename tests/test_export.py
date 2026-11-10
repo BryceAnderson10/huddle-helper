@@ -238,3 +238,59 @@ def test_cli_export_is_registered_in_the_real_entry_point(tmp_path):
                                                                "HUDDLE_HELPER_DATA_DIR": str(tmp_path / "d")})
     assert done.returncode == 0, done.stderr
     assert out.read_text(encoding="utf-8").startswith("# Weekly sync")
+
+
+# -- marks and muted periods together (goldens) ---------------------------------------------------------
+STAND_LINES = [
+    ("system", 15_000, 18_000, "SPEAKER_01", "Morning, everyone."),
+    ("system", 19_000, 23_000, "SPEAKER_01", "First item is the budget."),
+    ("mic", 24_000, 26_000, "You", "Agreed, go ahead."),
+    ("system", 90_000, 95_000, "SPEAKER_02", "The vendor needs an answer by Thursday."),
+    ("mic", 96_000, 98_000, "You", "I will reply today."),
+]
+STAND_GAPS = [
+    {"source": "mic", "start_ms": 0, "end_ms": 12_250, "reason": "muted"},  # started muted
+    {"source": "system", "start_ms": 40_000, "end_ms": 44_000, "reason": "default audio device changed"},
+    {"source": "mic", "start_ms": 60_000, "end_ms": 85_250, "reason": "muted"},
+]
+STAND_MARKS = [
+    {"type": "mark", "id": 1, "kind": "bookmark", "at_ms": 5_000, "via": "button"},  # before the first line
+    {"type": "mark", "id": 2, "kind": "bookmark", "at_ms": 21_000, "via": "hotkey"},  # inside a line
+    {"type": "mark", "id": 3, "kind": "action", "at_ms": 30_000, "via": "hotkey"},  # in a pause
+    {"type": "mark", "id": 4, "kind": "decision", "at_ms": 62_000, "via": "tray"},  # inside the muted period
+    {"type": "mark", "id": 5, "kind": "question", "at_ms": 90_000, "via": "line", "seq": 4},  # a line's own start
+    {"type": "mark", "id": 6, "kind": "bookmark", "at_ms": 99_000, "via": "hotkey"},  # after the last line
+    {"type": "mark", "id": 7, "kind": "decision", "at_ms": 10_000, "via": "hotkey"},  # deleted again
+    {"type": "mark_label", "id": 2, "label": "Budget *draft*"},
+    {"type": "mark_kind", "id": 2, "kind": "decision"},  # retyped by a second press
+    {"type": "mark_label", "id": 3, "label": "Reply to the vendor"},
+    {"type": "mark_label", "id": 5, "label": "Thursday?"},
+    {"type": "mark_label", "id": 5, "label": ""},  # cleared
+    {"type": "mark_delete", "id": 7},
+    {"type": "mark", "id": 8, "kind": "weird kind", "at_ms": 99_500, "via": "hotkey"},  # unknown kind
+]
+
+
+def standup(tmp_path):
+    folder = make_meeting(tmp_path, STAND_LINES, final=STAND_LINES, marks=STAND_MARKS, gaps=STAND_GAPS,
+                          title="Daily standup", started_at=START)
+    folder.update_meta(ended_at="2026-11-09T11:02:00-06:00")
+    folder.write_speakers({"SPEAKER_01": "Dana", "SPEAKER_02": "Eric"})
+    return folder
+
+
+def test_marks_and_muted_periods_golden_markdown(tmp_path):
+    text = export.render(model(standup(tmp_path)), "md")
+    assert text == (DATA / "standup.md").read_text(encoding="utf-8")
+
+
+def test_marks_and_muted_periods_golden_text(tmp_path):
+    text = export.render(model(standup(tmp_path)), "txt", crlf=False)
+    assert text == (DATA / "standup.txt").read_text(encoding="utf-8")
+
+
+def test_the_export_reads_the_same_rows_as_the_window(tmp_path):
+    """The export and the window read one model: rows by at_ms (a tie: line, gap, mark), ids kept."""
+    m = model(standup(tmp_path))
+    assert [r.at_ms for r in m.rows] == sorted(r.at_ms for r in m.rows)
+    assert [r.id for r in m.marks] == [1, 2, 3, 4, 5, 6, 8] and m.marks[-1].kind == "bookmark"

@@ -7,7 +7,7 @@
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
     huddle-helper finalize <meeting folder>             re-run the after-Stop pass
     huddle-helper recover                               close out meetings left by a crash
-    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--no-window] [--open-latest]
+    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--no-window] [--open-latest]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
     huddle-helper devices | download-models
 """
@@ -290,6 +290,8 @@ def cmd_tray(args) -> int:
     overrides = {}
     if getattr(args, "out", None):
         overrides["meetings_dir"] = str(Path(args.out).resolve())
+    if getattr(args, "keep_audio", False):
+        overrides["keep_audio"] = True
     replay = None
     if getattr(args, "replay", None):
         from .replay import Replay
@@ -332,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --replay: start at once, stop when the audio ends, quit after the final pass")
     sp.add_argument("--keep-open", action="store_true",
                     help="with --auto: do not quit after the final pass (to look at the window)")
+    sp.add_argument("--keep-audio", action="store_true",
+                    help="keep the audio files of this run's recordings (this run only, not saved)")
     sp.add_argument("--no-window", action="store_true",
                     help="do not open the transcript window when recording starts")
     sp.add_argument("--open-latest", action="store_true", help="open the transcript window at startup")

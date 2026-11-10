@@ -13,6 +13,7 @@ to them (except optionally `speakers.json`, see below).
     transcript.jsonl        # live, append-only, one JSON object per line
     transcript.final.jsonl  # written after Stop, refined speaker labels
     speakers.json           # optional: speaker id -> display name
+    marks.jsonl             # bookmarks, append-only; exists only if there was a bookmark
     DONE                    # empty marker, created last
     audio\                  # buffered while recording; kept only if Keep audio is on
 ```
@@ -96,11 +97,64 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `devices` | `{"mic": name, "system": name}` actually captured. |
 | `models` | Speech, VAD and diarization models used. |
 | `settings` | Diarization, echo and Keep audio settings in force for this meeting. |
-| `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio, e.g. while re-binding after the default device changed. Silence is inserted so the clock stays aligned. |
+| `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio. Silence is inserted so the clock stays aligned. **Readers must check `reason`:** most gaps are lost audio (for example while re-binding after the default device changed), but `"muted"` is deliberate (see below). |
+| `mic_muted_since_ms` | While the user has their mic out of the recording: the meeting time (ms) the mute began, so a live follower knows at once that the silence on `mic` is deliberate. `null` otherwise, and at the end of every meeting. |
+| `marks`, `mark_kinds` | Set at Stop: the number of bookmarks (deleted ones not counted) and `{"risk": "Risk"}` for any user-defined bookmark types in use (`{}` for none). |
 | `vocabulary` | Optional. The custom vocabulary terms actually given to speech recognition for this meeting (meeting terms first, then the user's list, cut at a token budget); `[]` if none. Absent in older meetings. |
 | `vocabulary_changed_at_ms` | Optional. Meeting times (ms) at which the terms in use changed during the recording; `[]` if never. Lines written before a change used the earlier terms. |
 | `audio_kept`, `refined_streams`, `echo_segments_dropped`, `duration_s` | Diagnostics. |
 | `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+
+## `marks.jsonl` (bookmarks)
+
+Append-only, one JSON object per line, flushed per line. Created on the first bookmark: a meeting
+without bookmarks has no file. It is never deleted by the after-Stop pass; it belongs with the
+transcript. Bookmarks can also be added, labelled, retyped or deleted after the meeting, so a reader
+should apply the events rather than trust a count.
+
+```json
+{"type":"mark","id":1,"kind":"decision","at_ms":381200,"at":"2026-11-09T11:06:24-06:00","via":"hotkey"}
+{"type":"mark","id":2,"kind":"bookmark","at_ms":512000,"at":"2026-11-09T11:08:35-06:00","via":"line","seq":44}
+{"type":"mark_label","id":1,"label":"Ship Friday"}
+{"type":"mark_kind","id":2,"kind":"action"}
+{"type":"mark_delete","id":2}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | 1-based, increasing within the meeting; later events refer to it. An id is never reused. |
+| `kind` | `bookmark` (plain), `decision`, `action`, `question`, or a user-defined type id (lower-case letters, digits and `-`; its display name is in `meta.json` `mark_kinds`). **Treat a kind you do not know as `bookmark`.** |
+| `at_ms` | Meeting clock (same as `start_ms` in the transcripts) at the press, or the line's `start_ms` for a line bookmark. The line being spoken at the press is written 1-2 s later, so place a bookmark by `at_ms`, not by file order. |
+| `at` | Wall-clock time of the press (or of the line, for a line bookmark). |
+| `via` | `hotkey`, `button` (window), `tray`, or `line` (right-click on a line). |
+| `seq` | Only for `via: "line"`: the line's `seq` in the file that was shown. The live and final files number lines differently, so rely on `at_ms`. |
+
+`mark_label` sets or replaces a label (an empty string clears it); `mark_kind` changes the type;
+`mark_delete` removes the bookmark. Readers apply events in order and ignore events for an `id` they have
+not seen. A press of the same type within 2 s of the previous bookmark writes nothing; a press of a
+different type within 2 s writes a `mark_kind` for the previous bookmark.
+
+### Muted periods
+
+When the user takes their microphone out of the recording ("Mute me in the recording"), the mic stream
+is replaced by digital silence before anything is stored or analysed, and the period is recorded in
+`meta.json` `gaps` with the reason `muted`:
+
+```json
+"gaps": [{"source": "mic", "start_ms": 305000, "end_ms": 421500, "reason": "muted"}],
+"mic_muted_since_ms": null
+```
+
+* The entry is added when the user unmutes (or at Stop, if still muted), so every entry has both ends. The
+  end is 250 ms after the unmute press, which covers audio already in the capture pipeline; the gap
+  matches the silence in `audio\mic.flac` sample for sample. If the app dies while muted, the next start
+  closes the period at the last audio.
+* No line is added to `transcript.jsonl`: everything between `meeting_start` and `meeting_end` stays a
+  `segment`. There are simply no `mic` segments in the period.
+* **A `muted` gap is deliberate, not a fault.** The user chose not to be recorded: do not report it as lost
+  audio and do not try to recover it. Check `reason` before treating a gap as a problem.
+* The mute does not touch the call app: the other people still hear the user. The `system` stream keeps
+  recording.
 
 ## `speakers.json` (optional)
 

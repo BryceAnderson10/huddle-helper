@@ -43,7 +43,7 @@ Choices where the plan was silent
       ``provisional`` is True (also for a failed final pass).
     * Changed-line detection: a final line with no overlapping live line on its stream is not
       "changed".
-    * Mark reducing lives here (``reduce_marks``) because marks.py does not exist yet.
+    * Mark reducing lives in marks.py (``reduce_marks`` here is the same function).
 """
 
 from __future__ import annotations
@@ -55,16 +55,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Union
 
+from . import marks as marks_mod
 from .meeting import MeetingFolder
 from .writer import read_events
 
 log = logging.getLogger(__name__)
 
-BOOKMARK = "bookmark"
-KIND_NAMES = {"bookmark": "Bookmark", "decision": "Decision", "action": "Action item", "question": "Question"}
-KIND_PLURALS = {"bookmark": "Bookmarks", "decision": "Decisions", "action": "Action items",
-                "question": "Questions"}
-KIND_ORDER = ("decision", "action", "question", "bookmark")  # export grouping order; custom kinds follow
+BOOKMARK, KIND_NAMES, KIND_PLURALS, KIND_ORDER = marks_mod.BOOKMARK, marks_mod.KIND_NAMES,     marks_mod.KIND_PLURALS, marks_mod.KIND_ORDER  # re-exported: export.py and the tests import them here
 
 
 # -- rows ---------------------------------------------------------------
@@ -193,30 +190,7 @@ def _sort_key(row: Row) -> tuple:
     return (row.at_ms, 2, row.id)
 
 
-def reduce_marks(events: Iterable[dict], state: dict[int, dict] | None = None) -> dict[int, dict]:
-    """Apply marks.jsonl events in order to ``state`` ({id: {"kind","label","at_ms"}}) and return it."""
-    state = {} if state is None else state
-    for e in events:
-        kind = e.get("type")
-        try:
-            mid = int(e.get("id"))
-        except (TypeError, ValueError):
-            continue
-        if kind == "mark":
-            try:
-                at_ms = int(e["at_ms"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            state[mid] = {"kind": str(e.get("kind") or BOOKMARK), "label": str(e.get("label") or ""),
-                          "at_ms": at_ms}
-        elif mid in state:
-            if kind == "mark_label":
-                state[mid]["label"] = str(e.get("label") or "")
-            elif kind == "mark_kind":
-                state[mid]["kind"] = str(e.get("kind") or BOOKMARK)
-            elif kind == "mark_delete":
-                del state[mid]
-    return state
+reduce_marks = marks_mod.reduce  # the reducer lives in marks.py; kept under its old name
 
 
 def changed_after_swap(live: Iterable[LineRow], final: Iterable[LineRow]) -> set[tuple[str, int]]:
@@ -283,7 +257,7 @@ class TranscriptModel:
         self._final_names: dict[str, str] = {}
         self.conflicts: list[dict] = []
         # marks and gaps
-        self._mark_state: dict[int, dict] = {}
+        self._mark_state: dict[int, marks_mod.Mark] = {}
         self._cur_marks: dict[int, MarkRow] = {}
         self._cur_gaps: dict[tuple, GapRow] = {}
         self.mark_kinds: dict[str, str] = {}  # user-defined kind id -> display name (meta.json)
@@ -551,10 +525,8 @@ class TranscriptModel:
         return self._sync_marks()
 
     def _sync_marks(self) -> list[Op]:
-        desired = {}
-        for mid, m in self._mark_state.items():
-            kind = m["kind"] if (m["kind"] in KIND_NAMES or m["kind"] in self.mark_kinds) else BOOKMARK
-            desired[mid] = MarkRow(mid, kind, m["label"], m["at_ms"])
+        desired = {mid: MarkRow(mid, m.read_kind(self.mark_kinds), m.label, m.at_ms)
+                   for mid, m in self._mark_state.items()}
         return self._sync(self._cur_marks, desired)
 
     def _sync(self, current: dict, desired: dict) -> list[Op]:

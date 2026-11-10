@@ -16,8 +16,9 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw
 
-from . import __version__
+from . import __version__, marks as marks_mod
 from .app import AppController
+from .gui import logic
 from .replay import Replay, next_step
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,10 @@ COLORS = {
     "recording": (220, 38, 38),
     "busy": (217, 119, 6),
     "error": (120, 40, 160),
+    "muted": (220, 38, 38),  # the recording icon with a struck-through mic
+    "flag": (220, 38, 38),  # the recording icon with a flag, for about a second after a bookmark
 }
+FLAG_SECONDS = 1.0
 
 
 def make_icon(kind: str, size: int = 64) -> Image.Image:
@@ -35,6 +39,11 @@ def make_icon(kind: str, size: int = 64) -> Image.Image:
     d = ImageDraw.Draw(img)
     color = COLORS[kind]
     d.ellipse((2, 2, size - 2, size - 2), fill=color + (255,))
+    if kind == "flag":  # a flag in place of the mic: pole and pennant
+        white = (255, 255, 255, 255)
+        d.line((size * 0.34, size * 0.2, size * 0.34, size * 0.82), fill=white, width=max(3, size // 14))
+        d.polygon([(size * 0.34, size * 0.22), (size * 0.8, size * 0.38), (size * 0.34, size * 0.56)], fill=white)
+        return img
     # Microphone glyph.
     w = size // 5
     cx = size // 2
@@ -43,7 +52,11 @@ def make_icon(kind: str, size: int = 64) -> Image.Image:
     d.arc((cx - w - 4, size * 0.32, cx + w + 4, size * 0.68), start=0, end=180, fill=(255, 255, 255, 255),
           width=3)
     d.line((cx, size * 0.68, cx, size * 0.8), fill=(255, 255, 255, 255), width=3)
-    if kind == "recording":
+    if kind == "muted":  # a slash across the mic: dark edge under a white stroke so it shows on both
+        d.line((size * 0.22, size * 0.2, size * 0.78, size * 0.82), fill=(60, 10, 10, 255), width=max(6, size // 8))
+        d.line((size * 0.22, size * 0.2, size * 0.78, size * 0.82), fill=(255, 255, 255, 255),
+               width=max(3, size // 14))
+    if kind in ("recording", "muted"):  # the white dot says "recording"; muted adds the slash
         r = size // 7
         d.ellipse((size - 2 * r - 2, 2, size - 2, 2 * r + 2), fill=(255, 255, 255, 255))
     return img
@@ -55,13 +68,6 @@ def _single_instance() -> bool:
         return ctypes.windll.kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
     except AttributeError:
         return True
-
-
-def _fmt_elapsed(sec: float) -> str:
-    sec = int(sec)
-    h, rem = divmod(sec, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 class TrayApp:
@@ -78,6 +84,9 @@ class TrayApp:
         self.calls: queue.Queue = queue.Queue()
         self.icons = {k: make_icon(k) for k in COLORS}
         self._kind = None
+        self._flag_until = 0.0  # monotonic time until which the flag icon shows
+        self._hotkeys = None  # hotkeys.HotkeyThread while recording
+        self._hotkeys_wanted = False
         self.window = None  # gui.window.MainWindow, built on first use
         self._auto_opened: str | None = None  # meeting id the window was last opened for on Start
         self._auto_open_window = auto_open_window
@@ -93,6 +102,12 @@ class TrayApp:
                              enabled=lambda item: self.app.can_start, default=True),
             pystray.MenuItem("Stop recording", self._ui(self.stop),
                              enabled=lambda item: self.app.is_recording),
+            pystray.MenuItem("Bookmark", pystray.Menu(*[
+                pystray.MenuItem(lambda item, k=k: self._bookmark_label(k), self._ui(lambda k=k: self.bookmark(k)),
+                                 enabled=lambda item: self.app.is_recording)
+                for k in marks_mod.KINDS]), enabled=lambda item: self.app.is_recording),
+            pystray.MenuItem("Mute me in the recording", self._ui(self.toggle_mute),
+                             checked=lambda item: self.app.mic_muted, enabled=lambda item: self.app.is_recording),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Transcript window", self._ui(self.show_window)),
             pystray.MenuItem("Open meetings folder", self._ui(self.open_folder)),
@@ -126,14 +141,15 @@ class TrayApp:
             pass
 
     # -- state rendering ------------------------------------------------
+    def _bookmark_label(self, kind: str) -> str:
+        item = next(i for i in logic.bookmark_items(self.app.settings.hotkeys) if i.kind == kind)
+        return item.menu_text
+
     def _status_text(self) -> str:
         st = self.app.state
         if st.phase == "recording" and st.recording:
             r = st.recording
-            text = f"● Recording {_fmt_elapsed(r.elapsed_s)} · {r.segments} lines"
-            if r.lag_s >= 5:
-                text += f" · {r.lag_s:.0f}s behind"
-            return text
+            return logic.recording_status_text(r.elapsed_s, r.segments, r.lag_s, r.marks, r.mic_muted)
         if st.phase == "stopping":
             return "Finishing live transcript…"
         if st.phase in ("starting", "downloading"):
@@ -152,8 +168,12 @@ class TrayApp:
                 and self._auto_open_window and self.app.settings.open_window_on_start):
             self._auto_opened = st.last_meeting
             self.calls.put(self.show_window)
+        if (st.phase == "recording") != self._hotkeys_wanted:  # Start/Stop: register / release the hotkeys
+            self._hotkeys_wanted = st.phase == "recording"
+            self.calls.put(self._sync_hotkeys)
         if st.phase == "recording":
-            kind = "recording"
+            kind = "flag" if time.monotonic() < self._flag_until else (
+                "muted" if st.recording and st.recording.mic_muted else "recording")
         elif st.phase == "error":
             kind = "error"
         elif st.phase in ("starting", "downloading", "stopping") or st.finalizing:
@@ -168,6 +188,58 @@ class TrayApp:
             self.icon.update_menu()
         except Exception:  # noqa: BLE001 - icon not ready yet
             pass
+
+    # -- bookmarks, mute and hotkeys (WP5) ----------------------------------------------------
+    def _sync_hotkeys(self) -> None:
+        """Tk thread: hold the global hotkeys exactly while a meeting is being recorded."""
+        want = self._hotkeys_wanted
+        if want and self._hotkeys is None:
+            from .hotkeys import HotkeyThread
+
+            thread = HotkeyThread(self.app.settings.hotkeys, lambda name: self.calls.put(lambda: self.hotkey(name)))
+            thread.start()
+            self._hotkeys = thread
+            problems = [f"{r.combo or thread.bindings[n]} ({self._action_label(n)}): {r.error}"
+                        for n, r in thread.failed.items()]
+            self.app._set(hotkey_problems=problems)
+        elif not want and self._hotkeys is not None:
+            self._release_hotkeys()
+            self.app._set(hotkey_problems=[])
+
+    def _release_hotkeys(self) -> None:
+        thread, self._hotkeys = self._hotkeys, None
+        if thread is not None:
+            try:
+                thread.stop()
+            except Exception:  # noqa: BLE001 - registrations die with the thread anyway
+                log.exception("Could not stop the hotkey thread")
+
+    @staticmethod
+    def _action_label(name: str) -> str:
+        from .hotkeys import ACTION_LABELS
+
+        return ACTION_LABELS.get(name, name)
+
+    def hotkey(self, name: str) -> None:
+        """A global hotkey was pressed (on the Tk thread, via ``calls``)."""
+        result = self.app.hotkey_pressed(name)
+        log.info("Hotkey %s: %s", name, result)
+        if result.get("action") in ("added", "retyped"):
+            self._flash()
+
+    def bookmark(self, kind: str) -> None:
+        if self.app.is_recording and self.app.bookmark(kind, "tray").get("action") in ("added", "retyped"):
+            self._flash()
+
+    def toggle_mute(self) -> None:
+        self.app.toggle_mic_muted()
+        self._changed()
+
+    def _flash(self) -> None:
+        """Show the flag icon for about a second (no sound: it would be recorded on the system stream)."""
+        self._flag_until = time.monotonic() + FLAG_SECONDS
+        self._changed()
+        self.root.after(int(FLAG_SECONDS * 1000) + 50, self._changed)
 
     # -- actions --------------------------------------------------------
     def show_start(self) -> None:
@@ -203,7 +275,16 @@ class TrayApp:
             log.exception("Could not list devices")
             devices = {"inputs": [], "outputs": []}
         SettingsDialog(self.root, self.app.settings, devices, self.app.update_settings,
-                       self.app.plan_vocabulary)
+                       self.app.plan_vocabulary, hotkey_results=self._hotkey_results)
+
+    def _hotkey_results(self, bindings: dict[str, str]) -> tuple[dict, bool]:
+        """(registration results, are they live): the recording's own while one is running, else a
+        quick try-and-release of these bindings."""
+        if self._hotkeys is not None:
+            return dict(self._hotkeys.results), True
+        from .hotkeys import probe
+
+        return probe(bindings), False
 
     def show_speakers(self) -> None:
         from .ui import SpeakersDialog
@@ -220,6 +301,7 @@ class TrayApp:
                                        "\n\nIt will be finished the next time Huddle Helper starts."):
                 return
         self.app.shutdown()
+        self._release_hotkeys()
         self.icon.stop()
         self.root.quit()
 

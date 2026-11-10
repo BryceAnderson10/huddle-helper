@@ -9,26 +9,64 @@ Timers (all on the Tk thread, all skipped while the window is hidden)
     250 ms  transcript / tags / marks tails, at most 200 events per tick (20 ms while more are waiting)
     500 ms  header, notice bar, status bar from app.state (no file I/O)
     1 s     meta.json / speakers.json if changed; DONE -> swap to the final transcript
+
+Bookmarks and mute (WP5): the header's mute toggle and the amber bar, the status bar's Bookmark split
+button, the bookmark editor on a mark row, and "Bookmark this line as…" on a line's right-click menu all
+call ``AppController`` (``bookmark``, ``edit_mark``, ``toggle_mic_muted``); the changes come back through
+the same file tails as everything else.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
 from typing import Callable
 
-from .. import meeting as mt
+from .. import marks as marks_mod, meeting as mt
 from ..session import MeetingSession
-from ..transcript_model import Reset
+from ..transcript_model import LineRow, MarkRow, Reset
 from . import logic, theme
-from .dialogs import ExportDialog, MeetingPicker
+from .dialogs import ExportDialog, MarkEditor, MeetingPicker
 from .transcript_view import TranscriptView
 
 log = logging.getLogger(__name__)
 
 FAST_MS, FAST_MORE_MS, STATUS_MS, SLOW_MS = 250, 20, 500, 1000
+FEEDBACK_S = 3.0  # how long "Decision added" stays in the status bar
+
+
+class Tip:
+    """A plain hover tooltip (the mute button explains that the call still hears you)."""
+
+    def __init__(self, widget: tk.Misc, text: str = ""):
+        self.widget, self.text, self._job, self._win = widget, text, None, None
+        widget.bind("<Enter>", self._enter, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _enter(self, _event) -> None:
+        self._hide()
+        if self.text:
+            self._job = self.widget.after(500, self._show)
+
+    def _show(self) -> None:
+        self._job = None
+        win = self._win = tk.Toplevel(self.widget)
+        win.wm_overrideredirect(True)
+        tk.Label(win, text=self.text, justify="left", wraplength=320, background="#ffffe1", relief="solid",
+                 borderwidth=1, font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL), padx=6, pady=3).pack()
+        win.wm_geometry(f"+{self.widget.winfo_rootx()}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 4}")
+
+    def _hide(self, _event=None) -> None:
+        if self._job is not None:
+            self.widget.after_cancel(self._job)
+            self._job = None
+        if self._win is not None:
+            self._win.destroy()
+            self._win = None
 
 
 class MainWindow:
@@ -61,7 +99,20 @@ class MainWindow:
         self.open_btn.pack(side="right")
         self.export_btn = ttk.Button(head, text="Export…", command=self.export, state="disabled")
         self.export_btn.pack(side="right", padx=(0, 6))
+        self.mute_btn = ttk.Button(head, text="Mute me in the recording", command=self._toggle_mute)
+        self.mute_tip = Tip(self.mute_btn)
+        self._mute_shown = False
         ttk.Separator(self.win, orient="horizontal").pack(fill="x")
+
+        # amber mute bar (packed only while muted)
+        self.mute_bar = tk.Frame(self.win, bg=theme.MUTE_BAR_BG)
+        tk.Label(self.mute_bar, text="MIC MUTED", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
+                 font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL, "bold")).pack(side="left", padx=(10, 8), pady=4)
+        self.mute_bar_text = tk.Label(self.mute_bar, text="", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
+                                      font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL), anchor="w")
+        self.mute_bar_text.pack(side="left", pady=4)
+        ttk.Button(self.mute_bar, text="Unmute", command=self._toggle_mute).pack(side="right", padx=10, pady=3)
+        self._mute_bar_shown = False
 
         # notice bar (packed only when there is a notice)
         self.notice = tk.Label(self.win, text="", anchor="w", justify="left", font=base,
@@ -77,9 +128,19 @@ class MainWindow:
         self.stat_lbl = ttk.Label(bar, text="", font=base)
         self._status_layout: tuple = (False, False, False)
         self.stop_btn = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
+        # Bookmark split button: click for a plain bookmark, the arrow for the other types.
+        self.bookmark_btn = ttk.Button(bar, text="⚑ Bookmark", command=lambda: self._bookmark("bookmark"))
+        self.bookmark_arrow = ttk.Button(bar, text="▾", width=2, command=self._popup_bookmark_menu)
+        self.bookmark_menu = tk.Menu(self.bookmark_arrow, tearoff=False)
+        self._bar_right: tuple = (False, False)
+        self._feedback: tuple[str, float] = ("", 0.0)
 
         self.view = TranscriptView(self.win)
         self.view.pack(fill="both", expand=True)
+        self.view.on_edit_mark = self._edit_mark
+        self.view.on_delete_mark = self._delete_mark
+        self.view.on_bookmark_line = self._bookmark_line
+        self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
 
         self._after: dict[str, str] = {}
         self._schedule("fast", FAST_MS, self._tick_fast)
@@ -151,6 +212,55 @@ class MainWindow:
     def _stop(self) -> None:
         if self._on_stop is not None:
             self._on_stop()
+
+    # -- bookmarks and mute (WP5) ------------------------------------------------------------
+    def _hotkeys(self) -> dict[str, str]:
+        return dict(getattr(self.app.settings, "hotkeys", None) or {})
+
+    def _custom_kinds(self) -> dict[str, str]:
+        return {k: v for k, v in (self.session.model.mark_kinds if self.session else {}).items()
+                if k not in marks_mod.KIND_NAMES}
+
+    def _say(self, text: str) -> None:
+        self._feedback = (text, time.monotonic() + FEEDBACK_S)
+
+    def _poll_now(self) -> None:
+        if self.session is not None:
+            self._apply(self.session.poll())
+
+    def _bookmark(self, kind: str) -> None:
+        result = self.app.bookmark(kind, "button")
+        self._say(logic.bookmark_feedback(result, self._custom_kinds()))
+        self._poll_now()
+        self._refresh_all()
+
+    def _bookmark_line(self, row: LineRow, kind: str) -> None:
+        if self.session is None:
+            return
+        result = self.app.bookmark(kind, "line", folder=self.session.folder, at_ms=row.start_ms, seq=row.seq)
+        self._say(logic.bookmark_feedback(result, self._custom_kinds()))
+        self._poll_now()
+
+    def _edit_mark(self, row: MarkRow) -> None:
+        if self.session is None:
+            return
+        folder = self.session.folder
+        MarkEditor(self.win, self.session.model, row,
+                   on_save=lambda changes: self._mark_edited(folder, row, **changes),
+                   on_delete=lambda: self._delete_mark(row))
+
+    def _mark_edited(self, folder, row: MarkRow, **changes) -> None:
+        self.app.edit_mark(folder, row.id, **changes)
+        self._poll_now()
+
+    def _delete_mark(self, row: MarkRow) -> None:
+        if self.session is not None:
+            self.app.edit_mark(self.session.folder, row.id, delete=True)
+            self._poll_now()
+
+    def _toggle_mute(self) -> None:
+        self.app.toggle_mic_muted()
+        self._refresh_all()
 
     # -- timers --------------------------------------------------------------------------
     def _schedule(self, name: str, ms: int, fn) -> None:
@@ -230,6 +340,7 @@ class MainWindow:
         if s is None:
             self.dot.configure(fg=theme.IDLE)
             self.head_text.configure(text="No meeting open")
+            self._set_mute(None, None)
             self._set_notice(None)
             self._set_status(logic.StatusView(None, None, "", False, False))
             self._placeholder()
@@ -241,8 +352,32 @@ class MainWindow:
             self.head_text.configure(text=h.text)
             self.head_text.update_idletasks()  # re-measure now: a busy main loop was seen to leave it clipped
         self.win.title(f"{model.title} — Huddle Helper")
+        self._set_mute(logic.mute_button_view(mid, model, state, self._hotkeys().get("mute", "")),
+                       logic.mute_bar_view(mid, model, state))
         self._set_notice(logic.notice_view(mid, model, state))
         self._set_status(logic.status_view(mid, model, state))
+
+    def _set_mute(self, button: logic.MuteButtonView | None, bar: logic.MuteBarView | None) -> None:
+        """The header toggle and the amber bar (the bar sits above the notice bar)."""
+        show = button is not None and button.visible
+        if show:
+            if self.mute_btn.cget("text") != button.text:
+                self.mute_btn.configure(text=button.text)
+            self.mute_tip.text = button.tooltip
+            if not self._mute_shown:
+                self.mute_btn.pack(side="right", padx=(0, 6))
+        elif self._mute_shown:
+            self.mute_btn.pack_forget()
+        self._mute_shown = show
+        if bar is not None:
+            if self.mute_bar_text.cget("text") != bar.text:
+                self.mute_bar_text.configure(text=bar.text)
+            if not self._mute_bar_shown:
+                self.mute_bar.pack(fill="x", before=self.notice if self._notice_shown else self.view)
+                self._mute_bar_shown = True
+        elif self._mute_bar_shown:
+            self.mute_bar.pack_forget()
+            self._mute_bar_shown = False
 
     def _set_notice(self, n: logic.NoticeView | None) -> None:
         if n is None:
@@ -260,8 +395,12 @@ class MainWindow:
     def _set_status(self, v: logic.StatusView) -> None:
         """Mic/Call meters and the text. Labels with nothing to say are not packed, so the text sits
         at the left edge instead of after two empty gaps."""
+        text, until = self._feedback
+        extra = text if text and time.monotonic() < until else ""
+        joined = f"{v.text}   ·   {extra}" if v.text and extra else (v.text or extra)
         parts = [(self.mic_lbl, f"Mic {v.mic}" if v.mic else ""), (self.call_lbl, f"Call {v.call}" if v.call else ""),
-                 (self.stat_lbl, v.text)]
+                 (self.stat_lbl, joined)]
+        self.mic_lbl.configure(foreground=theme.MUTE_BAR_FG if v.mic_muted else "")
         layout = tuple(bool(t) for _, t in parts)
         if layout != self._status_layout:  # repack in order
             for lbl, _ in parts:
@@ -275,9 +414,32 @@ class MainWindow:
         for lbl, text in parts:
             if text and lbl.cget("text") != text:
                 lbl.configure(text=text)
+        self._set_bar_right(v.show_stop, v.show_stop and v.stop_enabled)
         if v.show_stop:
-            if not self.stop_btn.winfo_ismapped():
-                self.stop_btn.pack(side="right")
             self.stop_btn.configure(state="normal" if v.stop_enabled else "disabled")
-        elif self.stop_btn.winfo_ismapped():
-            self.stop_btn.pack_forget()
+
+    def _set_bar_right(self, show_stop: bool, show_bookmark: bool) -> None:
+        """Stop (rightmost) and the Bookmark split button, repacked only when the layout changes."""
+        layout = (show_stop, show_bookmark)
+        if layout == self._bar_right:
+            return
+        for w in (self.stop_btn, self.bookmark_arrow, self.bookmark_btn):
+            w.pack_forget()
+        if show_stop:
+            self.stop_btn.pack(side="right")
+        if show_bookmark:
+            self._fill_bookmark_menu()
+            self.bookmark_arrow.pack(side="right", padx=(0, 8))
+            self.bookmark_btn.pack(side="right")
+        self._bar_right = layout
+
+    def _popup_bookmark_menu(self) -> None:
+        """The split button's arrow: the four types with their hotkeys, under the button."""
+        self._fill_bookmark_menu()
+        self.bookmark_menu.tk_popup(self.bookmark_arrow.winfo_rootx(),
+                                    self.bookmark_arrow.winfo_rooty() + self.bookmark_arrow.winfo_height())
+
+    def _fill_bookmark_menu(self) -> None:
+        self.bookmark_menu.delete(0, "end")
+        for item in logic.bookmark_items(self._hotkeys(), self._custom_kinds()):
+            self.bookmark_menu.add_command(label=item.menu_text, command=lambda k=item.kind: self._bookmark(k))

@@ -13,6 +13,7 @@ import logging
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
+from typing import Callable
 
 from ..diarize import YOU
 from ..transcript_model import GapRow, Insert, LineRow, MarkRow, Remove, Row, TranscriptModel, Update
@@ -46,10 +47,14 @@ class TranscriptView(ttk.Frame):
         self.scroll.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
         self._configure_tags()
-        self.text.bind("<Button-1>", lambda e: self.text.focus_set())
         self.menu = tk.Menu(self.text, tearoff=False)
-        self.menu.add_command(label="Copy", command=self.copy_selection)
         self.text.bind("<Button-3>", self._popup)
+        self.text.bind("<Button-1>", self._click)
+        # Set by the window (WP5): what a click on a bookmark row and the line menu do.
+        self.on_edit_mark: Callable[[MarkRow], None] | None = None
+        self.on_delete_mark: Callable[[MarkRow], None] | None = None
+        self.on_bookmark_line: Callable[[LineRow, str], None] | None = None
+        self.bookmark_items: Callable[[], list[logic.BookmarkItem]] = lambda: []
         self.text.bind("<Control-c>", lambda e: (self.copy_selection(), "break")[1])
 
         self.new_button = ttk.Button(self, command=self.jump_to_end)
@@ -73,6 +78,9 @@ class TranscriptView(ttk.Frame):
                         foreground=theme.GAP_FG, font=self.f_italic)
         t.tag_configure("markrow", lmargin1=0, lmargin2=self.x_speaker, spacing1=sp, spacing3=sp,
                         background=theme.MARK_BG)
+        t.tag_configure("markedit", foreground=theme.MUTED, font=self.f_small, underline=True)
+        t.tag_bind("markrow", "<Enter>", lambda e: t.configure(cursor="hand2"))
+        t.tag_bind("markrow", "<Leave>", lambda e: t.configure(cursor="arrow"))
         t.tag_configure("time", foreground=theme.MUTED, font=self.f_small)
         t.tag_configure("body", font=self.f_base)
         t.tag_configure("spk", font=self.f_bold)
@@ -123,9 +131,55 @@ class TranscriptView(ttk.Frame):
             self.placeholder.place_forget()
 
     # -- selection / clipboard -------------------------------------------------------
+    def row_at(self, x: int, y: int) -> tuple[int, Row] | None:
+        """The row under a point in the text widget, None over empty space."""
+        if not self._ids:
+            return None
+        idx = self.text.index(f"@{x},{y}")
+        box = self.text.bbox(idx)
+        if box is None or not (box[1] - 2 <= y <= box[1] + box[3] + 2):
+            return None
+        lo, hi = 0, len(self._ids)  # last row whose mark is at or before idx
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if self.text.compare(self._ids[mid], "<=", idx):
+                lo = mid + 1
+            else:
+                hi = mid
+        return (lo - 1, self._rows[lo - 1]) if lo > 0 else None
+
+    def _click(self, event) -> str | None:
+        self.text.focus_set()
+        hit = self.row_at(event.x, event.y)
+        if hit is not None and isinstance(hit[1], MarkRow) and self.on_edit_mark is not None:
+            row = hit[1]
+            self.after_idle(lambda: self.on_edit_mark(row))  # not inside the click: the dialog grabs input
+            return "break"
+        return None
+
     def _popup(self, event) -> None:
         self.text.focus_set()
-        self.menu.tk_popup(event.x_root, event.y_root)
+        hit = self.row_at(event.x, event.y)
+        menu = self.build_menu(hit[1] if hit else None)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def build_menu(self, row: Row | None) -> tk.Menu:
+        """The right-click menu for ``row`` (a line, a bookmark or empty space)."""
+        menu = self.menu
+        menu.delete(0, "end")
+        if isinstance(row, LineRow) and self.on_bookmark_line is not None:
+            sub = tk.Menu(menu, tearoff=False)
+            for item in self.bookmark_items():
+                sub.add_command(label=item.label, command=lambda k=item.kind, r=row: self.on_bookmark_line(r, k))
+            menu.add_cascade(label="Bookmark this line as…", menu=sub)
+        elif isinstance(row, MarkRow) and self.on_edit_mark is not None:
+            menu.add_command(label="Edit bookmark…", command=lambda r=row: self.on_edit_mark(r))
+            if self.on_delete_mark is not None:
+                menu.add_command(label="Delete bookmark", command=lambda r=row: self.on_delete_mark(r))
+        if menu.index("end") is not None:
+            menu.add_separator()
+        menu.add_command(label="Copy", command=self.copy_selection)
+        return menu
 
     def copy_selection(self) -> None:
         try:
@@ -254,8 +308,8 @@ class TranscriptView(ttk.Frame):
             return ["\t" + logic.gap_text(row, model) + "\n", ("gaprow",)]
         kind_tag = f"kind:{row.kind}" if row.kind in theme.KIND_COLORS else "kind:other"
         symbol = theme.KIND_SYMBOLS.get(row.kind, theme.KIND_SYMBOLS["bookmark"])
-        return [t, ("markrow", "time"), "\t", ("markrow",), f"{symbol} {logic.mark_text(row, model)}\n",
-                ("markrow", kind_tag)]
+        return [t, ("markrow", "time"), "\t", ("markrow",), f"{symbol} {logic.mark_text(row, model)}",
+                ("markrow", kind_tag), "  [edit]", ("markrow", "markedit"), "\n", ("markrow",)]
 
     # -- highlight ----------------------------------------------------------------------------
     def highlight(self, keys) -> int:

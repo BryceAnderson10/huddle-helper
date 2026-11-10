@@ -7,6 +7,7 @@ Layout (see docs/OUTPUT_SPEC.md):
         transcript.jsonl        live, append-only
         transcript.final.jsonl  written after Stop (via a temp name + rename)
         speakers.json           optional speaker id -> display name
+        marks.jsonl             bookmarks (first bookmark creates it)
         DONE                    empty marker, created last
         audio/                  buffered audio, deleted unless Keep audio is on
 """
@@ -31,6 +32,8 @@ MARKS = "marks.jsonl"
 TAGS = "speaker_tags.jsonl"
 DONE = "DONE"
 AUDIO = "audio"
+
+MUTED = "muted"  # gap reason: the user took their mic out of the recording (not lost audio)
 
 STATUS_RECORDING = "recording"
 STATUS_PROCESSING = "processing"
@@ -84,14 +87,20 @@ def folder_lock(path: Path) -> threading.Lock:
         return lock
 
 
+def append_jsonl_unlocked(path: Path, event: dict) -> None:
+    """Append one compact JSON line and fsync. The caller holds ``folder_lock`` (it needs the lock
+    for more than the write, e.g. to read the file first)."""
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 def append_jsonl(path: Path, event: dict) -> None:
     """Append one compact JSON line to a file in a meeting folder, under that folder's lock."""
     path = Path(path)
     with folder_lock(path.parent):
-        with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+        append_jsonl_unlocked(path, event)
 
 
 class MeetingFolder:
@@ -214,6 +223,18 @@ class MeetingFolder:
                 {"source": source, "start_ms": int(start_ms), "end_ms": int(end_ms), "reason": reason}
             )
             write_json_atomic(self.meta_path, meta)
+
+    def record_mute(self, closed: list[tuple[int, int]], since_ms: int | None) -> dict:
+        """Muted periods that have closed (``[(start_ms, end_ms)]``, mic) are added to ``gaps`` with
+        reason ``muted``, and ``mic_muted_since_ms`` is set (None when not muted), in one write."""
+        with self._lock:
+            meta = self.read_meta()
+            gaps = meta.setdefault("gaps", [])
+            for start, end in closed:
+                gaps.append({"source": "mic", "start_ms": int(start), "end_ms": int(end), "reason": MUTED})
+            meta["mic_muted_since_ms"] = None if since_ms is None else int(since_ms)
+            write_json_atomic(self.meta_path, meta)
+            return meta
 
     # -- speakers (F9) --------------------------------------------------
     def read_speakers(self) -> dict[str, str]:

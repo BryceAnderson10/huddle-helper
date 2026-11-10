@@ -8,7 +8,7 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-from . import paths
+from . import hotkeys as hk, paths
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +60,10 @@ class Settings:
     # Custom vocabulary (WP3): terms Whisper should expect, one per entry. See vocab.py.
     vocabulary: list[str] = field(default_factory=list)
 
+    # Global hotkeys (WP5), registered only while recording: action -> combo such as "Ctrl+Alt+B".
+    # "" turns one off. Additive like open_window_on_start: a missing key means the default combo.
+    hotkeys: dict[str, str] = field(default_factory=lambda: dict(hk.DEFAULTS))
+
     # Segmentation.
     vad_threshold: float = 0.5
     min_silence_ms: int = 500
@@ -84,6 +88,12 @@ class Settings:
         vocab = clean.get("vocabulary")
         if not (isinstance(vocab, list) and all(isinstance(t, str) for t in vocab)):
             clean.pop("vocabulary", None)
+        saved = clean.get("hotkeys")
+        if isinstance(saved, dict):  # actions the file lacks keep their default; unknown ones are dropped
+            clean["hotkeys"] = {**hk.DEFAULTS, **{k: v for k, v in saved.items()
+                                                       if k in hk.DEFAULTS and isinstance(v, str)}}
+        else:
+            clean.pop("hotkeys", None)
         clean["settings_version"] = SETTINGS_VERSION
         return cls(**clean)
 

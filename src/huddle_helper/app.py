@@ -10,12 +10,12 @@ import queue
 import statistics
 import threading
 import time
-from dataclasses import dataclass, replace
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import config, housekeeping, meeting as mt, models, vocab
+from . import config, housekeeping, marks as marks_mod, meeting as mt, models, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ class AppState:
     finalize_queue: int = 0
     message: str = ""
     last_meeting: str | None = None
+    hotkey_problems: list[str] = field(default_factory=list)  # "Ctrl+Alt+B (Bookmark): already in use ..."
 
 
 # -- after-Stop time estimate (pure) --------------------------------------
@@ -210,6 +211,97 @@ class AppController:
         """The meeting being recorded (also while it is stopping), else None."""
         rec = self._recorder
         return rec.folder if rec is not None and self.state.phase in ("recording", "stopping") else None
+
+    def now_ms(self) -> int | None:
+        """The meeting clock of the recording in progress, None when idle."""
+        rec = self._recorder
+        return rec.now_ms() if rec is not None else None
+
+    # -- bookmarks and mute (WP5) -------------------------------------------------------
+    @property
+    def mic_muted(self) -> bool:
+        rec = self._recorder
+        return rec is not None and rec.mic_muted
+
+    def set_mic_muted(self, muted: bool) -> bool:
+        """Take the mic out of the recording (or back in). False when nothing is recording."""
+        rec = self._recorder
+        if rec is None or not self.is_recording:
+            return False
+        now = rec.set_mic_muted(muted)
+        self._on_change()
+        return now
+
+    def toggle_mic_muted(self) -> bool:
+        return self.set_mic_muted(not self.mic_muted)
+
+    def _marklog_for(self, folder: mt.MeetingFolder | None) -> tuple[marks_mod.MarkLog | None, bool]:
+        """(MarkLog, is the live recording's). The recording's own log keeps the 2 s rule's memory."""
+        rec = self._recorder
+        live = rec is not None and rec.folder is not None and self.state.phase in ("recording", "stopping")
+        if folder is None or (live and folder.path == rec.folder.path):
+            return (rec.marklog, True) if live else (None, False)
+        return marks_mod.MarkLog(folder), False
+
+    def bookmark(self, kind: str = marks_mod.BOOKMARK, via: str = "hotkey", *,
+                 folder: mt.MeetingFolder | None = None, at_ms: int | None = None,
+                 seq: int | None = None) -> dict:
+        """Add a bookmark. With no ``folder`` it is the meeting being recorded, at the meeting clock now.
+        ``via="line"`` (a right-click on a line, any meeting) needs ``at_ms``, the line's start.
+        Returns ``{"action": "added" | "ignored" | "retyped" | "none", "id", "kind", "at_ms"}``."""
+        log_, live = self._marklog_for(folder)
+        if log_ is None:
+            return {"action": "none"}
+        if live:
+            if at_ms is None:
+                result = self._recorder.bookmark(kind, via)
+            else:
+                result = self._recorder.bookmark(kind, via, at_ms, seq, self._wall_time(folder, at_ms))
+        else:
+            if at_ms is None:
+                return {"action": "none"}
+            result = log_.add(kind, at_ms, via, seq=seq, at=self._wall_time(folder, at_ms))
+            self._summarize_marks(folder)
+        if result is None:
+            return {"action": "none"}
+        self._on_change()
+        return result.as_dict()
+
+    def edit_mark(self, folder: mt.MeetingFolder, mark_id: int, *, label: str | None = None,
+                  kind: str | None = None, delete: bool = False) -> bool:
+        """Change a bookmark's label or type, or delete it (any meeting). False if it does not exist."""
+        log_, live = self._marklog_for(folder)
+        if log_ is None:
+            return False
+        done = log_.edit(mark_id, label=label, kind=kind, delete=delete)
+        if not live:
+            self._summarize_marks(folder)
+        self._on_change()
+        return done
+
+    @staticmethod
+    def _summarize_marks(folder: mt.MeetingFolder) -> None:
+        try:
+            folder.update_meta(**marks_mod.summarize(folder))
+        except (OSError, ValueError):
+            log.exception("Could not update the bookmark count of %s", folder.meeting_id)
+
+    @staticmethod
+    def _wall_time(folder: mt.MeetingFolder, at_ms: int) -> str | None:
+        try:
+            return mt.iso(datetime.fromisoformat(folder.read_meta()["started_at"]) + timedelta(milliseconds=at_ms))
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def hotkey_pressed(self, name: str) -> dict:
+        """A global hotkey (``hotkeys.DEFAULTS`` names). Bookmark kinds add a bookmark; ``mute`` toggles."""
+        if not self.is_recording:
+            return {"action": "none"}
+        if name == "mute":
+            return {"action": "muted" if self.toggle_mic_muted() else "unmuted"}
+        if name in marks_mod.KIND_NAMES:
+            return self.bookmark(name, "hotkey")
+        return {"action": "none"}
 
     def start(self, title: str, terms: list[str] | tuple[str, ...] = ()) -> None:
         if not self.can_start:

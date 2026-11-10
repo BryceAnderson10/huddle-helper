@@ -223,3 +223,109 @@ def test_theme_colours_are_readable_on_white():
                    (theme.FAILED_FG, theme.FAILED_BG), (theme.TEXT, theme.CHANGED_BG)):
         assert ratio(fg, bg) >= 4.5, (fg, bg)
     assert theme.speaker_color(8) == theme.SPEAKER_COLORS[0] and theme.speaker_color(3, is_you=True) == theme.YOU_COLOR
+
+
+# -- bookmarks and mute (WP5) ------------------------------------------------------------------
+def muted_state(mid, muted=True):
+    st = recording_state(mid)
+    st.recording.mic_muted = muted
+    return st
+
+
+def test_status_view_says_muted_in_place_of_the_mic_meter(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    v = logic.status_view(m.meeting_id, m, muted_state(m.meeting_id))
+    assert v.mic == "muted" and v.mic_muted and v.call and v.stop_enabled
+    v = logic.status_view(m.meeting_id, m, muted_state(m.meeting_id, False))
+    assert v.mic != "muted" and not v.mic_muted
+
+
+def test_mute_bar_and_button_follow_the_displayed_meeting(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    mid = m.meeting_id
+    bar = logic.mute_bar_view(mid, m, muted_state(mid))
+    assert bar.label == "MIC MUTED" and "the call still hears you" in bar.text and "room" not in bar.text
+    assert logic.mute_bar_view(mid, m, muted_state(mid, False)) is None
+    assert logic.mute_bar_view("another-meeting", m, muted_state(mid)) is None  # a different meeting is open
+    btn = logic.mute_button_view(mid, m, muted_state(mid, False), "Ctrl+Alt+M")
+    assert btn.visible and btn.text == "Mute me in the recording" and "[Ctrl+Alt+M]" in btn.tooltip
+    assert "call app still hears you" in btn.tooltip
+    assert logic.mute_button_view(mid, m, muted_state(mid), "").text == "Unmute me"
+    idle = AppState(phase="ready")
+    assert not logic.mute_button_view(mid, m, idle).visible
+    stopping = AppState(phase="stopping", last_meeting=mid)
+    assert not logic.mute_button_view(mid, m, stopping).visible
+
+
+def test_in_room_mode_warns_that_everyone_is_muted(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    m.set_meta({**m.meta, "settings": {"diarize_mic": True}})
+    mid = m.meeting_id
+    assert "Everyone in the room" in logic.mute_bar_view(mid, m, muted_state(mid)).text
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
+
+
+def test_bookmark_items_list_the_four_types_with_symbol_and_hotkey():
+    items = logic.bookmark_items({"bookmark": "Ctrl+Alt+B", "decision": "Ctrl+Alt+D", "action": "", "question": "Ctrl+Alt+Q"})
+    assert [i.kind for i in items] == ["bookmark", "decision", "action", "question"]
+    assert [i.label for i in items] == ["⚑ Bookmark", "✔ Decision", "☐ Action item", "? Question"]
+    assert items[1].menu_text == "✔ Decision    Ctrl+Alt+D" and items[2].menu_text == "☐ Action item"
+    assert logic.bookmark_items()[0].hotkey == ""
+    assert logic.bookmark_items(None, {"risk": "Risk"})[-1].label.endswith("Risk")
+
+
+def test_mark_changes_and_feedback():
+    row = MarkRow(3, "decision", "Ship it", 100)
+    assert logic.mark_changes(row, "Ship it", "decision") == {}
+    assert logic.mark_changes(row, "  Ship it ", "decision") == {}
+    assert logic.mark_changes(row, "", "action") == {"label": "", "kind": "action"}
+    assert logic.mark_changes(row, "New", "decision") == {"label": "New"}
+    assert logic.bookmark_feedback({"action": "added", "kind": "decision"}) == "Decision added"
+    assert logic.bookmark_feedback({"action": "retyped", "kind": "question"}) == "Changed to Question"
+    assert logic.bookmark_feedback({"action": "ignored", "kind": "bookmark"}) == "Bookmark already added"
+    assert logic.bookmark_feedback({"action": "none"}) == ""
+
+
+def test_tray_tooltip_counts_bookmarks_and_says_muted():
+    assert logic.recording_status_text(761, 84) == "● Recording 12:41 · 84 lines"
+    assert logic.recording_status_text(761, 84, marks=1) == "● Recording 12:41 · 84 lines · 1 bookmark"
+    assert logic.recording_status_text(3725, 3, 6.4, 3, True) == (
+        "● Recording 1:02:05 · 3 lines · 6s behind · 3 bookmarks · your mic is muted")
+
+
+def test_hotkey_row_status_wording():
+    from huddle_helper import hotkeys as hk
+
+    f = logic.hotkey_row_status
+    ok = hk.check_combo("Ctrl+Alt+B", lambda c: None)
+    assert f(hk.check_combo(""), None) == ("Off", "info")
+    assert f(hk.check_combo("B"), None)[1] == "error"
+    assert f(ok, None)[1] == "info" and "Check" in f(ok, None)[0]
+    assert f(ok, hk.Registration("Ctrl+Alt+B", True), live=True) == ("Registered now.", "ok")
+    assert f(ok, hk.Registration("Ctrl+Alt+B", True))[0].startswith("Free")
+    text, level = f(ok, hk.Registration("Ctrl+Alt+B", False, "already in use by another program"))
+    assert level == "error" and "already in use by another program" in text
+    assert f(ok, None, duplicate_of="Decision")[1] == "error"
+    altgr = hk.check_combo("Ctrl+Alt+Q", lambda c: "@" if "Shift" not in c.text else None)
+    text, level = f(altgr, hk.Registration("Ctrl+Alt+Q", True))
+    assert level == "warn" and "AltGr" in text and "Ctrl+Alt+Shift+Q" in text and "Free" in text
+
+
+def test_notice_names_hotkeys_that_could_not_be_registered(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    st = recording_state(m.meeting_id)
+    assert logic.notice_view(m.meeting_id, m, st).text.count("\n") == 0
+    st.hotkey_problems = ["Ctrl+Alt+B (Bookmark): already in use by another program"]
+    text = logic.notice_view(m.meeting_id, m, st).text
+    assert "Hotkeys not working: Ctrl+Alt+B (Bookmark)" in text and "buttons and the tray menu" in text
+
+
+def test_tray_icons_for_muted_and_flag_differ_from_the_recording_icon():
+    from huddle_helper import tray
+
+    imgs = {k: tray.make_icon(k) for k in ("recording", "muted", "flag", "idle")}
+    assert all(i.size == (64, 64) for i in imgs.values())
+    rec, muted, flag = (imgs[k].tobytes() for k in ("recording", "muted", "flag"))
+    assert len({rec, muted, flag}) == 3
+    # the muted icon is the recording icon plus a slash, so its background colour is the same red
+    assert imgs["muted"].getpixel((5, 32)) == imgs["recording"].getpixel((5, 32)) == (220, 38, 38, 255)

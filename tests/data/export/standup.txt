@@ -1,0 +1,18 @@
+Daily standup
+2026-11-09, 11:00–11:02 (2 min)
+Speakers: Dana, You, Eric
+
+(00:00:00-00:00:12 you muted your mic in the recording, 12 s)
+---- Bookmark 00:00:05 ----
+[00:00:15] Dana: Morning, everyone. First item is the budget.
+---- Decision 00:00:21: Budget *draft* ----
+[00:00:24] You: Agreed, go ahead.
+---- Action item 00:00:30: Reply to the vendor ----
+(00:00:40-00:00:44 no audio from the call (default audio device changed), 4 s)
+(00:01:00-00:01:25 you muted your mic in the recording, 25 s)
+---- Decision 00:01:02 ----
+[00:01:30] Eric: The vendor needs an answer by Thursday.
+---- Question 00:01:30 ----
+[00:01:36] You: I will reply today.
+---- Bookmark 00:01:39 ----
+---- Bookmark 00:01:39 ----

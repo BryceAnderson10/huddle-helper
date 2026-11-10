@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import meeting as mt
+from . import marks as marks_mod, meeting as mt
 from .writer import dumps, meeting_end_event, read_events
 
 log = logging.getLogger(__name__)
@@ -52,6 +52,63 @@ def close_interrupted_live_file(folder: mt.MeetingFolder) -> int:
     return segments
 
 
+def _count_frames(path: Path) -> int:
+    """Frames that can be read from a FLAC file that was never closed. Its header has no length
+    (soundfile reports 2**63-1), and libsndfile raises when a read runs into the unfinished end, so
+    read in blocks and, after an error, carry on from the last good position with smaller blocks."""
+    import soundfile as sf
+
+    n = 0
+    for block in (1 << 16, 1 << 10, 64):
+        try:
+            with sf.SoundFile(str(path)) as fh:
+                fh.seek(n)
+                while True:
+                    got = len(fh.read(block, dtype="float32"))
+                    if not got:
+                        return n
+                    n += got
+        except sf.LibsndfileError:
+            continue
+    return n
+
+
+def audio_length_ms(folder: mt.MeetingFolder) -> int | None:
+    """How much audio the buffers hold (the longer of mic and system), None without audio files."""
+    import soundfile as sf
+
+    best = None
+    for source in ("mic", "system"):
+        path = folder.audio_file(source)
+        if not path.exists():
+            continue
+        try:
+            with sf.SoundFile(str(path)) as fh:
+                frames, rate = fh.frames, fh.samplerate
+            if frames <= 0 or frames >= 1 << 40:  # a header never finalised
+                frames = _count_frames(path)
+        except Exception:  # noqa: BLE001
+            log.exception("Could not measure %s", path)
+            continue
+        ms = frames * 1000 // max(rate, 1)
+        best = ms if best is None else max(best, ms)
+    return best
+
+
+def close_open_mute(folder: mt.MeetingFolder, meta: dict, last_end_ms: int = 0) -> bool:
+    """A crash while muted left ``mic_muted_since_ms`` set: close the period as a ``muted`` gap that
+    ends at the last audio (the buffers' length; else the end of the last transcript line), and clear it."""
+    since = meta.get("mic_muted_since_ms")
+    if since is None:
+        return False
+    end = audio_length_ms(folder)
+    if end is None:
+        end = last_end_ms
+    folder.record_mute([(int(since), int(end))] if end > since else [], None)
+    log.warning("Meeting %s was muted when it stopped; closed the muted period at %d ms", folder.meeting_id, end)
+    return True
+
+
 def find_unfinished(meetings_dir: Path) -> list[mt.MeetingFolder]:
     out = []
     for folder in mt.iter_meetings(meetings_dir):
@@ -80,6 +137,10 @@ def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | N
         try:
             if meta.get("status") == mt.STATUS_RECORDING or meta.get("clean_exit") is not True:
                 count = close_interrupted_live_file(folder)
+                last_end = max((e.get("end_ms", 0) for e in read_events(folder.live_path)
+                                if e.get("type") == "segment"), default=0)
+                close_open_mute(folder, meta, last_end)
+                folder.update_meta(**marks_mod.summarize(folder))
                 folder.update_meta(status=mt.STATUS_INTERRUPTED, clean_exit=False, segments=count,
                                    ended_at=meta.get("ended_at") or read_events(folder.live_path)[-1].get("ended_at"))
                 log.warning("Meeting %s did not finish cleanly; recovered %d segments", folder.meeting_id, count)
