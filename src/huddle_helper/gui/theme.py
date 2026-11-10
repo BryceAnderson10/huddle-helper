@@ -26,6 +26,9 @@ PLAYING_BG = "#dbeafe"
 SELECTED_BG = "#e5e7eb"
 CHIP_NEW_BG = "#fef3c7"
 GAP_FG = MUTED
+PLAY_ON, PLAY_OFF = "#1d4ed8", "#b6bcc6"  # the play control: usable / greyed out (the tooltip says why)
+PLAY_GLYPH, STOP_GLYPH = "▶", "■"
+WARN_BG, WARN_FG = MUTE_BAR_BG, MUTE_BAR_FG  # one-off notices such as the headphone warning
 MARK_BG = "#f3f4f6"
 
 SPEAKER_COLORS = ("#1d4ed8", "#b45309", "#047857", "#7c3aed", "#be123c", "#0e7490", "#a16207", "#4b5563")

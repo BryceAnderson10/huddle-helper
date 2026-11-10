@@ -144,7 +144,11 @@ class WasapiCapture:
 
     def __init__(self, on_audio: OnAudio, mic_device: str | None = None, output_device: str | None = None,
                  on_gap: OnGap | None = None, on_error: OnError | None = None,
-                 poll_interval_s: float = 2.0, stall_timeout_s: float = 3.0):
+                 poll_interval_s: float = 2.0, stall_timeout_s: float = 3.0,
+                 before_reopen: Callable[[], None] | None = None):
+        # before_reopen runs first in every re-bind: the app stops a playing clip there, because an open
+        # PortAudio instance (reference-counted) would stop the re-bind from refreshing the device list.
+        self._before_reopen = before_reopen
         self._on_audio = on_audio
         self._on_gap = on_gap or (lambda *a: None)
         self._on_error = on_error or (lambda msg: None)
@@ -236,6 +240,11 @@ class WasapiCapture:
         return int((time.perf_counter() - self.t0) * 1000)
 
     def _rebind(self, reason: str) -> None:
+        if self._before_reopen is not None:
+            try:
+                self._before_reopen()
+            except Exception:  # noqa: BLE001 - never stop the re-bind
+                log.exception("before_reopen failed")
         log.info("Re-opening audio devices: %s", reason)
         gap_start = self._now_ms()
         was_open = set(self._streams)

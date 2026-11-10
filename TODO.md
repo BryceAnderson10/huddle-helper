@@ -494,3 +494,47 @@ What went well:
 - [ ] M6: 2-hour soak test (lag, memory, dropped lines).
 - [ ] Switch the default audio device mid-call and confirm rebind and the `gaps` entry in `meta.json`.
 - [ ] Echo dedupe on real speakers (no headset): remote speech must not appear as "You".
+
+## From building the live view (WP4–WP7)
+
+### Decisions waiting
+
+- [ ] **A missing diarization model does not fail the final pass.** The pass logs the error
+  and completes on the live labels (`refined_streams: []`), so the LIVE_VIEW milestone 3
+  check (rename the model folder, see the error, Retry) cannot pass as written. Decide
+  whether a missing model should be a visible error. Retry itself was tested with a
+  different forced failure.
+- [ ] **Hearing audio older than 10 minutes while recording** (WP7 spike, nothing built).
+  A second read-only handle on the live `audio\*.flac` works on Windows while the writer
+  holds it: opens in 5–8 ms, reads are sample-exact up to about 3 s behind the writer, no
+  `flush()` needed, and a killed process loses nothing either way. The reader must take
+  the length from the meeting clock (the file reports it as unknown) and catch
+  `LibsndfileError` near the end. 5-minute chunk files also work but change the
+  documented `audio\` layout and about 8 call sites. *Recommended:* the second handle,
+  only for lines older than the in-memory 10 minutes; don't build chunk files.
+- [ ] **Delete and the Recycle Bin:** a meeting larger than the bin's size limit, or a
+  drive with the bin switched off, may be deleted permanently while the dialog says it can
+  be restored. Not tested. Consider a size check before the delete.
+
+### Clip edges (WP7)
+
+- [x] **A fixed 300 ms of padding cut speech on 9 of 42 lines** (Tests #2 and #3): speech
+  ran up to 660 ms past Whisper's last word. Clips now run on (or back) up to 600 ms to
+  the first quiet point; 41 of 42 lines pass the numeric check (the other starts at 0 ms).
+  *To listen to:* the ends of Test #2 lines 5, 8, 15, 21, 24, 28 and Test #3 lines 1, 3,
+  7, 8, 11, which the VAD still flags at a low level.
+- [x] **Replaying a line a second after it was said dropped the original line** (found in
+  replay). The drop rule now compares the words' own span with the playback window.
+
+### Needs a person
+
+- [ ] A real call on the laptop with the window open throughout: p90 and max delay no
+  worse than Test #4 (2.4 s and 6.8 s); watch the header at Stop (it once read a clipped
+  "Refining speaker lab" for 18 s; not reproduced since a layout fix).
+- [ ] Mute on a real call: the other side still hears you, and nothing of your voice is in
+  `system.flac`. The AltGr hotkey warning on a German keyboard. The tray's Bookmark
+  submenu and mute item.
+- [ ] Click to hear: 20 clips in a real call with a headset and without; switch the
+  default output device while a clip plays (capture must rebind and log the gap).
+- [ ] All new windows and dialogs at 125–150% display scaling; a saved export in Notepad
+  and a Markdown viewer; Show in Explorer.

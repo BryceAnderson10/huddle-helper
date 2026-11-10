@@ -10,6 +10,11 @@ Threads:
 
 The mic passes through ``MicGate`` first (``_on_audio``): while the user is muted its samples are
 replaced by zeros before anything else sees them. Bookmarks go through ``MarkLog``.
+
+Click to hear (WP7): each stream worker also writes the (gated) audio to a ``RecentAudio`` ring, the last
+10 minutes in memory, which clips are played from while recording. A clip played while recording is
+logged as a playback window (``note_playback``); the transcribe loop drops an utterance that overlaps
+a window and repeats its words, before a speaker is assigned, and counts it for meta.json.
 """
 
 from __future__ import annotations
@@ -25,10 +30,11 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from . import marks as marks_mod, meeting as mt, vocab
+from . import marks as marks_mod, meeting as mt, playback, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
 from .audio.gate import MicGate
+from .audio.ring import RecentAudio
 from .config import Settings
 from .diarize import MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OnlineClusterer
 from .finalize import append_words
@@ -69,11 +75,12 @@ class Status:
 
 class _StreamWorker:
     def __init__(self, source: str, rec: "Recorder", scorer: FrameScorer, buffer: FlacBuffer,
-                 settings: Settings):
+                 settings: Settings, ring: RecentAudio | None = None):
         self.source = source
         self.rec = rec
         self.inbox: queue.Queue[np.ndarray | None] = queue.Queue()
         self.buffer = buffer
+        self.ring = ring
         self.lock = threading.RLock()  # re-entered when the segmenter emits an utterance
         self.outstanding: dict[int, tuple[int, int]] = {}  # utterance id -> (start, end) samples
         self.done = False
@@ -96,6 +103,8 @@ class _StreamWorker:
                 break
             try:
                 self.buffer.write(chunk)
+                if self.ring is not None:
+                    self.ring.write(chunk)
                 with self.lock:
                     self.segmenter.feed(chunk)
             except Exception:  # noqa: BLE001
@@ -126,7 +135,8 @@ class _StreamWorker:
 class Recorder:
     def __init__(self, settings: Settings, components: Components,
                  on_status: Callable[[Status], None] | None = None,
-                 on_error: Callable[[str], None] | None = None):
+                 on_error: Callable[[str], None] | None = None,
+                 before_reopen: Callable[[], None] | None = None):
         self.settings = settings
         self.c = components
         self._on_status = on_status or (lambda s: None)
@@ -164,6 +174,10 @@ class Recorder:
         self._mute_lock = threading.Lock()
         self._pending_gaps: list[tuple[int, int]] = []  # closed muted periods not yet in meta.json
         self._written_since: int | None = None
+        # Click to hear: called by the capture before it re-opens its devices (the controller stops playback).
+        self.before_reopen = before_reopen
+        self.playbacks = playback.PlaybackWindows()
+        self._playback_written: tuple[int, int] | None = None
 
     # -- public API -----------------------------------------------------
     @property
@@ -244,7 +258,8 @@ class Recorder:
             scorer_factory = SileroScorer
         for src in SOURCES:
             self._workers[src] = _StreamWorker(src, self, scorer_factory(),
-                                               FlacBuffer(self.folder.audio_file(src)), s)
+                                               FlacBuffer(self.folder.audio_file(src)), s,
+                                               RecentAudio(playback.RING_SECONDS))
         if s.diarize_system:
             self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, s.live_speaker_threshold,
                                                          s.live_min_new_speaker_s)
@@ -258,8 +273,10 @@ class Recorder:
             capture_factory = WasapiCapture
         self._capture = capture_factory(
             on_audio=self._on_audio, mic_device=s.mic_device, output_device=s.output_device,
-            on_gap=self._on_gap, on_error=self._on_error,
+            on_gap=self._on_gap, on_error=self._on_error, before_reopen=self._before_reopen,
         )
+        self.playbacks = playback.PlaybackWindows()
+        self._playback_written = None
 
         self._stop_tick.clear()
         self._seq = 0
@@ -315,6 +332,7 @@ class Recorder:
         self.folder.update_meta(
             status=mt.STATUS_PROCESSING, ended_at=mt.iso(ended), clean_exit=True, segments=count,
             echo_segments_dropped=self._merger.dropped_echo,
+            playbacks=self.playbacks.count, playback_segments_dropped=self.playbacks.dropped,
             duration_s=round(time.perf_counter() - self._t0, 1),
             live_stats=self.live_stats(),
             marks=self.marklog.count, mark_kinds=marks_mod.custom_kinds(self.marklog.state().values()),
@@ -326,6 +344,52 @@ class Recorder:
         self._publish()
         log.info("Recording stopped: %s (%d segments)", folder.path, count)
         return folder
+
+    # -- click to hear (WP7) ---------------------------------------------------------------
+    def _before_reopen(self) -> None:
+        cb = self.before_reopen
+        if cb is not None:
+            try:
+                cb()
+            except Exception:  # noqa: BLE001 - the capture must go on re-binding
+                log.exception("before_reopen failed")
+
+    @property
+    def echo_dropped(self) -> int:
+        """Mic lines the echo dedupe has dropped so far (a sign that there are no headphones)."""
+        return self._merger.dropped_echo if self._merger is not None else 0
+
+    def recent_oldest_ms(self) -> dict[str, int]:
+        """The earliest meeting time the in-memory audio of each stream still holds."""
+        return {src: w.ring.oldest_ms for src, w in self._workers.items() if w.ring is not None}
+
+    def recent_clip(self, clip: playback.Clip):
+        """The audio of ``clip`` from the rings (what the capture delivered after the mic gate), levelled
+        for playback; None when it has left the 10-minute window."""
+        rings = {src: w.ring for src, w in self._workers.items() if w.ring is not None}
+        if len(clip.sources) == 1:
+            return playback.clip_from_ring(rings.get(clip.sources[0]), clip.start_ms, clip.end_ms)
+        return playback.mixed_from_rings(rings, clip)
+
+    def note_playback(self, duration_s: float, text: str) -> bool:
+        """A clip of ``duration_s`` is about to play: open a playback window for it (the drop rule).
+        False when not recording (nothing to drop)."""
+        now = self.now_ms()
+        if now is None or self.status.state != "recording":
+            return False
+        self.playbacks.add(now, duration_s, text)
+        return True
+
+    def _sync_playbacks(self) -> None:
+        """Write the playback counts to meta.json when they changed (on the ticker, never the capture path)."""
+        counts = self.playbacks.snapshot()
+        if self.folder is None or counts == self._playback_written:
+            return
+        try:
+            self.folder.update_meta(playbacks=counts[0], playback_segments_dropped=counts[1])
+            self._playback_written = counts
+        except Exception:  # noqa: BLE001 - tried again at the next tick
+            log.exception("Could not record the playback counts in meta.json")
 
     # -- mute and bookmarks -------------------------------------------------------------
     def now_ms(self) -> int | None:
@@ -464,6 +528,14 @@ class Recorder:
                     end_ms = min(words[-1].end_ms, utt.end_ms) if words else utt.end_ms
                     if end_ms <= start_ms:
                         start_ms, end_ms = utt.start_ms, utt.end_ms
+                    if self.playbacks.match(start_ms, end_ms, result.text):
+                        # A clip the user played came back through the loopback or the mic: not a line, and
+                        # its voice must not reach the speaker clustering (plan decision 2). The words' own
+                        # span is compared with the playback window, not the utterance's: the VAD span runs
+                        # on over the pause after the speech, which would catch the line the clip was taken
+                        # from when it is played back a moment after it was said.
+                        log.info("Dropped a played clip heard again at %d ms", start_ms)
+                        continue
                     seg = Segment(utt.source, start_ms, end_ms, result.text, result.confidence,
                                   self._speaker(utt, words), words)
                     append_words(self.folder.words_path, seg)
@@ -504,6 +576,7 @@ class Recorder:
             try:
                 self._push_watermarks()
                 self._sync_mute()
+                self._sync_playbacks()
                 self._publish()
             except Exception:  # noqa: BLE001
                 log.exception("Watermark tick failed")

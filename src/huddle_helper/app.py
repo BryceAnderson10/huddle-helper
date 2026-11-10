@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, vocab
+from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -30,6 +30,16 @@ class FinalizeProgress:
     overall: float = 0.0  # 0-1 over the whole pass, from fixed stage weights (see pass_fraction)
     elapsed_s: float = 0.0  # since this meeting's pass started
     eta_s: float | None = None  # None until there is history to estimate from: show the stage only
+
+
+@dataclass(frozen=True)
+class PlayResult:
+    """What ``AppController.play_clip`` did: "playing", "confirm" (ask the user, then call again with
+    ``confirmed=True``) or "unavailable" (``message`` says why). ``notice`` is a one-time warning to
+    show next to a clip that did start."""
+    status: str
+    message: str = ""
+    notice: str = ""
 
 
 @dataclass
@@ -119,7 +129,8 @@ def _same_apart_from_vocabulary(a: config.Settings, b: config.Settings) -> bool:
 class AppController:
     def __init__(self, on_change: Callable[[], None] | None = None,
                  notify: Callable[[str], None] | None = None,
-                 overrides: dict | None = None, capture_factory: Callable[..., object] | None = None):
+                 overrides: dict | None = None, capture_factory: Callable[..., object] | None = None,
+                 player: playback.Player | None = None):
         """``overrides`` (dev aids such as ``tray --out``) replace Settings fields for this run only:
         they are never written back to settings.json. ``capture_factory`` replaces the live devices
         (``tray --replay``)."""
@@ -141,6 +152,13 @@ class AppController:
         self._jobs_lock = threading.Lock()
         self._queued: set[str] = set()  # meeting ids queued for, or in, the after-Stop pass
         self._retry_waiting: list[mt.MeetingFolder] = []  # retries held back while a meeting records
+        # Click to hear (WP7): one clip at a time; the output gain is 1.0 unless a dev script lowers it.
+        self.player = player or playback.Player()
+        self._playing: tuple[str, int] | None = None  # (clip key, token) while a clip is loading or playing
+        self._play_token = 0
+        self._play_lock = threading.Lock()
+        self._hp_warned: set[str] = set()  # meetings whose headphone warning was shown
+        self._hp_confirmed: set[str] = set()  # meetings where the user confirmed playing despite echo
         threading.Thread(target=self._finalize_worker, name="finalize", daemon=True).start()
 
     # -- lifecycle ------------------------------------------------------
@@ -305,7 +323,8 @@ class AppController:
             try:
                 comps = self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
-                                          on_error=lambda m: self._notify(m))
+                                          on_error=lambda m: self._notify(m),
+                                          before_reopen=self.player.stop)  # decision 7: nothing open on re-bind
                 folder = self._recorder.start(title or "meeting", terms)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
@@ -342,6 +361,100 @@ class AppController:
 
     def _on_status(self, st: Status) -> None:
         self.state.recording = st
+        self._on_change()
+
+    # -- click to hear (WP7) --------------------------------------------------------------
+    @property
+    def playing_key(self) -> str | None:
+        """Key of the clip that is loading or playing (``playback.Clip.key``); the window polls this."""
+        playing = self._playing
+        return playing[0] if playing else None
+
+    def _is_live(self, folder: mt.MeetingFolder) -> bool:
+        rec = self._recorder
+        return (rec is not None and rec.folder is not None and self.state.phase == "recording"
+                and rec.folder.path == folder.path)
+
+    def recent_oldest_ms(self, folder: mt.MeetingFolder) -> dict[str, int] | None:
+        """For the window: how far back the in-memory audio of the meeting being recorded reaches."""
+        return self._recorder.recent_oldest_ms() if self._is_live(folder) else None
+
+    def play_clip(self, folder: mt.MeetingFolder, clip: playback.Clip, *, confirmed: bool = False) -> PlayResult:
+        """Play ``clip`` of ``folder``. While that meeting is recording the audio comes from the ring,
+        the playback is logged as a window for the drop rule, and the headphone warning applies
+        (``playback.headphone_check``); otherwise it is read from the kept audio on a short thread.
+        Clicking another clip stops the current one."""
+        mid = folder.meeting_id
+        if self._is_live(folder):
+            rec = self._recorder
+            check = playback.headphone_check(True, mid in self._hp_warned, mid in self._hp_confirmed or confirmed,
+                                             rec.echo_dropped)
+            if check.action == "confirm":
+                return PlayResult("confirm", check.message)
+            samples = rec.recent_clip(clip)
+            if samples is None:
+                return PlayResult("unavailable", playback.AFTER_STOP)
+            if confirmed:
+                self._hp_confirmed.add(mid)
+            notice = ""
+            if check.action == "warn":
+                self._hp_warned.add(mid)
+                notice = check.message
+            rec.note_playback(len(samples) / playback.SAMPLE_RATE, clip.text)
+            self._play(samples, self._claim(clip.key))
+            return PlayResult("playing", notice=notice)
+        token = self._claim(clip.key)
+        threading.Thread(target=self._load_and_play, args=(folder, clip, token), name="clip-read", daemon=True).start()
+        return PlayResult("playing")
+
+    def _claim(self, key: str) -> int:
+        """Make ``key`` the current clip (the window shows ■ at once); stops the previous one."""
+        self.player.stop()
+        with self._play_lock:
+            self._play_token += 1
+            self._playing = (key, self._play_token)
+            token = self._play_token
+        self._on_change()
+        return token
+
+    def _load_and_play(self, folder: mt.MeetingFolder, clip: playback.Clip, token: int) -> None:
+        if len(clip.sources) == 1:
+            samples = playback.clip_from_files(folder, clip.sources[0], clip.start_ms, clip.end_ms)
+        else:
+            samples = playback.mixed_from_files(folder, clip)
+        with self._play_lock:
+            current = self._playing is not None and self._playing[1] == token
+        if not current:
+            return  # stopped, or another clip was chosen, while this one was being read
+        if samples is None:
+            self._play_finished(token, "")
+            self._notify("Could not read that audio.")
+            return
+        self._play(samples, token)
+
+    def _play(self, samples, token: int) -> None:
+        self.player.play(samples, lambda reason, t=token: self._play_finished(t, reason))
+
+    def _play_finished(self, token: int, reason: str) -> None:
+        with self._play_lock:
+            if self._playing is None or self._playing[1] != token:
+                return
+            self._playing = None
+        if reason.startswith("error"):
+            self._notify(f"Could not play the clip: {reason[7:]}")
+        self._on_change()
+
+    def stop_playback(self) -> None:
+        with self._play_lock:
+            self._play_token += 1  # a clip still being read must not start
+            self._playing = None
+        self.player.stop()
+        self._on_change()
+
+    def set_keep_audio(self, folder: mt.MeetingFolder, keep: bool) -> None:
+        """Keep this meeting's audio whatever the Keep audio setting says (L20). Written to the meeting's
+        own ``settings.keep_audio``; the after-Stop pass re-reads it just before deleting."""
+        folder.update_meta_settings(keep_audio=bool(keep))
         self._on_change()
 
     # -- after-Stop pass ------------------------------------------------
@@ -545,5 +658,6 @@ class AppController:
         self._on_change()
 
     def shutdown(self) -> None:
+        self.player.stop()
         if self.is_recording:
             self.stop(wait=True)

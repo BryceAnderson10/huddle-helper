@@ -18,6 +18,13 @@ Bookmarks and mute (WP5): the header's mute toggle and the amber bar, the status
 button, the bookmark editor on a mark row, and "Bookmark this line as…" on a line's right-click menu all
 call ``AppController`` (``bookmark``, ``edit_mark``, ``toggle_mic_muted``); the changes come back through
 the same file tails as everything else.
+
+Click to hear (WP7): every line and bookmark row starts with a play control; a click, ``Space`` on the
+selected line, or the right-click menu plays it through ``AppController.play_clip``, ``Esc`` stops. The
+speaker bar's chips open a menu with "Hear this voice". Controls that cannot play are greyed out with the
+reason in a tooltip (and in the notice bar when clicked). The header's "Keep this meeting's audio" check box
+calls ``set_keep_audio``. The once-per-meeting headphone warning is shown in the notice bar, and the
+confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
 """
 
 from __future__ import annotations
@@ -27,21 +34,23 @@ import queue
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Callable
 
-from .. import marks as marks_mod, meeting as mt
+from .. import marks as marks_mod, meeting as mt, playback
 from ..session import MeetingSession
 from ..transcript_model import LineRow, MarkRow, Reset
 from . import logic, theme
 from .dialogs import ExportDialog, MarkEditor
 from .meetings_view import MeetingsView
+from .speaker_bar import SpeakerBar
 from .transcript_view import TranscriptView
 
 log = logging.getLogger(__name__)
 
 FAST_MS, FAST_MORE_MS, STATUS_MS, SLOW_MS = 250, 20, 500, 1000
 FEEDBACK_S = 3.0  # how long "Decision added" stays in the status bar
+BANNER_S = 8.0  # how long a one-off notice (headphone warning, "why can't I play this") replaces the notice bar
 
 
 class Tip:
@@ -117,7 +126,19 @@ class MainWindow:
         self.mute_btn = ttk.Button(head, text="Mute me in the recording", command=self._toggle_mute)
         self.mute_tip = Tip(self.mute_btn)
         self._mute_shown = False
-        ttk.Separator(self.tpage, orient="horizontal").pack(fill="x")
+        # "Keep this meeting's audio" gets a row of its own under the header (while recording or processing):
+        # beside the other header buttons it did not fit at the window's minimum width.
+        self.keep_row = ttk.Frame(self.tpage, padding=(10, 0, 10, 4))
+        self.keep_var = tk.BooleanVar(value=False)
+        self.keep_chk = ttk.Checkbutton(self.keep_row, text="Keep this meeting's audio", variable=self.keep_var,
+                                        command=self._toggle_keep)
+        self.keep_chk.pack(side="left")
+        self.keep_hint = ttk.Label(self.keep_row, text="", foreground=theme.MUTED, font=base)
+        self.keep_hint.pack(side="left", padx=(8, 0))
+        self.keep_tip = Tip(self.keep_chk)
+        self._keep_shown = False
+        self._head_sep = ttk.Separator(self.tpage, orient="horizontal")
+        self._head_sep.pack(fill="x")
 
         # amber mute bar (packed only while muted)
         self.mute_bar = tk.Frame(self.tpage, bg=theme.MUTE_BAR_BG)
@@ -133,6 +154,13 @@ class MainWindow:
         self.notice = tk.Label(self.tpage, text="", anchor="w", justify="left", font=base,
                                padx=int(10 * scale), pady=int(4 * scale), wraplength=int(740 * scale))
         self._notice_shown = False
+        self._banner: tuple[str, float] = ("", 0.0)  # (text, until): replaces the notice bar for a few seconds
+
+        # speaker bar (chips; packed only while the meeting has lines)
+        self.speakers = SpeakerBar(self.tpage)
+        self.speakers.on_chip = self._chip_menu
+        self.chip_menu = tk.Menu(self.speakers, tearoff=False)
+        self._speakers_shown = False
 
         # status bar (packed before the transcript so it keeps its place when the window is small)
         ttk.Separator(self.tpage, orient="horizontal").pack(side="bottom", fill="x")
@@ -156,6 +184,10 @@ class MainWindow:
         self.view.on_delete_mark = self._delete_mark
         self.view.on_bookmark_line = self._bookmark_line
         self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
+        self.view.on_play = self._play_row
+        self.view.on_hear_voice = self._hear_voice
+        self.view.voice_state = self._voice_state
+        self.win.bind("<Escape>", lambda e: self.app.stop_playback())
 
         self.meetings = MeetingsView(self.win, app, post=self._post, on_open=self.open_meeting,
                                      on_back=self.show_transcript, has_session=lambda: self.session is not None,
@@ -241,6 +273,8 @@ class MainWindow:
 
     def open_meeting(self, folder: mt.MeetingFolder) -> None:
         self._show_page("transcript")
+        if self.session is not None and self.session.folder.path != folder.path:
+            self.app.stop_playback()  # a clip of the meeting just left would play on, unlabelled
         self.view.clear()
         self.session = MeetingSession(folder)
         st = self.app.state
@@ -314,6 +348,121 @@ class MainWindow:
         self.app.toggle_mic_muted()
         self._refresh_all()
 
+    # -- click to hear (WP7) ----------------------------------------------------------------------
+    def _banner_view(self) -> logic.NoticeView | None:
+        text, until = self._banner
+        return logic.NoticeView(text, "warn") if text and time.monotonic() < until else None
+
+    def _say_banner(self, text: str, seconds: float = BANNER_S) -> None:
+        self._banner = (text, time.monotonic() + seconds)
+        self._refresh_all()
+
+    def audio_context(self) -> playback.AudioContext:
+        """Where the displayed meeting's audio can be read from right now."""
+        s = self.session
+        folder, model = s.folder, s.model
+        phase = logic.meeting_phase(s.meeting_id, model, self.app.state)
+        present = [src for src in ("mic", "system") if folder.audio_file(src).exists()]
+        return playback.audio_context(
+            recording=phase == logic.RECORDING, stopping=phase == logic.STOPPING, done=folder.is_done,
+            meta=model.meta, present=present, oldest_ms=self.app.recent_oldest_ms(folder))
+
+    def _refresh_play(self) -> None:
+        if self.session is not None:
+            self.view.set_audio(self.audio_context(), self.app.playing_key)
+
+    def _play_row(self, row) -> None:
+        """The play control of a line or bookmark row (also Space on the selected line)."""
+        if self.session is None:
+            return
+        clip = logic.row_clip(self.session.model, row)
+        if clip is None:
+            return
+        if self.app.playing_key == clip.key:
+            self.app.stop_playback()
+            return
+        state = self.audio_context().clip_state(clip)
+        if not state.enabled:
+            self._say_banner(state.reason)
+            return
+        self._start_clip(clip)
+
+    def _start_clip(self, clip: playback.Clip, confirmed: bool = False) -> None:
+        result = self.app.play_clip(self.session.folder, clip, confirmed=confirmed)
+        if result.status == "confirm":
+            if messagebox.askyesno("Play this clip?", result.message, parent=self.win, default="no"):
+                self._start_clip(clip, confirmed=True)
+            return
+        if result.status != "playing":
+            self._say_banner(result.message)
+            return
+        if result.notice:
+            self._say_banner(result.notice)
+        self.view.set_playing(self.app.playing_key)
+
+    def _voice_state(self, person_key: str) -> tuple[bool, str]:
+        if self.session is None:
+            return False, ""
+        row, why = logic.voice_sample(self.session.model, person_key, self.audio_context())
+        return row is not None, why
+
+    def _hear_voice(self, person_key: str) -> None:
+        if self.session is None:
+            return
+        row, why = logic.voice_sample(self.session.model, person_key, self.audio_context())
+        if row is None:
+            self._say_banner(why)
+            return
+        clip = playback.line_clip(row)
+        if self.app.playing_key == clip.key:
+            self.app.stop_playback()
+        else:
+            self._start_clip(clip)
+
+    def _chip_menu(self, person_key: str, x_root: int, y_root: int) -> None:
+        """A speaker chip was clicked: its menu (naming joins it in WP8)."""
+        ok, why = self._voice_state(person_key)
+        menu = self.chip_menu
+        menu.delete(0, "end")
+        menu.add_command(label="Hear this voice", command=lambda: self._hear_voice(person_key),
+                         state="normal" if ok else "disabled")
+        if not ok and why:
+            menu.add_command(label=logic.short_name(why, 60), state="disabled")
+        menu.tk_popup(x_root, y_root)
+
+    def _set_speakers(self, model) -> None:
+        chips = logic.speaker_chips(model) if model is not None else []
+        if chips and not self._speakers_shown:
+            self.speakers.pack(fill="x", before=self.view)
+            self._speakers_shown = True
+        elif not chips and self._speakers_shown:
+            self.speakers.pack_forget()
+            self._speakers_shown = False
+        if chips:
+            colors = {r.person_key: r for r in model.rows if isinstance(r, LineRow)}
+            self.speakers.set_chips(chips, lambda key: self.view.color_of(colors[key]))
+
+    def _set_keep(self, v: logic.KeepAudioView) -> None:
+        if v.visible:
+            if self.keep_var.get() != v.checked:
+                self.keep_var.set(v.checked)
+            self.keep_tip.text = v.tooltip
+            hint = ("The audio is kept, so lines can be played later." if v.checked
+                    else "Otherwise the audio is deleted when the final transcript is ready.")
+            if self.keep_hint.cget("text") != hint:
+                self.keep_hint.configure(text=hint)
+            if not self._keep_shown:
+                self.keep_row.pack(fill="x", after=self._head_sep)
+                self._keep_shown = True
+        elif self._keep_shown:
+            self.keep_row.pack_forget()
+            self._keep_shown = False
+
+    def _toggle_keep(self) -> None:
+        if self.session is not None:
+            self.app.set_keep_audio(self.session.folder, bool(self.keep_var.get()))
+            self._tick_slow()  # read the new meta now, so the box does not flip back until the next second
+
     # -- timers --------------------------------------------------------------------------
     def _schedule(self, name: str, ms: int, fn) -> None:
         def run():
@@ -342,6 +491,7 @@ class MainWindow:
         s = self.session
         if s is None:
             return FAST_MS
+        self.view.set_playing(self.app.playing_key)
         ops = s.poll()
         self._apply(ops)
         return FAST_MORE_MS if s.has_more else FAST_MS
@@ -404,6 +554,8 @@ class MainWindow:
             self.dot.configure(fg=theme.IDLE)
             self.head_text.configure(text="No meeting open")
             self._set_mute(None, None)
+            self._set_keep(logic.KeepAudioView(False))
+            self._set_speakers(None)
             self._set_notice(None)
             self._set_status(logic.StatusView(None, None, "", False, False))
             self._placeholder()
@@ -417,8 +569,11 @@ class MainWindow:
         self.win.title(f"{model.title} — Huddle Helper")
         self._set_mute(logic.mute_button_view(mid, model, state, self._hotkeys().get("mute", "")),
                        logic.mute_bar_view(mid, model, state))
-        self._set_notice(logic.notice_view(mid, model, state))
+        self._set_notice(self._banner_view() or logic.notice_view(mid, model, state))
         self._set_status(logic.status_view(mid, model, state))
+        self._set_keep(logic.keep_audio_view(mid, model, state))
+        self._set_speakers(model)
+        self._refresh_play()
 
     def _set_mute(self, button: logic.MuteButtonView | None, bar: logic.MuteBarView | None) -> None:
         """The header toggle and the amber bar (the bar sits above the notice bar)."""
@@ -436,7 +591,8 @@ class MainWindow:
             if self.mute_bar_text.cget("text") != bar.text:
                 self.mute_bar_text.configure(text=bar.text)
             if not self._mute_bar_shown:
-                self.mute_bar.pack(fill="x", before=self.notice if self._notice_shown else self.view)
+                self.mute_bar.pack(fill="x", before=self.notice if self._notice_shown else (
+                    self.speakers if self._speakers_shown else self.view))
                 self._mute_bar_shown = True
         elif self._mute_bar_shown:
             self.mute_bar.pack_forget()
@@ -448,11 +604,12 @@ class MainWindow:
                 self.notice.pack_forget()
                 self._notice_shown = False
             return
-        bg, fg = (theme.FAILED_BG, theme.FAILED_FG) if n.level == "error" else (theme.NOTICE_BG, theme.NOTICE_FG)
+        bg, fg = {"error": (theme.FAILED_BG, theme.FAILED_FG), "warn": (theme.WARN_BG, theme.WARN_FG)}.get(
+            n.level, (theme.NOTICE_BG, theme.NOTICE_FG))
         if self.notice.cget("text") != n.text or self.notice.cget("bg") != bg:
             self.notice.configure(text=n.text, bg=bg, fg=fg)
         if not self._notice_shown:
-            self.notice.pack(fill="x", before=self.view)
+            self.notice.pack(fill="x", before=self.speakers if self._speakers_shown else self.view)
             self._notice_shown = True
 
     def _set_status(self, v: logic.StatusView) -> None:

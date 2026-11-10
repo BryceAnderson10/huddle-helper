@@ -10,7 +10,7 @@ from huddle_helper import meeting as mt
 from huddle_helper.app import AppState
 from huddle_helper.transcript_model import Reset, TranscriptModel
 
-from .helpers import make_meeting
+from .helpers import make_meeting, play_stub
 
 
 @pytest.fixture()
@@ -48,7 +48,7 @@ def test_view_applies_ops_in_order_and_reads_back(root):
     lines = view.plain_text().splitlines()
     assert [l.split("\t")[-1] for l in lines[:3]] == ["first line.", "second line.", "third line."]
     assert "Decision · Ship it" in lines[3] and "You muted your mic" in lines[4]
-    assert lines[0].startswith("09:30:01\tYou\t") and view.row_count == 5
+    assert lines[0].startswith("▶\t09:30:01\tYou\t") and view.row_count == 5  # the play control comes first
     # rename + remove through ops
     ops = m.apply_tags([{"type": "tag", "scope": "speaker", "label": "SPEAKER_01", "name": "Dana"}])
     ops += m.apply_tags([{"type": "tag", "scope": "line", "source": "system", "start_ms": 5000, "name": "Eric"}])
@@ -70,7 +70,7 @@ def test_window_follows_a_meeting_and_shows_header_and_status(root, tmp_path):
     folder = make_meeting(tmp_path, [("mic", 0, 1000, "You", "hello."), ("system", 2000, 3000, "SPEAKER_00", "hi.")],
                           status=mt.STATUS_RECORDING, title="Smoke")
     ctl = SimpleNamespace(state=AppState(phase="ready"), settings=SimpleNamespace(
-        resolved_meetings_dir=lambda: tmp_path), current_folder=lambda: None)
+        resolved_meetings_dir=lambda: tmp_path), current_folder=lambda: None, **play_stub())
     w = MainWindow(root, ctl)
     w.show(folder)
     root.update()
@@ -164,6 +164,7 @@ class FakeApp:
         self.folder = folder
         self.calls = []
         self.muted = False
+        self.__dict__.update(play_stub())
         self.settings = SimpleNamespace(resolved_meetings_dir=lambda: tmp_path,
                                         hotkeys={"mute": "Ctrl+Alt+M", "decision": "Ctrl+Alt+D"})
 
@@ -351,7 +352,7 @@ def test_meetings_view_lists_filters_selects_retries_and_deletes(root, tmp_path)
         return res
 
     ctl = SimpleNamespace(state=AppState(phase="ready"), settings=SimpleNamespace(resolved_meetings_dir=lambda: tmp_path),
-                          current_folder=lambda: None, live_state=lambda: live[0],
+                          current_folder=lambda: None, live_state=lambda: live[0], **play_stub(),
                           retry_final=lambda mid: calls["retry"].append(mid) or "started", delete_meetings=delete_meetings)
     posted, opened, deleted = [], [], []
     top = tk.Toplevel(root)
@@ -445,7 +446,7 @@ def test_window_switches_between_the_transcript_and_the_meetings_list(root, tmp_
 
     done, _failed = meetings_fixture(tmp_path)
     ctl = SimpleNamespace(state=AppState(phase="ready"), settings=SimpleNamespace(resolved_meetings_dir=lambda: tmp_path),
-                          current_folder=lambda: None, live_state=lambda: library.LiveState())
+                          current_folder=lambda: None, live_state=lambda: library.LiveState(), **play_stub())
     w = MainWindow(root, ctl)
     w.show_meetings()
     assert w.page == "meetings" and w.meetings.winfo_manager() == "pack" and w.tpage.winfo_manager() == ""

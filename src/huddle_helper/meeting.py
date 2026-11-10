@@ -216,6 +216,15 @@ class MeetingFolder:
             write_json_atomic(self.meta_path, meta)
             return meta
 
+    def update_meta_settings(self, **changes) -> dict:
+        """Change entries of ``meta["settings"]`` (the settings in force for this meeting) without
+        touching the others, in one locked read-modify-write."""
+        with self._lock:
+            meta = self.read_meta()
+            meta["settings"] = {**(meta.get("settings") or {}), **changes}
+            write_json_atomic(self.meta_path, meta)
+            return meta
+
     def drop_meta(self, *keys: str) -> dict:
         """Remove keys from meta.json (e.g. ``error`` when a failed final pass is retried)."""
         with self._lock:

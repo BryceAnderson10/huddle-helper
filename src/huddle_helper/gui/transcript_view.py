@@ -15,6 +15,7 @@ import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Callable
 
+from .. import playback
 from ..diarize import YOU
 from ..transcript_model import GapRow, Insert, LineRow, MarkRow, Remove, Row, TranscriptModel, Update
 from . import logic, theme
@@ -33,14 +34,15 @@ class TranscriptView(ttk.Frame):
         self.f_italic = tkfont.Font(root=root, family=theme.FONT_FAMILY, size=theme.FONT_SIZE_SMALL,
                                     slant="italic")
         pad = int(14 * self._scale)
-        self.x_speaker = self.f_small.measure("00:00:00") + pad
+        self.x_time = self.f_small.measure(theme.STOP_GLYPH) + pad  # the play control comes first
+        self.x_speaker = self.x_time + self.f_small.measure("00:00:00") + pad
         self.spk_w = self.f_bold.measure("n" * 15) + pad
         self.x_text = self.x_speaker + self.spk_w
 
         self.text = tk.Text(self, wrap="word", state="disabled", font=self.f_base, bg="white", fg=theme.TEXT,
                             relief="flat", borderwidth=0, highlightthickness=0, padx=int(10 * self._scale),
                             pady=int(6 * self._scale), cursor="arrow", takefocus=True, undo=False,
-                            tabs=(self.x_speaker, self.x_text), selectbackground=theme.SELECTED_BG,
+                            tabs=(self.x_time, self.x_speaker, self.x_text), selectbackground=theme.SELECTED_BG,
                             selectforeground=theme.TEXT, inactiveselectbackground=theme.SELECTED_BG)
         self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=self._on_yscroll)
@@ -56,6 +58,19 @@ class TranscriptView(ttk.Frame):
         self.on_bookmark_line: Callable[[LineRow, str], None] | None = None
         self.bookmark_items: Callable[[], list[logic.BookmarkItem]] = lambda: []
         self.text.bind("<Control-c>", lambda e: (self.copy_selection(), "break")[1])
+        # Click to hear (WP7), set by the window: play a row, and the "Hear this voice" menu entry.
+        self.on_play: Callable[[Row], None] | None = None
+        self.on_hear_voice: Callable[[str], None] | None = None
+        self.voice_state: Callable[[str], tuple[bool, str]] = lambda key: (False, "")
+        self.text.bind("<space>", self._space)
+        self.text.bind("<Motion>", self._motion)
+        self.text.bind("<Leave>", lambda e: self._hide_tip())
+        self._ctx: playback.AudioContext | None = None
+        self._ctx_sig: tuple | None = None
+        self._playing_key: str | None = None
+        self._selected: tuple[str, int] | None = None  # LineRow.key of the selected line
+        self._tip: tk.Toplevel | None = None
+        self._tip_for: str | None = None
 
         self.new_button = ttk.Button(self, command=self.jump_to_end)
         self.placeholder = ttk.Label(self, text="", foreground=theme.MUTED, font=self.f_base, anchor="center",
@@ -88,6 +103,13 @@ class TranscriptView(ttk.Frame):
             t.tag_configure(f"kind:{kind}", foreground=color, font=self.f_bold)
         t.tag_configure("kind:other", foreground=theme.KIND_COLORS["bookmark"], font=self.f_bold)
         t.tag_configure("changed", background=theme.CHANGED_BG)
+        t.tag_configure("play", font=self.f_small)
+        t.tag_configure("play-on", foreground=theme.PLAY_ON)
+        t.tag_configure("play-off", foreground=theme.PLAY_OFF)
+        t.tag_configure("selrow", background=theme.SELECTED_BG)
+        t.tag_configure("playing", background=theme.PLAYING_BG)
+        t.tag_raise("selrow")
+        t.tag_raise("playing")
         t.tag_raise("changed")
         t.tag_raise("sel")
 
@@ -148,14 +170,74 @@ class TranscriptView(ttk.Frame):
                 hi = mid
         return (lo - 1, self._rows[lo - 1]) if lo > 0 else None
 
+    def _on_glyph(self, x: int) -> bool:
+        return x < int(self.text.cget("padx")) + self.x_time
+
     def _click(self, event) -> str | None:
         self.text.focus_set()
         hit = self.row_at(event.x, event.y)
-        if hit is not None and isinstance(hit[1], MarkRow) and self.on_edit_mark is not None:
-            row = hit[1]
+        if hit is None:
+            return None
+        row = hit[1]
+        if logic.row_play_key(row) is not None and self._on_glyph(event.x) and self.on_play is not None:
+            self.after_idle(lambda: self.on_play(row))
+            return "break"
+        if isinstance(row, MarkRow) and self.on_edit_mark is not None:
             self.after_idle(lambda: self.on_edit_mark(row))  # not inside the click: the dialog grabs input
             return "break"
+        if isinstance(row, LineRow):
+            self.select(row)
         return None
+
+    # -- selection (Space replays it) and the play control's tooltip -------------------------------
+    def select(self, row: LineRow | None) -> None:
+        self._selected = row.key if row is not None else None
+        self._restyle_selected()
+
+    @property
+    def selected_row(self) -> LineRow | None:
+        if self._selected is None:
+            return None
+        return next((r for r in self._rows if isinstance(r, LineRow) and r.key == self._selected), None)
+
+    def _restyle_selected(self) -> None:
+        self.text.tag_remove("selrow", "1.0", "end")
+        for i, r in enumerate(self._rows):
+            if isinstance(r, LineRow) and r.key == self._selected:
+                self.text.tag_add("selrow", self._start(i), self._end(i))
+                return
+
+    def _space(self, event) -> str:
+        row = self.selected_row
+        if row is not None and self.on_play is not None:
+            self.on_play(row)
+        return "break"
+
+    def _motion(self, event) -> None:
+        hit = self.row_at(event.x, event.y) if self._ctx is not None else None
+        key = logic.row_play_key(hit[1]) if hit else None
+        if hit is None or key is None or not self._on_glyph(event.x):
+            self.text.configure(cursor="arrow")
+            self._hide_tip()
+            return
+        st = logic.row_play_state(self._ctx, hit[1])
+        self.text.configure(cursor="hand2" if st.enabled else "arrow")
+        if st.enabled:
+            self._hide_tip()
+        elif self._tip_for != key:
+            self._hide_tip()
+            self._tip_for = key
+            tip = self._tip = tk.Toplevel(self)
+            tip.wm_overrideredirect(True)
+            tk.Label(tip, text=st.reason, justify="left", wraplength=int(300 * self._scale), background="#ffffe1",
+                     relief="solid", borderwidth=1, font=self.f_small, padx=6, pady=3).pack()
+            tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+
+    def _hide_tip(self) -> None:
+        self._tip_for = None
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
 
     def _popup(self, event) -> None:
         self.text.focus_set()
@@ -167,6 +249,22 @@ class TranscriptView(ttk.Frame):
         """The right-click menu for ``row`` (a line, a bookmark or empty space)."""
         menu = self.menu
         menu.delete(0, "end")
+        key = logic.row_play_key(row) if row is not None else None
+        if key is not None and self.on_play is not None:
+            st = logic.row_play_state(self._ctx, row) if self._ctx is not None else playback.PlayState(False)
+            playing = key == self._playing_key
+            label = "Stop" if playing else ("Play from 10 s before" if isinstance(row, MarkRow) else "Play")
+            menu.add_command(label=label, command=lambda r=row: self.on_play(r),
+                             state="normal" if (st.enabled or playing) else "disabled")
+        if isinstance(row, LineRow) and self.on_hear_voice is not None:
+            ok, why = self.voice_state(row.person_key)
+            menu.add_command(label=f"Hear this voice ({logic.short_name(row.display, 24)})",
+                             command=lambda k=row.person_key: self.on_hear_voice(k),
+                             state="normal" if ok else "disabled")
+            if not ok and why:
+                menu.add_command(label=logic.short_name(why, 60), state="disabled")
+        if menu.index("end") is not None and isinstance(row, LineRow):
+            menu.add_separator()
         if isinstance(row, LineRow) and self.on_bookmark_line is not None:
             sub = tk.Menu(menu, tearoff=False)
             for item in self.bookmark_items():
@@ -187,7 +285,7 @@ class TranscriptView(ttk.Frame):
         except tk.TclError:
             return
         self.clipboard_clear()
-        self.clipboard_append(chunk)
+        self.clipboard_append(logic.copyable(chunk))
 
     # -- reading back (smoke test, debugging) ------------------------------------------
     def plain_text(self) -> str:
@@ -269,6 +367,15 @@ class TranscriptView(ttk.Frame):
         self.text.mark_set(mid, at)
         self._ids.insert(i, mid)
         self._rows.insert(i, row)
+        self._mark_row_state(i, row)
+
+    def _mark_row_state(self, i: int, row: Row) -> None:
+        """A (re)drawn row that is the playing one, or the selected line, gets its background."""
+        key = logic.row_play_key(row)
+        if key is not None and key == self._playing_key:
+            self.text.tag_add("playing", self._start(i), self._end(i))
+        if isinstance(row, LineRow) and row.key == self._selected:
+            self.text.tag_add("selrow", self._start(i), self._end(i))
 
     def _update_row(self, i: int, row: Row) -> None:
         start, end = self._start(i), self._end(i)
@@ -276,6 +383,7 @@ class TranscriptView(ttk.Frame):
         self.text.insert(start, *self._segments(row))
         self.text.mark_set(self._ids[i], start)
         self._rows[i] = row
+        self._mark_row_state(i, row)
 
     def _remove_row(self, i: int) -> None:
         self.text.delete(self._start(i), self._end(i))
@@ -302,14 +410,73 @@ class TranscriptView(ttk.Frame):
         if isinstance(row, LineRow):
             tag = f"spk:{row.person_key}"
             self.text.tag_configure(tag, foreground=self._color_for(row))
-            return [t, ("line", "time"), "\t", ("line",), self._fit(row.display), ("line", "spk", tag),
+            return [self._glyph(row), self._glyph_tags(row, "line"), "\t", ("line",), t, ("line", "time"),
+                    "\t", ("line",), self._fit(row.display), ("line", "spk", tag),
                     "\t", ("line",), row.text.strip() + "\n", ("line", "body")]
         if isinstance(row, GapRow):
             return ["\t" + logic.gap_text(row, model) + "\n", ("gaprow",)]
         kind_tag = f"kind:{row.kind}" if row.kind in theme.KIND_COLORS else "kind:other"
         symbol = theme.KIND_SYMBOLS.get(row.kind, theme.KIND_SYMBOLS["bookmark"])
-        return [t, ("markrow", "time"), "\t", ("markrow",), f"{symbol} {logic.mark_text(row, model)}",
+        return [self._glyph(row), self._glyph_tags(row, "markrow"), "\t", ("markrow",), t, ("markrow", "time"),
+                "\t", ("markrow",), f"{symbol} {logic.mark_text(row, model)}",
                 ("markrow", kind_tag), "  [edit]", ("markrow", "markedit"), "\n", ("markrow",)]
+
+    # -- play controls (WP7) ----------------------------------------------------------------------
+    def _glyph(self, row: Row) -> str:
+        return theme.STOP_GLYPH if logic.row_play_key(row) == self._playing_key else theme.PLAY_GLYPH
+
+    def _glyph_tags(self, row: Row, base: str) -> tuple[str, ...]:
+        enabled = self._ctx is not None and logic.row_play_state(self._ctx, row).enabled
+        return (base, "play", "play-on" if enabled else "play-off")
+
+    def set_audio(self, ctx: playback.AudioContext, playing_key: str | None) -> None:
+        """Tell the view where audio can be read from and which clip is playing; restyles the play
+        controls when either changed (greyed out or not, play or stop, the playing row's background)."""
+        if ctx.signature != self._ctx_sig:
+            self._ctx, self._ctx_sig = ctx, ctx.signature
+            self._restyle_all_glyphs()
+        else:
+            self._ctx = ctx
+        self.set_playing(playing_key)
+
+    def set_playing(self, key: str | None) -> None:
+        if key == self._playing_key:
+            return
+        old, self._playing_key = self._playing_key, key
+        self.text.configure(state="normal")
+        try:
+            for i, row in enumerate(self._rows):
+                rk = logic.row_play_key(row)
+                if rk is not None and (rk == old or rk == key):
+                    self._restyle_glyph(i, row)
+                    if rk == key:
+                        self.text.tag_add("playing", self._start(i), self._end(i))
+                    else:
+                        self.text.tag_remove("playing", self._start(i), self._end(i))
+        finally:
+            self.text.configure(state="disabled")
+
+    def _restyle_glyph(self, i: int, row: Row) -> None:
+        """Replace the first character of row ``i`` (its play control) in place; the row mark stays."""
+        start = self._start(i)
+        base = "markrow" if isinstance(row, MarkRow) else "line"
+        self.text.delete(start, f"{start}+1c")
+        self.text.insert(start, self._glyph(row), self._glyph_tags(row, base))
+        self.text.mark_set(self._ids[i], start)
+
+    def _restyle_all_glyphs(self) -> None:
+        t = self.text
+        t.tag_remove("play-on", "1.0", "end")
+        t.tag_remove("play-off", "1.0", "end")
+        for i, row in enumerate(self._rows):
+            if logic.row_play_key(row) is None:
+                continue
+            start = self._start(i)
+            enabled = self._ctx is not None and logic.row_play_state(self._ctx, row).enabled
+            t.tag_add("play-on" if enabled else "play-off", start, f"{start}+1c")
+
+    def color_of(self, row: LineRow) -> str:
+        return self._color_for(row)
 
     # -- highlight ----------------------------------------------------------------------------
     def highlight(self, keys) -> int:

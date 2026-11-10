@@ -10,6 +10,9 @@
 * ``mute_bar_view`` ``mute_button_view`` ``bookmark_items`` ``mark_changes`` ``recording_status_text``
   bookmarks and mute (WP5): the amber bar, the header button, the Bookmark menu, the tray tooltip
 * ``hotkey_row_status``  what Settings → Hotkeys says next to one combo
+* ``row_clip`` ``row_play_state`` ``voice_sample`` ``speaker_chips`` ``keep_audio_view`` ``copyable``
+  click to hear (WP7): what a play control plays and whether it can, "Hear this voice", the speaker
+  chips, the Keep this meeting's audio check box
 """
 
 from __future__ import annotations
@@ -20,8 +23,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from .. import export as export_mod, meeting as mt
-from .. import marks as marks_mod
-from ..transcript_model import GapRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
+from .. import marks as marks_mod, playback
+from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
 from . import theme
 
 # -- ops ---------------------------------------------------------------------
@@ -411,3 +414,98 @@ def default_meeting(meetings_dir: Path, *, recording: mt.MeetingFolder | None = 
 def export_text(model: TranscriptModel, fmt: str, times: str, join: bool, *, clipboard: bool = False) -> str:
     """Text of the Export dialog. For the clipboard Tk converts newlines itself, so no CRLF."""
     return export_mod.render(model, fmt, times, join, crlf=False if clipboard else None)
+
+
+# -- click to hear (WP7) --------------------------------------------------------------------
+
+
+def row_clip(model: TranscriptModel, row) -> playback.Clip | None:
+    """What the play control of a row plays: a line its own stream, a bookmark what was heard around
+    it (both streams, 10 s before to 5 s after). Gap rows have no play control."""
+    if isinstance(row, LineRow):
+        return playback.line_clip(row)
+    if isinstance(row, MarkRow):
+        return playback.bookmark_clip(model.rows, row)
+    return None
+
+
+def row_play_key(row) -> str | None:
+    """The ``Clip.key`` of a row without building the clip (the view does this for every row)."""
+    if isinstance(row, LineRow):
+        return playback.line_key(row.source, row.start_ms)
+    if isinstance(row, MarkRow):
+        return f"mark:{row.id}"
+    return None
+
+
+def row_play_state(ctx: playback.AudioContext, row) -> playback.PlayState:
+    """Enabled or not, and why not, for the play control of a row (cheap: no clip is built)."""
+    if isinstance(row, LineRow):
+        return ctx.state(row.source, row.start_ms)
+    if isinstance(row, MarkRow):
+        start, end = playback.bookmark_range(row.at_ms)
+        return ctx.clip_state(playback.Clip("", ("mic", "system"), start, end, ""))
+    return playback.PlayState(False, "")
+
+
+def voice_sample(model: TranscriptModel, person_key: str, ctx: playback.AudioContext
+                 ) -> tuple[LineRow | None, str]:
+    """(the line "Hear this voice" plays, "") or (None, why not). Only lines whose audio can be read now
+    are considered, so the sample is never one that would turn out to be unavailable."""
+    row = playback.pick_voice_line(model.rows, person_key,
+                                   lambda r: ctx.state(r.source, r.start_ms).enabled)
+    if row is not None:
+        return row, ""
+    if ctx.mode == "none" and ctx.reason:
+        return None, ctx.reason
+    has_lines = any(isinstance(r, LineRow) and r.person_key == person_key for r in model.rows)
+    return None, (playback.AFTER_STOP if has_lines else "No lines from this voice yet.")
+
+
+@dataclass(frozen=True)
+class SpeakerChip:
+    person_key: str
+    display: str
+
+
+def speaker_chips(model: TranscriptModel) -> list[SpeakerChip]:
+    """One chip per person, in order of first appearance (``person_key``: two labels with the same
+    name are one chip)."""
+    seen: dict[str, SpeakerChip] = {}
+    for r in model.rows:
+        if isinstance(r, LineRow) and r.person_key not in seen:
+            seen[r.person_key] = SpeakerChip(r.person_key, r.display)
+    return list(seen.values())
+
+
+@dataclass(frozen=True)
+class KeepAudioView:
+    visible: bool
+    checked: bool = False
+    text: str = "Keep this meeting's audio"
+    tooltip: str = ""
+
+
+def keep_audio_view(meeting_id: str, model: TranscriptModel, state) -> KeepAudioView:
+    """The header's check box (L20): while the displayed meeting is recording or being processed. It
+    shows the meeting's own setting, which starts out as the Keep audio setting."""
+    if meeting_phase(meeting_id, model, state) not in (RECORDING, STOPPING, PROCESSING, WAITING):
+        return KeepAudioView(False)
+    checked = bool((model.meta.get("settings") or {}).get("keep_audio"))
+    tip = ("The audio is kept after the final transcript, so lines can be played later."
+           if checked else
+           "Off: the audio is deleted when the final transcript is ready. Tick this to keep it for this meeting.")
+    return KeepAudioView(True, checked, tooltip=tip)
+
+
+COPY_GLYPHS = "▶■"
+
+
+def copyable(chunk: str) -> str:
+    """Selected transcript text without the play controls at the start of rows."""
+    out = []
+    for line in chunk.split("\n"):
+        if line[:1] and line[0] in COPY_GLYPHS and line[1:2] == "\t":
+            line = line[2:]
+        out.append(line)
+    return "\n".join(out)

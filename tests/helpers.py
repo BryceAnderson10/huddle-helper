@@ -60,3 +60,21 @@ def make_meeting(tmp_path: Path, lines, *, final=None, marks=None, tags=None, ga
         for event in events or []:
             mt.append_jsonl(path, event)
     return folder
+
+
+def play_stub(**over) -> dict:
+    """The click-to-hear members of ``AppController`` that the window uses, for SimpleNamespace stubs.
+    ``calls`` collects (name, args) of play_clip / stop_playback / set_keep_audio."""
+    from huddle_helper.app import PlayResult
+
+    calls: list = []
+    stub = {
+        "playing_key": None,
+        "recent_oldest_ms": lambda folder: None,
+        "play_calls": calls,
+        "stop_playback": lambda: calls.append(("stop",)),
+        "play_clip": lambda folder, clip, confirmed=False: calls.append(("play", clip.key, confirmed)) or PlayResult("playing"),
+        "set_keep_audio": lambda folder, keep: calls.append(("keep", keep)),
+    }
+    stub.update(over)
+    return stub
