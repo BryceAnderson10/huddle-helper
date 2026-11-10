@@ -35,7 +35,7 @@ class SpeakerBar(tk.Text):
     def set_chips(self, chips: list[logic.SpeakerChip], color_of: Callable[[str], str]) -> None:
         """Redraw when the people (or their names) changed; ``color_of(person_key)`` is the colour the
         transcript uses for that person."""
-        sig = tuple((c.person_key, c.display) for c in chips)
+        sig = tuple((c.person_key, c.display, c.unnamed) for c in chips)
         if sig == self._signature:
             return
         self._signature, self._chips = sig, list(chips)
@@ -44,8 +44,10 @@ class SpeakerBar(tk.Text):
         for i, chip in enumerate(chips):
             tag = f"chip{i}"
             self.tag_configure(tag, foreground=color_of(chip.person_key))
+            if chip.unnamed:  # a new voice nobody has named: highlighted, and asks
+                self.tag_configure(tag, background=theme.CHIP_NEW_BG)
             self.insert("end", "● ", (tag,))
-            self.insert("end", logic.short_name(chip.display, 24), (tag,))
+            self.insert("end", chip.text, (tag,))
             if i < len(chips) - 1:
                 self.insert("end", "     ")
         self.configure(state="disabled")

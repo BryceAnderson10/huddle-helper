@@ -159,10 +159,41 @@ def notice_view(meeting_id: str, model: TranscriptModel, state) -> NoticeView | 
         if problems:
             text += "\nHotkeys not working: " + "; ".join(problems) + ". The buttons and the tray menu still work."
         return NoticeView(text, "info")
-    if model.conflicts:
-        n = len(model.conflicts)
-        return NoticeView(f"{n} speaker name conflict{'' if n == 1 else 's'} after the final pass.", "info")
-    return None
+    texts = naming_notices(model)
+    return NoticeView(chr(10).join(texts), "info") if texts else None
+
+
+def _secs(ms: int) -> str:
+    s = round(ms / 1000)
+    return f"{s} s" if s < 90 else f"{round(s / 60)} min"
+
+
+def conflict_text(conflict: dict, model: TranscriptModel) -> str:
+    """"Final pass put Ana and Ben together (SPEAKER_01): 41 s of Ana, 12 s of Ben. Shown as Ana."."""
+    names = conflict.get("names") or {}
+    ranked = sorted(names.items(), key=lambda kv: -kv[1])
+    label = str(conflict.get("speaker") or "")
+    who = " and ".join(n for n, _ in ranked)
+    amounts = ", ".join(f"{_secs(ms)} of {n}" for n, ms in ranked)
+    shown = model._final_names.get(label)
+    tail = f" Shown as {shown}." if shown else ""
+    return f"Final pass put {who} together ({label}): {amounts}.{tail} Name its lines or the speaker to settle it."
+
+
+def unnamed_speakers(model: TranscriptModel) -> list[str]:
+    """Labels of the speakers nobody has named (``You`` and ``Remote`` are not asked for)."""
+    return [c.display for c in speaker_chips(model) if c.unnamed]
+
+
+def naming_notices(model: TranscriptModel) -> list[str]:
+    """Lines for the notice bar of a finished meeting: name conflicts the final pass reported, and, once
+    someone has been named, the speakers still without a name."""
+    out = [conflict_text(c, model) for c in model.conflicts]
+    names = [s for s in model.speakers() if s.name]
+    unnamed = unnamed_speakers(model)
+    if names and unnamed:
+        out.append("Not named yet: " + ", ".join(unnamed) + ". Click a speaker above to name it.")
+    return out
 
 
 def format_eta(seconds: float | None) -> str:
@@ -462,20 +493,76 @@ def voice_sample(model: TranscriptModel, person_key: str, ctx: playback.AudioCon
     return None, (playback.AFTER_STOP if has_lines else "No lines from this voice yet.")
 
 
+ASK_WHO = "Who is this?"
+KNOWN_LABELS = ("You", "Remote")  # speakers that need no name
+
+
 @dataclass(frozen=True)
 class SpeakerChip:
     person_key: str
     display: str
+    unnamed: bool = False  # a voice nobody has named: shown as "SPEAKER_05 · Who is this?"
+    labels: tuple[str, ...] = ()  # raw labels behind this chip
+
+    @property
+    def text(self) -> str:
+        return f"{short_name(self.display, 24)} · {ASK_WHO}" if self.unnamed else short_name(self.display, 24)
 
 
 def speaker_chips(model: TranscriptModel) -> list[SpeakerChip]:
     """One chip per person, in order of first appearance (``person_key``: two labels with the same
-    name are one chip)."""
-    seen: dict[str, SpeakerChip] = {}
+    name are one chip). A voice with no name (not ``You`` / ``Remote``) asks "Who is this?"."""
+    order: dict[str, list] = {}
     for r in model.rows:
-        if isinstance(r, LineRow) and r.person_key not in seen:
-            seen[r.person_key] = SpeakerChip(r.person_key, r.display)
-    return list(seen.values())
+        if isinstance(r, LineRow):
+            e = order.setdefault(r.person_key, [r.display, r.name is None and r.label not in KNOWN_LABELS, []])
+            if r.label not in e[2]:
+                e[2].append(r.label)
+    return [SpeakerChip(k, d, u, tuple(ls)) for k, (d, u, ls) in order.items()]
+
+
+@dataclass(frozen=True)
+class NamePlan:
+    """What naming a chip writes: speaker names for ``labels``, line names for ``lines`` (the chip's
+    lines that were named one by one, which a speaker name would not reach). In the final view only
+    ``labels`` are used (speakers.json)."""
+    labels: tuple[str, ...]
+    lines: tuple[LineRow, ...] = ()
+
+
+def name_plan(model: TranscriptModel, person_key: str) -> NamePlan:
+    labels: list[str] = []
+    lines: list[LineRow] = []
+    for r in model.rows:
+        if not isinstance(r, LineRow) or r.person_key != person_key:
+            continue
+        if not model.final and model.has_line_tag(r.source, r.start_ms):
+            lines.append(r)
+        elif r.label not in labels:
+            labels.append(r.label)
+    return NamePlan(tuple(labels), tuple(lines))
+
+
+def name_choices(model: TranscriptModel, exclude: str | None = None) -> list[str]:
+    """Names already used in this meeting, for the picker (first appearance order)."""
+    return [s.name for s in model.speakers() if s.name and s.name != exclude]
+
+
+@dataclass(frozen=True)
+class LineNameMenu:
+    """The "This line is…" submenu of a line: names used in this meeting (not the line's current one),
+    whether the line has a name of its own to clear. ``enabled`` is False in the final view (plan decision 4)."""
+    enabled: bool
+    choices: tuple[str, ...] = ()
+    can_clear: bool = False
+    note: str = ""
+
+
+def line_name_menu(model: TranscriptModel, row: LineRow) -> LineNameMenu:
+    if model.final:
+        return LineNameMenu(False, note="Live view only: name the speaker instead")
+    return LineNameMenu(True, tuple(name_choices(model, exclude=row.name)),
+                        model.has_line_tag(row.source, row.start_ms))
 
 
 @dataclass(frozen=True)

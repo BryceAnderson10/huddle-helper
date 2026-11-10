@@ -538,3 +538,27 @@ What went well:
   default output device while a clip plays (capture must rebind and log the gap).
 - [ ] All new windows and dialogs at 125–150% display scaling; a saved export in Notepad
   and a Markdown viewer; Show in Explorer.
+
+## From naming speakers (WP8)
+
+- [x] **Names given in the window steer the final pass** (`speaker_tags.jsonl`, `tags.py`).
+  With no tags the final output is byte-identical to before on Tests #2, #3 and #4
+  (31, 15 and 192 lines). Test #3 replay with two names given while recording: both final
+  speakers named, the third and `You` untouched. Test #4 final pass on copies with two
+  names: the five-speaker partition is unchanged. At a looser threshold (0.50 / 0.60),
+  where plain clustering merges people, the named ones stay apart.
+- [x] **A named small cluster may fold into a larger cluster with the same name**
+  (departure from the plan's "never folded"): naming a whole speaker otherwise left its
+  1 s lines as extra speakers with the same name. It is still never folded into an
+  unnamed or differently named cluster.
+- [ ] **Only named people are protected.** At threshold 0.60 on Test #4 a named speaker
+  took in 74 s of an unnamed one. Not a problem at the shipped 0.70; a reason not to
+  lower it.
+- [ ] A line under 0.5 s has no fingerprint, so naming it cannot steer clustering (it
+  still counts for the mapping). Consider saying so in the picker.
+- [ ] After the swap to the final view the top row can sit partly hidden (seen in
+  `lab\wp8\shots\10`). Likely WP4 scroll behaviour.
+- [ ] *Needs a person:* name people during a real call; the "This line is…" submenu (it
+  could not be photographed by script); the full 22-minute Test #4 replay with tags; the
+  downstream reader for `speaker_tags.jsonl` and the new `speakers.json` fields
+  (`from_tags`, `conflicts`).

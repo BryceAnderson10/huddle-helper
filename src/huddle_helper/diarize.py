@@ -147,7 +147,8 @@ class OfflineDiarizer(Protocol):
     def diarize(self, audio: np.ndarray, progress: Callable[[float], None] | None = None) -> list[Turn]: ...
 
 
-def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: float = 0.70) -> list[int]:
+def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: float = 0.70,
+                   names: list[str | None] | None = None) -> list[int]:
     """Average-linkage clustering of voice fingerprints over a whole meeting.
 
     Unlike the live pass, every line is compared with every other line, so the order lines
@@ -161,6 +162,10 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     out of the large cluster and its 74 s speaker exactly as before, and gets the synthetic
     two-voice meeting right. Below 0.685 Test #4's 28 s speaker merges into the 325 s one; from
     0.715 the 74 s speaker takes in other lines. 0.65, the earlier default, merged that 28 s speaker.
+
+    ``names[i]`` is the user's name for line ``i`` or None (L14). Two clusters that hold different names
+    are never merged: their similarity is set to -inf at the start and again after every merge. Nothing
+    else about the linkage changes, so with no names (or all None) the result is exactly the same.
     """
     n = len(vecs)
     if n == 0:
@@ -172,6 +177,14 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     W = w.copy()  # total weight per cluster
     active = np.ones(n, dtype=bool)
     members: list[list[int]] = [[i] for i in range(n)]
+    cluster_name: list[str | None] = list(names) if names is not None and any(names) else [None] * n
+    named = any(cluster_name)
+    if named:  # cannot-link: different names never share a cluster
+        for i in range(n):
+            if cluster_name[i] is not None:
+                for j in range(n):
+                    if cluster_name[j] is not None and cluster_name[j] != cluster_name[i]:
+                        S[i, j] = -np.inf
     while active.sum() > 1:
         flat = int(np.argmax(S))
         i, j = divmod(flat, n)
@@ -182,6 +195,12 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
         S[i, :] = new
         S[:, i] = new
         S[i, i] = -np.inf
+        if named:
+            cluster_name[i] = cluster_name[i] or cluster_name[j]
+            if cluster_name[i] is not None:
+                for k in range(n):
+                    if k != i and active[k] and cluster_name[k] not in (None, cluster_name[i]):
+                        S[i, k] = S[k, i] = -np.inf
         S[j, :] = -np.inf
         S[:, j] = -np.inf
         W[i] += W[j]
@@ -203,7 +222,8 @@ def _centroid(vecs: list[np.ndarray], weights: list[float], members: list[int]) 
 
 def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list[float], *,
                         min_s: float = 4.0, min_fraction: float = 0.03, always_fold_s: float = 4.0,
-                        min_similarity: float = 0.70, protected: set[int] | None = None) -> list[int]:
+                        min_similarity: float = 0.70, protected: set[int] | None = None,
+                        cluster_names: dict[int, str] | None = None) -> list[int]:
     """Give clusters with little speech to their most similar larger cluster, if they sound alike.
 
     A cluster of one or two short lines ("I don't know.", 1.3 s) is usually a known voice
@@ -211,8 +231,12 @@ def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list
     ``always_fold_s`` is always folded. A bigger candidate (under the size limit, which is
     ``min_s`` or ``min_fraction`` of all speech) is a real voice more often than not: Test #4's
     28 s speaker was 0.64-0.75 like its target and was folded away. It is folded only when its
-    centroid is at least ``min_similarity`` like the target's. Clusters in ``protected`` are
-    never folded. Labels keep the target's cluster id; callers renumber.
+    centroid is at least ``min_similarity`` like the target's. Clusters in ``protected`` (they hold a
+    name the user gave) are never folded into an unnamed or differently named cluster, which would hand
+    the name to the wrong person. With ``cluster_names`` (cluster id -> its name) a protected cluster may
+    still fold into a larger cluster that carries the same name, by the same rules: otherwise naming a
+    speaker would leave that speaker's one-line fragments as speakers of their own. Labels keep the
+    target's cluster id; callers renumber.
     """
     protected = protected or set()
     totals: dict[int, float] = {}
@@ -226,11 +250,17 @@ def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list
     cents = {k: _centroid(vecs, weights, [i for i in range(len(labels)) if labels[i] == k]) for k in large}
     out = list(labels)
     for k in totals:
-        if k in large or k in protected:
+        if k in large:
             continue
+        pool = large
+        if k in protected:
+            pool = [j for j in large if cluster_names and cluster_names.get(j) is not None
+                    and cluster_names.get(j) == cluster_names.get(k)]
+            if not pool:
+                continue
         idx = [i for i in range(len(labels)) if labels[i] == k]
         c = _centroid(vecs, weights, idx)
-        target = max(large, key=lambda j: float(np.dot(c, cents[j])))
+        target = max(pool, key=lambda j: float(np.dot(c, cents[j])))
         if totals[k] >= always_fold_s and float(np.dot(c, cents[target])) < min_similarity:
             continue
         for i in idx:

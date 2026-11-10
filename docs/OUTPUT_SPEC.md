@@ -13,6 +13,7 @@ to them (except optionally `speakers.json`, see below).
     transcript.jsonl        # live, append-only, one JSON object per line
     transcript.final.jsonl  # written after Stop, refined speaker labels
     speakers.json           # optional: speaker id -> display name
+    speaker_tags.jsonl      # the user's speaker names, append-only; exists only if they named anyone
     marks.jsonl             # bookmarks, append-only; exists only if there was a bookmark
     DONE                    # empty marker, created last
     audio\                  # buffered while recording; kept only if Keep audio is on
@@ -30,9 +31,11 @@ minute with the same name, the second gets a `-2` suffix.
 * **New lines in `transcript.jsonl` = live transcript.** Read appended lines as they
   arrive. Every line is flushed to disk on write.
 * **`DONE` = safe to process.** `transcript.final.jsonl` is written under a temporary
-  name (`transcript.final.jsonl.tmp`) and renamed into place when complete. Buffered
-  audio is removed (unless kept), `meta.json` is set to `complete`, and `DONE` is created
-  last.
+  name (`transcript.final.jsonl.tmp`) and renamed into place when complete. The end of the
+  pass always runs in this order: final file renamed into place, then `speakers.json` (only if
+  the user named someone), then the buffered audio is removed (unless kept), then `meta.json`
+  is set to `complete`, and `DONE` is created last. Everything the downstream app needs is
+  therefore in place when `DONE` appears.
 
 ## `transcript.jsonl` and `transcript.final.jsonl`
 
@@ -159,15 +162,62 @@ is replaced by digital silence before anything is stored or analysed, and the pe
 * The mute does not touch the call app: the other people still hear the user. The `system` stream keeps
   recording.
 
+## `speaker_tags.jsonl` (the user's speaker names)
+
+Append-only, one JSON object per line, flushed per line. Created when the user first names a speaker
+or a line in the Transcript window; a meeting nobody was named in has no file. It is never deleted by
+the after-Stop pass. Names can also be added after Stop until `DONE` (the pass reads the file again at
+its end), so apply the events rather than trust a count.
+
+```json
+{"type":"tag","at":"2026-11-09T11:05:12-06:00","scope":"speaker","label":"SPEAKER_04","name":"Eric"}
+{"type":"tag","at":"2026-11-09T11:06:40-06:00","scope":"line","seq":31,"source":"system","start_ms":381200,"end_ms":384900,"name":"Dana"}
+{"type":"untag","at":"2026-11-09T11:07:02-06:00","scope":"speaker","label":"SPEAKER_04"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `type` | `tag` (set a name) or `untag` (remove it; no `name`). |
+| `scope` | `speaker`: every line with that **live** label in `transcript.jsonl`, past and future, until changed. `line`: one live line; it beats the speaker-level name for that line. |
+| `label` | `scope: "speaker"` only: the label as it is in `transcript.jsonl` (`SPEAKER_04`, `MIC_SPEAKER_01`, or `You` for the mic). |
+| `source`, `start_ms`, `end_ms`, `seq` | `scope: "line"`: the line's stream and times in `transcript.jsonl`. **Identify the line by `(source, start_ms)`**: `seq` is only the live file's number, and the final file numbers its lines differently. |
+| `at` | Wall-clock time of the event. |
+
+Later events win. Tags name **live** labels, so a reader following `transcript.jsonl` applies them to it.
+Once `DONE` exists, use `transcript.final.jsonl` with `speakers.json` instead and ignore the tags: the
+final pass has already turned them into names for the final labels.
+
 ## `speakers.json` (optional)
 
 ```json
-{"speakers": {"SPEAKER_01": "Dana", "SPEAKER_02": "Luis"}, "updated_at": "2026-11-09T12:10:00-06:00"}
+{"speakers": {"SPEAKER_01": "Dana", "SPEAKER_02": "Luis"},
+ "from_tags": true,
+ "conflicts": [{"speaker": "SPEAKER_02", "names": {"Luis": 41200, "Dana": 11800}}],
+ "updated_at": "2026-11-09T12:10:00-06:00"}
 ```
 
-Written by "Rename speakers…" in the tray. Keys are the labels from
-`transcript.final.jsonl`. Transcript files are never rewritten with names; apply the
-mapping when you read.
+Keys are the labels from `transcript.final.jsonl`. Transcript files are never rewritten with names;
+apply the mapping when you read.
+
+| Field | Meaning |
+| --- | --- |
+| `speakers` | Final label to display name. A speaker without an entry has no name (keep showing the label). |
+| `from_tags` | Optional, additive. `true` when the after-Stop pass wrote the names from `speaker_tags.jsonl`. |
+| `conflicts` | Optional, additive. Final speakers that hold the speech of two named people: `{"speaker", "names": {name: ms}}`, milliseconds of that person's tagged speech inside the speaker, largest first. The speaker is listed under the largest name in `speakers`. A second name is reported when it has at least 25% of the largest one's overlap. The user is shown these in the window; a downstream app can treat the speaker as uncertain. |
+| `updated_at` | When the file was last written. |
+
+How the names are made: the pass sums, for each final speaker, the overlap in ms between its segments and
+each name's tagged lines on the same stream, and the largest wins. The tags also steer the clustering
+itself: two lines the user gave different names are never put in the same final speaker, and a speaker
+holding a named line is never folded into a speaker that is unnamed or has another name. With no `speaker_tags.jsonl` the pass writes no
+`speakers.json` and the final transcript is exactly what it was before names existed.
+
+**The user's names win.** For a speaker the user named (by tag, or in the window after `DONE`, which
+writes straight to this file), the user's name is written. For every other speaker, a name the downstream
+app wrote is kept: Huddle Helper re-reads the file immediately before each write and merges into what it
+finds. The file is replaced atomically (temp file + rename), so a reader never sees half a file. A
+downstream app that writes this file should do the same: re-read, change only its own entries, write
+back, and keep the fields it does not know.
 
 ## `audio\`
 

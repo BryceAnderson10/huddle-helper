@@ -1,4 +1,4 @@
-"""Small Tk dialogs: start recording, settings (with vocabulary and hotkeys), rename speakers."""
+"""Small Tk dialogs: start recording, settings (with vocabulary and hotkeys). Naming speakers is in the Transcript window."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import config, hotkeys, meeting as mt, models, vocab
+from . import config, hotkeys, models, vocab
 from .gui import logic
-from .writer import read_events
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
                     "recording; complying is your responsibility.")
@@ -296,80 +295,3 @@ class SettingsDialog:
         s.vocabulary = self.vocab.terms()
         self.win.destroy()
         self._on_save(s)
-
-
-def speaker_samples(folder: mt.MeetingFolder, per_speaker: int = 2) -> dict[str, list[str]]:
-    """Speaker id -> a few example lines, from the final transcript if present."""
-    path = folder.final_path if folder.final_path.exists() else folder.live_path
-    out: dict[str, list[str]] = {}
-    if not path.exists():
-        return out
-    for e in read_events(path):
-        if e.get("type") != "segment":
-            continue
-        lines = out.setdefault(e["speaker"], [])
-        if len(lines) < per_speaker and len(e["text"]) > 12:
-            lines.append(e["text"])
-    return out
-
-
-class SpeakersDialog:
-    """Rename speakers (F9): stored as speakers.json in the meeting folder."""
-
-    def __init__(self, root: tk.Tk, meetings_dir: Path):
-        self.win = tk.Toplevel(root)
-        self.win.title("Huddle Helper - Rename speakers")
-        self.meetings = [m for m in mt.iter_meetings(meetings_dir)][::-1][:30]
-        frm = ttk.Frame(self.win, padding=14)
-        frm.grid(sticky="nsew")
-        if not self.meetings:
-            ttk.Label(frm, text="No meetings yet.").grid()
-            ttk.Button(frm, text="Close", command=self.win.destroy).grid(pady=(10, 0))
-            _center(self.win)
-            return
-        ttk.Label(frm, text="Meeting").grid(row=0, column=0, sticky="w")
-        self.choice = tk.StringVar(value=self.meetings[0].meeting_id)
-        box = ttk.Combobox(frm, textvariable=self.choice, state="readonly", width=50,
-                           values=[m.meeting_id for m in self.meetings])
-        box.grid(row=0, column=1, sticky="we", pady=(0, 8))
-        box.bind("<<ComboboxSelected>>", lambda e: self._load())
-        self.rows = ttk.Frame(frm)
-        self.rows.grid(row=1, column=0, columnspan=2, sticky="we")
-        btns = ttk.Frame(frm)
-        btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(btns, text="Close", command=self.win.destroy).pack(side="left", padx=6)
-        ttk.Button(btns, text="Save names", command=self._save).pack(side="left")
-        self.entries: dict[str, tk.StringVar] = {}
-        self._load()
-        _center(self.win)
-
-    def _folder(self) -> mt.MeetingFolder:
-        return next(m for m in self.meetings if m.meeting_id == self.choice.get())
-
-    def _load(self) -> None:
-        for child in self.rows.winfo_children():
-            child.destroy()
-        folder = self._folder()
-        names = folder.read_speakers()
-        samples = speaker_samples(folder)
-        self.entries = {}
-        if not samples:
-            ttk.Label(self.rows, text="No transcript lines yet.").grid()
-            return
-        if not folder.final_path.exists():
-            ttk.Label(self.rows, text="Final transcript not ready yet; these are the provisional live labels.",
-                      foreground="#a60").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
-        for i, (spk, lines) in enumerate(sorted(samples.items()), start=1):
-            ttk.Label(self.rows, text=spk, width=16).grid(row=i * 2, column=0, sticky="w")
-            var = tk.StringVar(value=names.get(spk, ""))
-            ttk.Entry(self.rows, textvariable=var, width=24).grid(row=i * 2, column=1, sticky="w", padx=6)
-            self.entries[spk] = var
-            sample = " / ".join(lines)[:110]
-            ttk.Label(self.rows, text=f"“{sample}”", foreground="#555", wraplength=420).grid(
-                row=i * 2 + 1, column=0, columnspan=3, sticky="w", pady=(0, 6))
-
-    def _save(self) -> None:
-        folder = self._folder()
-        folder.write_speakers({k: v.get() for k, v in self.entries.items()})
-        messagebox.showinfo("Huddle Helper", f"Saved speaker names to {folder.speakers_path.name}.",
-                            parent=self.win)

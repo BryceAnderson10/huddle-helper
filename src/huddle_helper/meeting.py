@@ -8,6 +8,7 @@ Layout (see docs/OUTPUT_SPEC.md):
         transcript.final.jsonl  written after Stop (via a temp name + rename)
         speakers.json           optional speaker id -> display name
         marks.jsonl             bookmarks (first bookmark creates it)
+        speaker_tags.jsonl      the user's speaker names (first name creates it)
         DONE                    empty marker, created last
         audio/                  buffered audio, deleted unless Keep audio is on
 """
@@ -267,6 +268,40 @@ class MeetingFolder:
         with self._lock:
             write_json_atomic(self.speakers_path, {"speakers": clean, "updated_at": iso(now_local())})
 
+    def merge_speakers(self, user_names: dict[str, str | None], *, from_tags: bool | None = None,
+                       conflicts: list[dict] | None = None) -> dict:
+        """Write the user's names into speakers.json, keeping every name for a speaker the user did not
+        name (the downstream app may have set it). The file is re-read under the lock immediately before
+        the write. A value that is None, empty or equal to the label removes the name for that speaker.
+        ``from_tags`` and ``conflicts`` are set when given (the final pass); otherwise conflicts for a
+        speaker named here are dropped, as the user has settled them. Other keys in the file are kept."""
+        with self._lock:
+            try:
+                data = read_json(self.speakers_path)
+            except (OSError, ValueError):
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            speakers = data.get("speakers")
+            speakers = {str(k): str(v) for k, v in speakers.items()} if isinstance(speakers, dict) else {}
+            for label, name in user_names.items():
+                name = (name or "").strip()
+                if name and name != label:
+                    speakers[label] = name
+                else:
+                    speakers.pop(label, None)
+            data["speakers"] = speakers
+            if from_tags is not None:
+                data["from_tags"] = bool(from_tags)
+            if conflicts is not None:
+                data["conflicts"] = conflicts
+            elif isinstance(data.get("conflicts"), list):
+                data["conflicts"] = [c for c in data["conflicts"]
+                                     if isinstance(c, dict) and c.get("speaker") not in user_names]
+            data["updated_at"] = iso(now_local())
+            write_json_atomic(self.speakers_path, data)
+            return data
+
     # -- completion -----------------------------------------------------
     def mark_done(self) -> None:
         self.done_path.touch()
@@ -280,3 +315,9 @@ def iter_meetings(meetings_dir: Path):
     for child in sorted(meetings_dir.iterdir()):
         if child.is_dir() and not child.name.startswith(".") and (child / META).exists():
             yield MeetingFolder(child)
+
+
+def merge_speakers(folder: MeetingFolder, user_names: dict[str, str | None], *, from_tags: bool | None = None,
+                   conflicts: list[dict] | None = None) -> dict:
+    """See ``MeetingFolder.merge_speakers``: the user's names win, every other entry is kept."""
+    return folder.merge_speakers(user_names, from_tags=from_tags, conflicts=conflicts)

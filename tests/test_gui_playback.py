@@ -180,6 +180,10 @@ def test_keep_audio_view_shows_the_meetings_own_setting():
     assert not logic.keep_audio_view("y", m2, AppState()).visible
 
 
+def _entry(menu, label):
+    return next(i for i in range(menu.index("end") + 1) if menu.type(i) == "command" and menu.entrycget(i, "label") == label)
+
+
 def test_speaker_chips_and_hear_this_voice(root, tmp_path):
     lines = [("system", 1000, 3000, "SPEAKER_01", "short."),
              ("system", 5000, 10_000, "SPEAKER_01", "a five second line of speech."),
@@ -197,7 +201,8 @@ def test_speaker_chips_and_hear_this_voice(root, tmp_path):
     assert clips[-1].key == "line:system:5000"  # the 5 s line, not the 2 s one
     w.chip_menu.tk_popup = lambda *a: None  # a real popup would run its own loop until dismissed
     w._chip_menu("SPEAKER_02", 10, 10)
-    assert w.chip_menu.entrycget(0, "label") == "Hear this voice" and str(w.chip_menu.entrycget(0, "state")) == "normal"
+    hear = _entry(w.chip_menu, "Hear this voice")
+    assert str(w.chip_menu.entrycget(hear, "state")) == "normal"
     row_menu = w.view.build_menu(w.view._rows[0])
     labels = [row_menu.entrycget(i, "label") for i in range(row_menu.index("end") + 1) if row_menu.type(i) == "command"]
     assert labels[:2] == ["Play", "Hear this voice (SPEAKER_01)"]
@@ -213,7 +218,9 @@ def test_hear_this_voice_is_disabled_with_a_reason_without_audio(root, tmp_path)
     assert ctl.play_calls == [] and w.notice.cget("text") == playback.DELETED_AFTER_FINAL
     w.chip_menu.tk_popup = lambda *a: None
     w._chip_menu("SPEAKER_01", 10, 10)
-    assert str(w.chip_menu.entrycget(0, "state")) == "disabled" and playback.DELETED_AFTER_FINAL[:30] in w.chip_menu.entrycget(1, "label")
+    hear = _entry(w.chip_menu, "Hear this voice")
+    assert str(w.chip_menu.entrycget(hear, "state")) == "disabled"
+    assert playback.DELETED_AFTER_FINAL[:30] in w.chip_menu.entrycget(hear + 1, "label")
     w.destroy()
 
 

@@ -226,3 +226,57 @@ def browse_for_meeting(parent: tk.Misc) -> mt.MeetingFolder | None:
         messagebox.showerror("Huddle Helper", "That folder has no meta.json, so it is not a meeting.", parent=parent)
         return None
     return folder
+
+
+class NamePicker:
+    """The name picker: an entry, and the names already used in this meeting to click. Enter (or a
+    double click on a name) accepts, Esc cancels. ``on_done(name)`` gets the trimmed, non-empty name."""
+
+    def __init__(self, parent: tk.Misc, title: str, prompt: str, choices: list[str], current: str = "",
+                 on_done: Callable[[str], None] | None = None):
+        self._on_done = on_done
+        self.win = tk.Toplevel(parent)
+        self.win.title(title)
+        self.win.transient(parent.winfo_toplevel())
+        self.win.resizable(False, False)
+        frm = ttk.Frame(self.win, padding=14)
+        frm.grid()
+        ttk.Label(frm, text=prompt, wraplength=int(300 * max(1.0, parent.winfo_fpixels("1i") / 96))).grid(
+            row=0, column=0, sticky="w")
+        self.name = tk.StringVar(value=current)
+        self.entry = ttk.Entry(frm, textvariable=self.name, width=34)
+        self.entry.grid(row=1, column=0, sticky="we", pady=(6, 8))
+        self.list = None
+        if choices:
+            ttk.Label(frm, text="Used in this meeting", foreground=theme.MUTED,
+                      font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL)).grid(row=2, column=0, sticky="w")
+            self.list = tk.Listbox(frm, height=min(6, len(choices)), exportselection=False, activestyle="none")
+            for c in choices:
+                self.list.insert("end", c)
+            self.list.grid(row=3, column=0, sticky="we", pady=(2, 8))
+            self.list.bind("<<ListboxSelect>>", self._pick)
+            self.list.bind("<Double-Button-1>", lambda e: self.accept())
+        btns = ttk.Frame(frm)
+        btns.grid(row=4, column=0, sticky="e")
+        self.ok_btn = ttk.Button(btns, text="Save name", command=self.accept)
+        self.ok_btn.pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side="right", padx=6)
+        self.win.bind("<Return>", lambda e: self.accept())
+        self.win.bind("<Escape>", lambda e: self.win.destroy())
+        _place_over(self.win, parent)
+        self.entry.focus_set()
+        self.entry.selection_range(0, "end")
+
+    def _pick(self, _event=None) -> None:
+        sel = self.list.curselection() if self.list is not None else ()
+        if sel:
+            self.name.set(self.list.get(sel[0]))
+            self.entry.icursor("end")
+
+    def accept(self) -> None:
+        name = self.name.get().strip()
+        if not name:
+            return
+        self.win.destroy()
+        if self._on_done is not None:
+            self._on_done(name)

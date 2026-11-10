@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Union
 
-from . import marks as marks_mod
+from . import marks as marks_mod, tags as tags_mod
 from .meeting import MeetingFolder
 from .writer import read_events
 
@@ -252,8 +252,7 @@ class TranscriptModel:
         self._seqs: set[int] = set()
         self._next_seq = 1
         # names
-        self._speaker_tags: dict[str, str] = {}
-        self._line_tags: dict[tuple[str, int], str] = {}
+        self._tags = tags_mod.TagState()
         self._final_names: dict[str, str] = {}
         self.conflicts: list[dict] = []
         # marks and gaps
@@ -401,7 +400,11 @@ class TranscriptModel:
     def _name_for(self, label: str, source: str, start_ms: int) -> str | None:
         if self.final:
             return self._final_names.get(label)
-        return self._line_tags.get((source, start_ms)) or self._speaker_tags.get(label)
+        return self._tags.name_of(label, source, start_ms)
+
+    def has_line_tag(self, source: str, start_ms: int) -> bool:
+        """The line has a name of its own (a "This line is..." tag), which beats its speaker's name."""
+        return (source, start_ms) in self._tags.lines
 
     def _refresh_names(self) -> list[Op]:
         ops: list[Op] = []
@@ -415,25 +418,7 @@ class TranscriptModel:
         return ops
 
     def apply_tags(self, events: Iterable[dict]) -> list[Op]:
-        for e in events:
-            kind, scope = e.get("type"), e.get("scope")
-            if kind not in ("tag", "untag"):
-                continue
-            name = str(e.get("name") or "").strip()
-            if scope == "speaker" and e.get("label"):
-                if kind == "tag" and name:
-                    self._speaker_tags[str(e["label"])] = name
-                else:
-                    self._speaker_tags.pop(str(e["label"]), None)
-            elif scope == "line":
-                try:
-                    key = (str(e["source"]), int(e["start_ms"]))
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if kind == "tag" and name:
-                    self._line_tags[key] = name
-                else:
-                    self._line_tags.pop(key, None)
+        tags_mod.reduce(events, self._tags)
         return [] if self.final else self._refresh_names()
 
     def set_speakers(self, mapping: dict[str, str], conflicts: list[dict] | None = None) -> list[Op]:

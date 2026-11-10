@@ -8,6 +8,12 @@ Steps, in the order the output contract requires:
 3. write transcript.final.jsonl under a temp name and rename it into place,
 4. delete the buffered audio unless Keep audio is on,
 5. mark meta.json complete and create DONE last.
+
+Names (WP8): when the meeting has ``speaker_tags.jsonl``, the tags are read before clustering and become
+rules (pieces the user named differently never share a speaker, and a cluster holding a name is never
+folded into an unnamed or differently named one), and read again once the final file is in place to name the final speakers. The order at
+the end is then: final file -> speakers.json -> audio removed -> meta.json complete -> DONE. With no tags
+file nothing changes, byte for byte.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ import shutil
 import time
 from typing import Callable
 
-from . import meeting as mt
+from . import meeting as mt, tags as tags_mod
 from .audio.buffer import read_audio
 import numpy as np
 
@@ -184,9 +190,18 @@ def embed_pieces(pieces: Pieces, embed: Embed, progress: Callable[[float], None]
     return vecs, weights, idx
 
 
-def label_voices(vecs: list[np.ndarray], weights: list[float], threshold: float) -> list[int]:
-    """Cluster voice fingerprints over the whole meeting, then fold clusters with very little speech."""
-    return fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights)
+def label_voices(vecs: list[np.ndarray], weights: list[float], threshold: float,
+                 names: list[str | None] | None = None) -> list[int]:
+    """Cluster voice fingerprints over the whole meeting, then fold clusters with very little speech.
+
+    ``names`` (one per vector, None for an unnamed piece) are the user's rules: differently named
+    pieces never share a cluster, and a cluster holding a name is never folded into one that is unnamed
+    or has another name (it may fold into a larger cluster with the same name)."""
+    if names is None or not any(names):
+        return fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights)
+    labels = cluster_voices(vecs, weights, threshold, names)
+    cluster_names = {labels[k]: n for k, n in enumerate(names) if n}  # at most one name per cluster
+    return fold_small_clusters(labels, vecs, weights, protected=set(cluster_names), cluster_names=cluster_names)
 
 
 def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
@@ -206,7 +221,8 @@ def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
 
 def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
                   timings: dict[str, float] | None = None,
-                  progress: Callable[[float], None] | None = None) -> None:
+                  progress: Callable[[float], None] | None = None,
+                  ranges: list[tags_mod.TaggedRange] | None = None) -> None:
     """Label one stream's pieces by clustering their voices over the whole meeting.
 
     Labels are written to segment.speaker as "#v<cluster>". ``timings`` collects seconds
@@ -222,7 +238,8 @@ def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
         return
     t0 = time.perf_counter()
     try:
-        assign_labels(pieces, idx, label_voices(vecs, weights, threshold))
+        names = tags_mod.piece_names(pieces, idx, vecs, weights, ranges) if ranges else None
+        assign_labels(pieces, idx, label_voices(vecs, weights, threshold, names))
     finally:
         if timings is not None:
             timings["cluster"] = timings.get("cluster", 0.0) + time.perf_counter() - t0
@@ -283,7 +300,8 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
             embed: Embed | None = None, voice_threshold: float = 0.70,
             timings: dict[str, float] | None = None,
-            progress: Callable[[float], None] | None = None) -> list[Segment]:
+            progress: Callable[[float], None] | None = None,
+            ranges: list[tags_mod.TaggedRange] | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
     With ``embed`` (the buffered audio is available), each line is split where the offline
@@ -291,7 +309,8 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
     whole-meeting voice clustering (``cluster_voices``). Without it, the diarizer's own
     speaker ids are used. ``turns_by_source[src] is None`` and no ``embed`` keeps live labels.
     ``timings`` (optional) collects seconds under "embed_pieces" and "cluster"; ``progress``
-    (optional) gets the fraction of all pieces fingerprinted.
+    (optional) gets the fraction of all pieces fingerprinted. ``ranges`` (optional) are the live lines
+    the user named (``tags.tagged_ranges``); they steer the clustering (L14).
     """
     out, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, embed is not None)
     total = sum(len(p) for p in pieces_by_source.values()) or 1
@@ -304,7 +323,7 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
 
         done += len(pieces)
         try:
-            _voice_labels(pieces, embed, voice_threshold, timings, part)
+            _voice_labels(pieces, embed, voice_threshold, timings, part, ranges)
         except Exception:  # noqa: BLE001 - fall back to the diarizer's labels
             log.exception("Voice clustering failed for %s; using diarizer labels", source)
         out.extend(_rejoin_lines(pieces, words))
@@ -376,6 +395,30 @@ def join_fragments(segments: list[Segment]) -> list[Segment]:
             continue
         out.append(seg)
     return out
+
+
+def read_tags(folder: mt.MeetingFolder) -> tags_mod.TagState:
+    """The user's names from speaker_tags.jsonl (empty when there is no file or it cannot be read)."""
+    if not folder.tags_path.exists():
+        return tags_mod.TagState()
+    try:
+        return tags_mod.reduce(read_events(folder.tags_path))
+    except (OSError, ValueError):
+        log.exception("Could not read %s", folder.tags_path)
+        return tags_mod.TagState()
+
+
+def write_names(folder: mt.MeetingFolder, live_segments: list[Segment], final_segments: list[Segment]) -> bool:
+    """Name the final speakers from the tags as they are now (not as they were when the pass began),
+    and write speakers.json. Does nothing, and writes nothing, when nobody was named."""
+    ranges = tags_mod.tagged_ranges(read_tags(folder), live_segments)
+    if not ranges:
+        return False
+    mapping, conflicts = tags_mod.map_final_speakers(final_segments, ranges)
+    folder.merge_speakers(mapping, from_tags=True, conflicts=conflicts)
+    for c in conflicts:
+        log.warning("Speaker %s: the final pass put %s together", c["speaker"], " and ".join(c["names"]))
+    return True
 
 
 def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
@@ -472,8 +515,9 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
 
     progress("Grouping voices", 0.0)
     voice_timings: dict[str, float] = {}
+    ranges = tags_mod.tagged_ranges(read_tags(folder), segments)  # the user's names as rules; [] without tags
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
-                             voice_timings, lambda f: progress("Grouping voices", f))
+                             voice_timings, lambda f: progress("Grouping voices", f), ranges or None)
     final_segments = join_fragments(final_segments)
     if embed is not None:
         stages.update(voice_timings)
@@ -486,6 +530,10 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     os.replace(folder.final_tmp_path, folder.final_path)
 
     stages["write"] = time.perf_counter() - t0
+    try:  # speakers.json: after the final file, before meta and DONE
+        write_names(folder, segments, final_segments)
+    except Exception:  # noqa: BLE001 - the transcript is done; names can be given again in the window
+        log.exception("Could not write speaker names for %s", folder.meeting_id)
 
     _remove_audio(folder, keep_audio)
     took = time.perf_counter() - t_start

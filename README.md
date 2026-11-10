@@ -26,8 +26,9 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
    (a few minutes for a long meeting on a laptop CPU), then you get a notification.
 4. **Meetings…** lists every meeting (status, length, speakers, bookmarks, audio size) to open,
    export, show in Explorer, retry a failed final pass, or delete (to the Recycle Bin, or
-   permanently; kept audio can be deleted on its own). **Rename speakers…** maps `SPEAKER_02` to
-   a name (saved as `speakers.json`); **Settings…** picks devices, folder, model,
+   permanently; kept audio can be deleted on its own). Name speakers in the **Transcript window**: click a speaker
+   (a new voice shows "Who is this?") or right-click a line and choose "This line is…"; names are saved as
+   `speaker_tags.jsonl` and carried into `speakers.json` by the final pass. **Settings…** picks devices, folder, model,
    diarization, echo handling, Keep audio and auto-purge.
 
 Files and folders:
@@ -89,12 +90,13 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `diarize.py` | Live clustering and offline diarization |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
 | `recorder.py` | Threads and lifecycle of one recording |
-| `finalize.py` | After-Stop pass: refined labels, final file, cleanup, DONE |
+| `finalize.py` | After-Stop pass: refined labels (the user's names steer the clustering), final file, `speakers.json` from the names, cleanup, DONE |
 | `housekeeping.py` | Crash recovery, audio auto-purge |
 | `library.py` | Meetings list: `MeetingInfo`, cached `scan` (sizes measured on a worker thread), status mapping, filter and search, `delete_meeting` / `delete_audio` (never while busy; only real folders inside the meetings folder) |
 | `shell.py` | Recycle Bin delete through `SHFileOperationW` (`recycle`), `has_recycle_bin` |
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
+| `tags.py` | Speaker names: `speaker_tags.jsonl` events, the reducer, `tagged_ranges`, `piece_names` (rules before clustering, the 0.70 gate), `map_final_speakers` (largest overlap, 25% conflict rule) |
 | `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits) |
 | `hotkeys.py` | Global hotkeys: combo parsing, the AltGr check, `HotkeyThread` (`RegisterHotKey` message loop, registered only while recording) |
 | `audio/gate.py` | `MicGate`: replaces the mic with zeros while muted (250 ms tail), counts samples so the muted period matches `mic.flac` exactly |
@@ -103,12 +105,12 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `export.py` | Meeting to Markdown / plain text (`huddle-helper export`) |
 | `session.py` | `MeetingSession`: the Transcript window's polling of one meeting (tails, meta, `DONE`, live-to-final swap), no Tk |
 | `replay.py` | `tray --replay <folder>` dev aid: feeds a kept meeting's audio through the recorder; unattended-run logic |
-| `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Main window: header (mute, Keep this meeting's audio, Export), notice bar, status bar, read-only transcript text with a play control on each line and bookmark, Export, bookmark and delete-confirmation dialogs (thin Tk); the window swaps between the Transcript and Meetings pages |
-| `gui/speaker_bar.py` | The speaker bar: one chip per person under the notice bar; a click opens the chip menu ("Hear this voice") (thin Tk) |
+| `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Main window: header (mute, Keep this meeting's audio, Export), notice bar, status bar, read-only transcript text with a play control on each line and bookmark, "This line is…" in the line menu, Export, bookmark, name-picker and delete-confirmation dialogs (thin Tk); the window swaps between the Transcript and Meetings pages |
+| `gui/speaker_bar.py` | The speaker bar: one chip per person under the notice bar; a new unnamed voice asks "Who is this?"; a click opens the chip menu (Name…, Remove name, Hear this voice) (thin Tk) |
 | `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
 | `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `stop_playback`, `set_keep_audio`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
 
 ## Status against the PRD milestones
 

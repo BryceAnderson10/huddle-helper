@@ -111,7 +111,6 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Transcript window", self._ui(self.show_window)),
             pystray.MenuItem("Meetings…", self._ui(self.show_meetings)),
-            pystray.MenuItem("Rename speakers…", self._ui(self.show_speakers)),
             pystray.MenuItem("Settings…", self._ui(self.show_settings)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self._ui(self.quit)),
@@ -288,11 +287,6 @@ class TrayApp:
         from .hotkeys import probe
 
         return probe(bindings), False
-
-    def show_speakers(self) -> None:
-        from .ui import SpeakersDialog
-
-        SpeakersDialog(self.root, self.app.settings.resolved_meetings_dir())
 
     def quit(self) -> None:
         if self.app.is_recording:

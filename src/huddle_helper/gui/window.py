@@ -41,7 +41,7 @@ from .. import marks as marks_mod, meeting as mt, playback
 from ..session import MeetingSession
 from ..transcript_model import LineRow, MarkRow, Reset
 from . import logic, theme
-from .dialogs import ExportDialog, MarkEditor
+from .dialogs import ExportDialog, MarkEditor, NamePicker
 from .meetings_view import MeetingsView
 from .speaker_bar import SpeakerBar
 from .transcript_view import TranscriptView
@@ -184,6 +184,8 @@ class MainWindow:
         self.view.on_delete_mark = self._delete_mark
         self.view.on_bookmark_line = self._bookmark_line
         self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
+        self.view.on_name_line = self._name_line
+        self.view.line_name_menu = lambda row: logic.line_name_menu(self.session.model, row)
         self.view.on_play = self._play_row
         self.view.on_hear_voice = self._hear_voice
         self.view.voice_state = self._voice_state
@@ -420,15 +422,64 @@ class MainWindow:
             self._start_clip(clip)
 
     def _chip_menu(self, person_key: str, x_root: int, y_root: int) -> None:
-        """A speaker chip was clicked: its menu (naming joins it in WP8)."""
+        """A speaker chip was clicked: name it, remove its name, hear it."""
         ok, why = self._voice_state(person_key)
         menu = self.chip_menu
         menu.delete(0, "end")
+        chip = next((c for c in logic.speaker_chips(self.session.model) if c.person_key == person_key), None)             if self.session is not None else None
+        named = chip is not None and not chip.unnamed and chip.display not in logic.KNOWN_LABELS             and chip.display not in chip.labels
+        menu.add_command(label="Name…" if not named else "Rename…", command=lambda: self.name_person(person_key))
+        if named:
+            menu.add_command(label="Remove name", command=lambda: self._apply_person_name(person_key, None))
+        menu.add_separator()
         menu.add_command(label="Hear this voice", command=lambda: self._hear_voice(person_key),
                          state="normal" if ok else "disabled")
         if not ok and why:
             menu.add_command(label=logic.short_name(why, 60), state="disabled")
         menu.tk_popup(x_root, y_root)
+
+    # -- naming (WP8) -----------------------------------------------------------------------------
+    def name_person(self, person_key: str) -> None:
+        """Ask for a name for a chip and apply it to all of that person's lines, past and future."""
+        if self.session is None:
+            return
+        m = self.session.model
+        chip = next((c for c in logic.speaker_chips(m) if c.person_key == person_key), None)
+        shown = chip.display if chip else person_key
+        NamePicker(self.win, "Who is this?", f"Who is {shown}? The name is used for every line of this voice.",
+                   logic.name_choices(m, exclude=person_key), "" if chip is None or chip.unnamed else shown,
+                   on_done=lambda name: self._apply_person_name(person_key, name))
+
+    def _apply_person_name(self, person_key: str, name: str | None) -> None:
+        s = self.session
+        if s is None:
+            return
+        plan = logic.name_plan(s.model, person_key)
+        if s.model.final:  # naming after DONE goes straight into speakers.json
+            for label in plan.labels:
+                self.app.set_final_name(s.folder, label, name)
+            self._tick_slow()
+        else:
+            for label in plan.labels:
+                self.app.tag_speaker(s.folder, label, name)
+            for row in plan.lines:
+                self.app.tag_line(s.folder, row, name)
+            self._poll_now()
+        self._refresh_all()
+
+    def _name_line(self, row: LineRow, name: str | None) -> None:
+        """"This line is…": ``name`` None asks, "" clears the line's own name."""
+        s = self.session
+        if s is None or s.model.final:
+            return
+        if name is None:
+            NamePicker(self.win, "This line is…", f"Who said this line? Only this line changes.{chr(10)}“{logic.short_name(row.text, 60)}”",
+                       logic.name_choices(s.model, exclude=row.name), "",
+                       on_done=lambda n: self._name_line(row, n))
+            return
+        self.app.tag_line(s.folder, row, name or None)
+        self._poll_now()
+        self._refresh_all()
 
     def _set_speakers(self, model) -> None:
         chips = logic.speaker_chips(model) if model is not None else []

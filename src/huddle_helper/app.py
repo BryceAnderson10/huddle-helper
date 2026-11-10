@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, vocab
+from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -455,6 +455,27 @@ class AppController:
         """Keep this meeting's audio whatever the Keep audio setting says (L20). Written to the meeting's
         own ``settings.keep_audio``; the after-Stop pass re-reads it just before deleting."""
         folder.update_meta_settings(keep_audio=bool(keep))
+        self._on_change()
+
+    # -- names (WP8) ------------------------------------------------------------------------
+    def tag_speaker(self, folder: mt.MeetingFolder, label: str, name: str | None) -> None:
+        """Name every line with the live label ``label``, past and future (``None``: remove the name).
+        Appends to speaker_tags.jsonl; the window and the after-Stop pass read it from there. Works for
+        the meeting being recorded and, until DONE, for one being processed."""
+        mt.append_jsonl(folder.tags_path, tags_mod.tag_speaker_event(label, name))
+        self._on_change()
+
+    def tag_line(self, folder: mt.MeetingFolder, line, name: str | None) -> None:
+        """Name one live line (``line`` has source, start_ms, end_ms and seq; ``None``: remove its own name)."""
+        seq = getattr(line, "seq", None)
+        mt.append_jsonl(folder.tags_path, tags_mod.tag_line_event(
+            line.source, line.start_ms, line.end_ms, name, seq=seq))
+        self._on_change()
+
+    def set_final_name(self, folder: mt.MeetingFolder, final_label: str, name: str | None) -> None:
+        """Name a final speaker after DONE: straight into speakers.json, merged with what the file holds
+        (the user's names win; names the downstream app set for other speakers stay)."""
+        folder.merge_speakers({final_label: name})
         self._on_change()
 
     # -- after-Stop pass ------------------------------------------------

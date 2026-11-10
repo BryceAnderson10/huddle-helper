@@ -57,6 +57,9 @@ class TranscriptView(ttk.Frame):
         self.on_delete_mark: Callable[[MarkRow], None] | None = None
         self.on_bookmark_line: Callable[[LineRow, str], None] | None = None
         self.bookmark_items: Callable[[], list[logic.BookmarkItem]] = lambda: []
+        # Naming (WP8), set by the window: "This line is…" gets a name, "" to clear the line's own, None to ask.
+        self.on_name_line: Callable[[LineRow, str | None], None] | None = None
+        self.line_name_menu: Callable[[LineRow], logic.LineNameMenu] = lambda row: logic.LineNameMenu(False)
         self.text.bind("<Control-c>", lambda e: (self.copy_selection(), "break")[1])
         # Click to hear (WP7), set by the window: play a row, and the "Hear this voice" menu entry.
         self.on_play: Callable[[Row], None] | None = None
@@ -265,6 +268,23 @@ class TranscriptView(ttk.Frame):
                 menu.add_command(label=logic.short_name(why, 60), state="disabled")
         if menu.index("end") is not None and isinstance(row, LineRow):
             menu.add_separator()
+        if isinstance(row, LineRow) and self.on_name_line is not None:
+            nm = self.line_name_menu(row)
+            if not nm.enabled:
+                menu.add_command(label="This line is…", state="disabled")
+                if nm.note:
+                    menu.add_command(label=nm.note, state="disabled")
+            else:
+                sub = tk.Menu(menu, tearoff=False)
+                for name in nm.choices:
+                    sub.add_command(label=logic.short_name(name, 30),
+                                    command=lambda n=name, r=row: self.on_name_line(r, n))
+                if nm.choices:
+                    sub.add_separator()
+                sub.add_command(label="Someone else…", command=lambda r=row: self.on_name_line(r, None))
+                if nm.can_clear:
+                    sub.add_command(label="Back to the speaker's name", command=lambda r=row: self.on_name_line(r, ""))
+                menu.add_cascade(label="This line is…", menu=sub)
         if isinstance(row, LineRow) and self.on_bookmark_line is not None:
             sub = tk.Menu(menu, tearoff=False)
             for item in self.bookmark_items():
