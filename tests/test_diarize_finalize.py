@@ -334,3 +334,48 @@ def test_cmd_finalize_keeps_audio_unless_asked(tmp_path, monkeypatch):
     assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path)]) == 0
     assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path), "--delete-audio"]) == 0
     assert calls == [True, False]
+
+
+def test_voice_label_steps_match_combined_helper():
+    from huddle_helper.finalize import _voice_labels, assign_labels, embed_pieces, label_voices
+
+    def pieces():
+        spans = [(0, 4000), (5000, 9000), (10000, 14000), (14500, 14800)]  # the last is too short
+        return [(min(i, 2), Segment("system", a, b, "x", 0.9, "#0")) for i, (a, b) in enumerate(spans)]
+
+    embed = UnitEmbedder({0: unit(0), 5000: unit(1), 10000: unit(0)})
+    whole, timings = pieces(), {}
+    _voice_labels(whole, embed, 0.65, timings)
+    assert set(timings) == {"embed_pieces", "cluster"}
+
+    steps = pieces()
+    vecs, weights, idx = embed_pieces(steps, embed)
+    assert idx == [0, 1, 2] and weights == [4.0, 4.0, 4.0]
+    labels = label_voices(vecs, weights, 0.65)
+    assert labels[0] == labels[2] != labels[1]
+    assign_labels(steps, idx, labels)
+    assert [s.speaker for _l, s in steps] == [s.speaker for _l, s in whole] == ["#v0", "#v1", "#v0", "#v0"]
+
+
+def test_split_pieces_passes_undiarized_and_failed_streams_through():
+    from huddle_helper.finalize import split_pieces
+
+    segs = [Segment("mic", 0, 1000, "hi", 0.9, "You"), Segment("system", 0, 1000, "yo", 0.9, "SPEAKER_04")]
+    out, pieces = split_pieces(segs, {}, {"system": None}, {"system"}, embed_available=False)
+    assert [s.speaker for s in out] == ["You", "SPEAKER_04"] and pieces == {}
+    out, pieces = split_pieces(segs, {}, {}, set(), embed_available=True)
+    assert [s.speaker for s in out] == ["You", "Remote"] and pieces == {}
+    out, pieces = split_pieces(segs, {}, {"system": None}, {"system"}, embed_available=True)
+    assert [s.speaker for s in out] == ["You"]
+    assert [(line, p.speaker) for line, p in pieces["system"]] == [(1, "SPEAKER_04")]
+
+
+def test_finalize_times_embedding_and_clustering_separately(tmp_path):
+    class FlatEmbedder:
+        def embed(self, audio):
+            return unit(0)
+
+    folder = _make_meeting(tmp_path)
+    finalize_meeting(folder, FakeDiarizer, keep_audio=False, embedder_factory=FlatEmbedder)
+    stages = folder.read_meta()["final_stats"]["stages"]
+    assert {"embed_pieces", "cluster"} <= set(stages) and "voice_labels" not in stages

@@ -1,0 +1,11 @@
+{
+  "meeting": "test-3",
+  "groups": {
+    "A": [["system", 16056], ["system", 23608], ["system", 27960], ["system", 32056], ["system", 57144], ["system", 59896]],
+    "B": [["system", 38104], ["system", 49584], ["system", 53400]],
+    "C": [["system", 64952], ["system", 76176], ["system", 79896], ["system", 90552]],
+    "U": [["system", 11320], ["system", 12984]]
+  },
+  "apart": [["A", "B"], ["A", "C"], ["B", "C"]],
+  "together": ["A", "B", "C"]
+}

@@ -160,11 +160,13 @@ def _split_by_words(seg: Segment, words: list[Word], turns: list[Turn]) -> list[
 Embed = Callable[[str, int, int], "np.ndarray | None"]  # (source, start_ms, end_ms) -> fingerprint
 
 
-def _voice_labels(pieces: list[tuple[int, Segment]], embed: Embed, threshold: float) -> None:
-    """Label one stream's pieces by clustering their voices over the whole meeting.
+Pieces = list[tuple[int, Segment]]  # (live line index, piece)
 
-    ``pieces`` are (line index, segment) pairs; labels are written to segment.speaker as
-    "#v<cluster>". Pieces too short to fingerprint take a neighbour's label.
+
+def embed_pieces(pieces: Pieces, embed: Embed) -> tuple[list[np.ndarray], list[float], list[int]]:
+    """Fingerprint each piece. Returns (vectors, weights in seconds, index of each vector's piece).
+
+    Pieces too short to fingerprint are left out of all three lists.
     """
     vecs, weights, idx = [], [], []
     for i, (_line, seg) in enumerate(pieces):
@@ -173,9 +175,16 @@ def _voice_labels(pieces: list[tuple[int, Segment]], embed: Embed, threshold: fl
             vecs.append(vec)
             weights.append(max((seg.end_ms - seg.start_ms) / 1000, 0.1))
             idx.append(i)
-    if not vecs:
-        return
-    labels = fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights)
+    return vecs, weights, idx
+
+
+def label_voices(vecs: list[np.ndarray], weights: list[float], threshold: float) -> list[int]:
+    """Cluster voice fingerprints over the whole meeting, then fold clusters with very little speech."""
+    return fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights)
+
+
+def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
+    """Write "#v<cluster>" to each piece's speaker; unfingerprinted pieces take a neighbour's label."""
     assigned: dict[int, int] = dict(zip(idx, labels))
     for i, (line, seg) in enumerate(pieces):
         if i in assigned:
@@ -189,7 +198,30 @@ def _voice_labels(pieces: list[tuple[int, Segment]], embed: Embed, threshold: fl
         seg.speaker = f"#v{assigned[i]}"
 
 
-def _rejoin_lines(pieces: list[tuple[int, Segment]], words: dict[tuple[str, int], list[Word]]) -> list[Segment]:
+def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
+                  timings: dict[str, float] | None = None) -> None:
+    """Label one stream's pieces by clustering their voices over the whole meeting.
+
+    Labels are written to segment.speaker as "#v<cluster>". ``timings`` collects seconds
+    under "embed_pieces" and "cluster".
+    """
+    t0 = time.perf_counter()
+    try:
+        vecs, weights, idx = embed_pieces(pieces, embed)
+    finally:
+        if timings is not None:
+            timings["embed_pieces"] = timings.get("embed_pieces", 0.0) + time.perf_counter() - t0
+    if not vecs:
+        return
+    t0 = time.perf_counter()
+    try:
+        assign_labels(pieces, idx, label_voices(vecs, weights, threshold))
+    finally:
+        if timings is not None:
+            timings["cluster"] = timings.get("cluster", 0.0) + time.perf_counter() - t0
+
+
+def _rejoin_lines(pieces: Pieces, words: dict[tuple[str, int], list[Word]]) -> list[Segment]:
     """Put back together pieces of one live line that ended up with the same speaker."""
     out: list[tuple[int, Segment]] = []
     for line, seg in pieces:
@@ -202,25 +234,23 @@ def _rejoin_lines(pieces: list[tuple[int, Segment]], words: dict[tuple[str, int]
     return [seg for _line, seg in out]
 
 
-def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
-            turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
-            embed: Embed | None = None, voice_threshold: float = 0.65) -> list[Segment]:
-    """Apply refined speaker labels.
+def split_pieces(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
+                 turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
+                 embed_available: bool) -> tuple[list[Segment], dict[str, Pieces]]:
+    """Split lines where the diarizer saw a speaker change, before voice labelling.
 
-    With ``embed`` (the buffered audio is available), each line is split where the offline
-    diarizer saw a speaker change at a phrase boundary, and every piece is then labelled by
-    whole-meeting voice clustering (``cluster_voices``). Without it, the diarizer's own
-    speaker ids are used. ``turns_by_source[src] is None`` and no ``embed`` keeps live labels.
+    Returns (segments that are final already, pieces per source waiting for voice labels).
+    Pieces are only collected when ``embed_available``; otherwise they are in the first list.
     """
     out: list[Segment] = []
-    pieces_by_source: dict[str, list[tuple[int, Segment]]] = {}
+    pieces_by_source: dict[str, Pieces] = {}
     for line_no, seg in enumerate(segments):
         if seg.source not in diarized:
             out.append(Segment(seg.source, seg.start_ms, seg.end_ms, seg.text, seg.confidence,
                                UNDIARIZED[seg.source]))
             continue
         turns = turns_by_source.get(seg.source)
-        if not turns and embed is None:
+        if not turns and not embed_available:
             out.append(seg)
             continue
         seg_words = words.get((seg.source, seg.start_ms))
@@ -235,14 +265,30 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             spk = speaker_at(seg.start_ms, seg.end_ms, turns) if turns else None
             pieces.append(Segment(seg.source, seg.start_ms, seg.end_ms, seg.text, seg.confidence,
                                   f"#{spk}" if spk is not None else seg.speaker, seg_words or []))
-        if embed is None:
+        if not embed_available:
             out.extend(pieces)
         else:
             pieces_by_source.setdefault(seg.source, []).extend((line_no, p) for p in pieces)
+    return out, pieces_by_source
+
+
+def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
+            turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
+            embed: Embed | None = None, voice_threshold: float = 0.65,
+            timings: dict[str, float] | None = None) -> list[Segment]:
+    """Apply refined speaker labels.
+
+    With ``embed`` (the buffered audio is available), each line is split where the offline
+    diarizer saw a speaker change at a phrase boundary, and every piece is then labelled by
+    whole-meeting voice clustering (``cluster_voices``). Without it, the diarizer's own
+    speaker ids are used. ``turns_by_source[src] is None`` and no ``embed`` keeps live labels.
+    ``timings`` (optional) collects seconds under "embed_pieces" and "cluster".
+    """
+    out, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, embed is not None)
 
     for source, pieces in pieces_by_source.items():
         try:
-            _voice_labels(pieces, embed, voice_threshold)
+            _voice_labels(pieces, embed, voice_threshold, timings)
         except Exception:  # noqa: BLE001 - fall back to the diarizer's labels
             log.exception("Voice clustering failed for %s; using diarizer labels", source)
         out.extend(_rejoin_lines(pieces, words))
@@ -384,11 +430,12 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             embed = None
 
     progress("Grouping voices", 1.0)
-    t0 = time.perf_counter()
-    final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold)
+    voice_timings: dict[str, float] = {}
+    final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
+                             voice_timings)
     final_segments = join_fragments(final_segments)
-    if embed is not None:  # embedding and clustering are timed together
-        stages["voice_labels"] = time.perf_counter() - t0
+    if embed is not None:
+        stages.update(voice_timings)
     refined = sorted(s for s in diarized
                      if s in audio_by_source and (embed is not None or turns_by_source.get(s)))
     audio_by_source.clear()

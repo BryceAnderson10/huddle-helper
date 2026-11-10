@@ -43,11 +43,14 @@ Stop), final transcript 35 s after Stop, and the final pass found 4 distinct voi
   → Test #2 showed the mic records very quietly (see "Mic level is very low" below). That is
   the likely cause here too. Quiet audio is now boosted before transcription, and the tray
   warns when the mic is too quiet (079d8c9).
-- [ ] **Mic segment timing is squeezed:** 5 words in 0.56 s (57048–57608 ms). The start and
+- [x] **Mic segment timing is squeezed:** 5 words in 0.56 s (57048–57608 ms). The start and
   end come from Whisper word timestamps clamped to the utterance; one of them is probably
   wrong. Code: `recorder.py` `_transcribe_loop`.
   → Not seen in Test #3: all 6 mic lines have normal word lengths (60–500 ms). Likely the
   quiet-audio problem behind Test #2's hallucination; close if Test #4 is also clean.
+  → Closed: Test #4's fastest mic line is 150 ms per word (three lines) and Test #3's is
+  204 ms, with no near-zero-length words. Test #1's line was 112 ms per word, so the margin
+  on Test #4 is small; reopen if it shows up again.
 
 ### Measurement
 
@@ -139,7 +142,7 @@ in the correct time order. No echo lines were dropped, which is correct with a h
   per word are dropped, and a third identical sentence in a row is dropped. Replaying
   Test #2 gives "Good to see how does it handle overlapping voices?". The faster-whisper
   options weren't needed.
-- [ ] **Mic timing.** The two mic lines here had sensible timings (2.1 s and 2.5 s). The
+- [x] **Mic timing.** The two mic lines here had sensible timings (2.1 s and 2.5 s). The
   squeezed timing from Test #1 may also be a hallucination artifact; re-check after the
   fixes above.
 
@@ -276,6 +279,15 @@ What went well:
      and 176, 13 s, "But Remote C and Colleague F's can keep you updated…") is folded the same way. The
      live pass also gave it its own label (`SPEAKER_06`), so it may be another person.
 
+  → Re-measured with `tools/final_lab.py sweep` on cached fingerprints (WP0). Two details
+  differ from the notes above: (1) from 0.70 up, Remote D's cluster also holds one line the
+  0.65 result gives to Remote B (final line 67, 6.8 s), which makes it 35 s, over the fold limit
+  (29 s: 3% of the 980 s of speech that has fingerprints), so at 0.70 it is *not* folded;
+  (2) in Test #3 at 0.60 it is A and C that merge, not B and C, and at 0.70 only the two
+  short lines (3 and 4) sit alone, which the fold then absorbs: A, B and C still come out
+  as three speakers. So 0.70 with today's fold passes Test #3. Who spoke line 67 needs a
+  listen.
+
   **Tension with Test #3:** there, 0.70 split speaker A into pieces (see the table under
   Test #3), which is why 0.65 was chosen. A fixed threshold that works for both may not
   exist. *Options to test:* (a) 0.70 plus a similarity-gated fold (always fold clusters under
@@ -319,6 +331,9 @@ What went well:
   sherpa's offline diarization (segmentation, embeddings, `merge_small_speakers`); voice
   clustering of the 181 pieces takes about 35 s. So the laptop is roughly 3× slower than the
   dev PC, and the diarization step is where the time goes.
+  → Measured with `final_stats` on the dev PC (WP0): 267 s in total, of which **232 s is
+  sherpa's offline diarization**, 34 s is fingerprinting the pieces and clustering is
+  instant. Tests #2 and #3 have the same shape (0.19–0.23× the meeting's length).
   *Ideas:* labels now come from `cluster_voices`, so sherpa's offline diarization is only used
   for split points. That pass embeds the audio twice more: inside sherpa and again in
   `merge_small_speakers`. Run the embedders with more than 1 thread (`SherpaEmbedder`
