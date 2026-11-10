@@ -7,6 +7,7 @@
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
     huddle-helper finalize <meeting folder>             re-run the after-Stop pass
     huddle-helper recover                               close out meetings left by a crash
+    huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
     huddle-helper devices | download-models
 """
 
@@ -239,6 +240,25 @@ def cmd_finalize(args) -> int:
     return 0
 
 
+def cmd_export(args) -> int:
+    from . import export
+    from .meeting import MeetingFolder
+    from .transcript_model import TranscriptModel
+
+    folder = MeetingFolder(Path(args.folder))
+    if not folder.meta_path.exists():
+        print(f"Not a meeting folder (no meta.json): {folder.path}", file=sys.stderr)
+        return 1
+    model = TranscriptModel.load(folder)
+    text = export.render(model, args.format, args.times, join=not args.no_join)
+    out = Path(args.out) if args.out else Path.cwd() / export.export_filename(model, args.format)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    export.write_export(out, text)
+    print(f"Exported {model.line_count} lines to {out}"
+          + (" (provisional: the final transcript is not ready)" if model.provisional else ""))
+    return 0
+
+
 def cmd_recover(args) -> int:
     from .housekeeping import recover
 
@@ -318,6 +338,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="remove the buffered audio afterwards (default: keep it)")
     common(sp)
     sp.set_defaults(func=cmd_finalize)
+
+    sp = sub.add_parser("export", help="export a meeting as Markdown or plain text")
+    sp.add_argument("folder")
+    sp.add_argument("--format", choices=("md", "txt"), default="md")
+    sp.add_argument("--out", help="output file (default: <meeting_id>.<ext> in the current folder)")
+    sp.add_argument("--times", choices=("elapsed", "clock"), default="elapsed")
+    sp.add_argument("--no-join", action="store_true", help="one entry per line instead of per speaker turn")
+    sp.set_defaults(func=cmd_export)
 
     sp = sub.add_parser("recover", help="finish meetings left by a crash")
     common(sp)

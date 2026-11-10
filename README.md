@@ -88,7 +88,10 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `recorder.py` | Threads and lifecycle of one recording |
 | `finalize.py` | After-Stop pass: refined labels, final file, cleanup, DONE |
 | `housekeeping.py` | Crash recovery, audio auto-purge |
-| `app.py`, `tray.py`, `ui.py` | Controller, tray icon, dialogs |
+| `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
+| `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
+| `export.py` | Meeting to Markdown / plain text (`huddle-helper export`) |
+| `app.py`, `tray.py`, `ui.py` | Controller (with after-Stop progress and time-left estimate), tray icon, dialogs |
 
 ## Status against the PRD milestones
 

@@ -57,6 +57,8 @@ class Status:
     backlog: int = 0
     segments: int = 0
     detail: str = ""
+    # Decaying peak level (0-1) of each stream for the window's meters; updated every 200 ms.
+    levels: dict[str, float] = field(default_factory=lambda: {"mic": 0.0, "system": 0.0})
 
 
 class _StreamWorker:
@@ -133,6 +135,7 @@ class Recorder:
         self._merger: SegmentMerger | None = None
         self._capture = None
         self._t0 = 0.0
+        self._levels: dict[str, tuple[float, float]] = {}  # source -> (peak, perf_counter time)
         self._seq = 0
         self._seq_lock = threading.Lock()
         self._stop_tick = threading.Event()
@@ -249,6 +252,7 @@ class Recorder:
         self._utt_end_wall = {}
         self._speech_peaks = {src: [] for src in SOURCES}
         self._quiet_mic_warned = False
+        self._levels = {}
         self._max_backlog = 0
         self._max_lag_s = 0.0
         self.status = Status(state="recording", meeting_id=self.folder.meeting_id)
@@ -323,10 +327,23 @@ class Recorder:
         }
 
     # -- callbacks ------------------------------------------------------
+    LEVEL_HALF_LIFE_S = 0.3  # how fast a meter falls after a peak
+
     def _on_audio(self, source: str, samples: np.ndarray) -> None:
         w = self._workers.get(source)
         if w is not None:
             w.inbox.put(samples)
+        if len(samples):  # on the capture path: one abs().max() and a pow per chunk
+            now = time.perf_counter()
+            prev, then = self._levels.get(source, (0.0, now))
+            held = prev * 0.5 ** ((now - then) / self.LEVEL_HALF_LIFE_S)
+            self._levels[source] = (max(float(np.abs(samples).max()), held), now)
+
+    def _current_levels(self) -> dict[str, float]:
+        now = time.perf_counter()
+        return {src: round(min(1.0, v * 0.5 ** ((now - t) / self.LEVEL_HALF_LIFE_S)), 3)
+                for src, (v, t) in list(self._levels.items())} | {
+                    src: 0.0 for src in SOURCES if src not in self._levels}
 
     def _on_gap(self, source: str, start_ms: int, end_ms: int, reason: str) -> None:
         if self.folder is not None and end_ms > start_ms:
@@ -428,6 +445,7 @@ class Recorder:
             st.lag_s = max(0.0, st.elapsed_s - min(ends) / SAMPLE_RATE) if ends else 0.0
             st.backlog = self._utterances.qsize() + self._in_flight
             st.segments = self._seq
+            st.levels = self._current_levels()
             if st.state == "recording":
                 self._max_backlog = max(self._max_backlog, st.backlog)
                 self._max_lag_s = max(self._max_lag_s, st.lag_s)
