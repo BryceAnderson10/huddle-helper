@@ -293,6 +293,29 @@ def test_settings_hotkeys_tab_shows_results_and_validates(root):
     assert saved and saved[0].hotkeys["mute"] == "Ctrl+Alt+U" and saved[0].hotkeys["action"] == ""
 
 
+def test_settings_play_clips_on_lists_outputs_and_keeps_an_unplugged_choice(root):
+    from huddle_helper import config
+    from huddle_helper.ui import SettingsDialog
+
+    saved = []
+    devices = {"inputs": [], "outputs": ["Speakers (Realtek)", "Headset (USB)"]}
+    dlg = SettingsDialog(root, config.Settings(), devices, saved.append, None)
+    assert dlg.clip_out.get() == "(Windows default)"
+    assert list(dlg.clip_out_box.cget("values")) == ["(Windows default)", "Speakers (Realtek)", "Headset (USB)"]
+    dlg.clip_out.set("Headset (USB)")
+    dlg._save()
+    assert saved[-1].clip_output_device == "Headset (USB)" and saved[-1].output_device is None  # capture untouched
+    # the saved device is unplugged: still shown, and kept when Settings is saved without touching it
+    dlg = SettingsDialog(root, saved[-1], {"inputs": [], "outputs": ["Speakers (Realtek)"]}, saved.append, None)
+    assert dlg.clip_out.get() == "Headset (USB) (not connected)"
+    dlg._save()
+    assert saved[-1].clip_output_device == "Headset (USB)"
+    dlg = SettingsDialog(root, saved[-1], devices, saved.append, None)
+    dlg.clip_out.set("(Windows default)")
+    dlg._save()
+    assert saved[-1].clip_output_device is None
+
+
 # -- Meetings view (WP6) -----------------------------------------------------------------------------------
 def pump(root, posted, until, seconds=5.0):
     """Run Tk and the callbacks the view's worker threads posted (stands in for TrayApp.calls) until ``until()``."""

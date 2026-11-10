@@ -64,6 +64,14 @@ class TranscriptView(ttk.Frame):
         # Click to hear (WP7), set by the window: play a row, and the "Hear this voice" menu entry.
         self.on_play: Callable[[Row], None] | None = None
         self.on_hear_voice: Callable[[str], None] | None = None
+        self.on_play_from: Callable[[LineRow], None] | None = None  # "Play from here" (L19)
+        # Play from here scrolls the heard line into view until the user scrolls themselves (wheel, scrollbar,
+        # keys): their position is then left alone for the rest of the run.
+        self._run_follow = True
+        self._in_run = False
+        for seq in ("<MouseWheel>", "<Prior>", "<Next>", "<Up>", "<Down>", "<Home>", "<End>"):
+            self.text.bind(seq, self._user_scrolled, add="+")
+        self.scroll.bind("<ButtonPress-1>", self._user_scrolled, add="+")
         self.voice_state: Callable[[str], tuple[bool, str]] = lambda key: (False, "")
         self.text.bind("<space>", self._space)
         self.text.bind("<Motion>", self._motion)
@@ -122,6 +130,9 @@ class TranscriptView(ttk.Frame):
         self._follow = float(last) >= 0.999
         if self._follow and self._new_lines:
             self._hide_new_button()
+
+    def _user_scrolled(self, event=None) -> None:
+        self._run_follow = False
 
     @property
     def at_bottom(self) -> bool:
@@ -259,6 +270,10 @@ class TranscriptView(ttk.Frame):
             label = "Stop" if playing else ("Play from 10 s before" if isinstance(row, MarkRow) else "Play")
             menu.add_command(label=label, command=lambda r=row: self.on_play(r),
                              state="normal" if (st.enabled or playing) else "disabled")
+        if isinstance(row, LineRow) and self.on_play_from is not None:
+            st = logic.row_play_state(self._ctx, row) if self._ctx is not None else playback.PlayState(False)
+            menu.add_command(label="Play from here", command=lambda r=row: self.on_play_from(r),
+                             state="normal" if st.enabled else "disabled")
         if isinstance(row, LineRow) and self.on_hear_voice is not None:
             ok, why = self.voice_state(row.person_key)
             menu.add_command(label=f"Hear this voice ({logic.short_name(row.display, 24)})",
@@ -449,7 +464,7 @@ class TranscriptView(ttk.Frame):
         enabled = self._ctx is not None and logic.row_play_state(self._ctx, row).enabled
         return (base, "play", "play-on" if enabled else "play-off")
 
-    def set_audio(self, ctx: playback.AudioContext, playing_key: str | None) -> None:
+    def set_audio(self, ctx: playback.AudioContext, playing_key: str | None, run: bool = False) -> None:
         """Tell the view where audio can be read from and which clip is playing; restyles the play
         controls when either changed (greyed out or not, play or stop, the playing row's background)."""
         if ctx.signature != self._ctx_sig:
@@ -457,9 +472,14 @@ class TranscriptView(ttk.Frame):
             self._restyle_all_glyphs()
         else:
             self._ctx = ctx
-        self.set_playing(playing_key)
+        self.set_playing(playing_key, run)
 
-    def set_playing(self, key: str | None) -> None:
+    def set_playing(self, key: str | None, run: bool = False) -> None:
+        """``key`` is the clip being heard; ``run``: it belongs to a Play from here run, whose highlight is
+        scrolled into view unless the user scrolled away since the run began."""
+        if run and not self._in_run:
+            self._run_follow = True  # a new run: the clicked line is on screen, follow from there
+        self._in_run = run and key is not None
         if key == self._playing_key:
             return
         old, self._playing_key = self._playing_key, key
@@ -475,6 +495,16 @@ class TranscriptView(ttk.Frame):
                         self.text.tag_remove("playing", self._start(i), self._end(i))
         finally:
             self.text.configure(state="disabled")
+        if run and key is not None and self._run_follow:
+            self.reveal(key)
+
+    def reveal(self, key: str) -> None:
+        """Scroll the row with this play key into view (nothing moves when it is already visible)."""
+        for i, row in enumerate(self._rows):
+            if logic.row_play_key(row) == key:
+                self.text.see(self._end(i) + "-1c")
+                self.text.see(self._start(i))
+                return
 
     def _restyle_glyph(self, i: int, row: Row) -> None:
         """Replace the first character of row ``i`` (its play control) in place; the row mark stays."""

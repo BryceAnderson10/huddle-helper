@@ -60,6 +60,10 @@ class Settings:
     # Custom vocabulary (WP3): terms Whisper should expect, one per entry. See vocab.py.
     vocabulary: list[str] = field(default_factory=list)
 
+    # Clips (WP9b, L19): "Play clips on", the playback device's name (never an index); None follows the
+    # Windows default output. Not the capture's "Meeting audio from" (output_device). Additive.
+    clip_output_device: str | None = None
+
     # Global hotkeys (WP5), registered only while recording: action -> combo such as "Ctrl+Alt+B".
     # "" turns one off. Additive like open_window_on_start: a missing key means the default combo.
     hotkeys: dict[str, str] = field(default_factory=lambda: dict(hk.DEFAULTS))

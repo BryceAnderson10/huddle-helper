@@ -31,7 +31,10 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
    permanently; kept audio can be deleted on its own). Name speakers in the **Transcript window**: click a speaker
    (a new voice shows "Who is this?") or right-click a line and choose "This line is…"; names are saved as
    `speaker_tags.jsonl` and carried into `speakers.json` by the final pass. **Settings…** picks devices, folder, model,
-   diarization, echo handling, Keep audio and auto-purge.
+   diarization, echo handling, Keep audio and auto-purge. **Play clips on** (Settings, `clip_output_device`
+   in `settings.json`, a device name; empty = the Windows default output) is where clips and **Play from here**
+   (a line's right-click menu: that line and the following ones, continuously, with the line being heard
+   highlighted) are played; it is separate from *Meeting audio from*, which is what is captured.
 
 Files and folders:
 
@@ -104,6 +107,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `hotkeys.py` | Global hotkeys: combo parsing, the AltGr check, `HotkeyThread` (`RegisterHotKey` message loop, registered only while recording) |
 | `audio/gate.py` | `MicGate`: replaces the mic with zeros while muted (250 ms tail), counts samples so the muted period matches `mic.flac` exactly |
 | `audio/ring.py` | `RecentAudio`: the last 10 minutes of one stream in memory (16-bit), written by the stream worker after the mic gate, so muted speech can never be played back |
+| `leveling.py`, `outputs.py`, `playsequence.py` | Playback levelling (speech level to -20 dBFS, at most +24 dB, noise-only left alone, soft limiter), "Play clips on" device list and choice by name with fall-back to the default, and Play from here (which clips, the pauses, `run_sequence` on any output) |
 | `playback.py` | Click to hear: padded clips of a line from the kept FLAC or the ring (quiet clips raised, ends moved to quiet points), bookmark and "Hear this voice" choices, the playback windows and drop rule, the headphone check, the reasons a play control is disabled, and `Player` (one clip at a time on a worker thread, resampled to the output device's rate, output `gain`) |
 | `export.py` | Meeting to Markdown / plain text (`huddle-helper export`) |
 | `session.py` | `MeetingSession`: the Transcript window's polling of one meeting (tails, meta, `DONE`, live-to-final swap), no Tk |
@@ -114,7 +118,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
 | `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
 
 ## Status against the PRD milestones
 

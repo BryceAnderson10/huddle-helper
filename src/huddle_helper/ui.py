@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import attendees as attendees_mod, config, hotkeys, models, vocab
+from . import attendees as attendees_mod, config, hotkeys, models, outputs, vocab
 from .gui import logic
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
@@ -247,6 +247,11 @@ class SettingsDialog:
         row("Meeting audio from", ttk.Combobox(frm, textvariable=self.out, state="readonly", width=46,
                                                values=[default, *devices.get("outputs", [])]))
         self._default = default
+        outs = devices.get("outputs", [])
+        self.clip_out = tk.StringVar(value=outputs.choice_from_setting(settings.clip_output_device, outs, default))
+        self.clip_out_box = ttk.Combobox(frm, textvariable=self.clip_out, state="readonly", width=46,
+                                         values=outputs.choice_values(outs, settings.clip_output_device, default))
+        row("Play clips on", self.clip_out_box)
 
         folder_frame = ttk.Frame(frm)
         self.folder = tk.StringVar(value=str(settings.resolved_meetings_dir()))
@@ -308,6 +313,8 @@ class SettingsDialog:
         s.hotkeys = bindings
         s.mic_device = None if self.mic.get() == self._default else self.mic.get()
         s.output_device = None if self.out.get() == self._default else self.out.get()
+        s.clip_output_device = outputs.choice_to_setting(self.clip_out.get(), self._orig.clip_output_device,
+                                                         self._default)
         folder = self.folder.get().strip()
         s.meetings_dir = "" if Path(folder) == config.paths.default_meetings_dir() else folder
         s.whisper_model = self.model.get()

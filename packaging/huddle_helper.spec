@@ -19,7 +19,8 @@ hiddenimports += ["huddle_helper.hotkeys", "huddle_helper.marks", "huddle_helper
 hiddenimports += ["huddle_helper.gui", "huddle_helper.gui.window", "huddle_helper.gui.transcript_view",
                   "huddle_helper.gui.dialogs", "huddle_helper.gui.logic", "huddle_helper.gui.theme",
                   "huddle_helper.session", "huddle_helper.replay", "huddle_helper.attendees",
-                  "huddle_helper.gui.attendee_logic"]
+                  "huddle_helper.gui.attendee_logic",
+                  "huddle_helper.leveling", "huddle_helper.outputs", "huddle_helper.playsequence"]
 
 a = Analysis(
     ["launcher.py"],

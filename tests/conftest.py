@@ -47,3 +47,13 @@ class ToneEmbedder:
         vec = np.zeros(8, dtype=np.float32)
         vec[min(int(freq // 250), 7)] = 1.0
         return vec
+
+
+def speechlike(seconds: float, amp: float = 0.3, hiss: float = 0.0, seed: int = 1) -> np.ndarray:
+    """Tone bursts of 0.2 s with 0.1 s gaps (a level that rises and falls like speech), plus optional hiss."""
+    x = tone(300, seconds, amp)
+    on = (np.arange(len(x)) % int(0.3 * SAMPLE_RATE)) < int(0.2 * SAMPLE_RATE)
+    x = x * on
+    if hiss:
+        x = x + np.random.default_rng(seed).normal(0, hiss, len(x)).astype(np.float32)
+    return x.astype(np.float32)

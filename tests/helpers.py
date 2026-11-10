@@ -70,10 +70,12 @@ def play_stub(**over) -> dict:
     calls: list = []
     stub = {
         "playing_key": None,
+        "playing_run": False,
         "recent_oldest_ms": lambda folder: None,
         "play_calls": calls,
         "stop_playback": lambda: calls.append(("stop",)),
         "play_clip": lambda folder, clip, confirmed=False: calls.append(("play", clip.key, confirmed)) or PlayResult("playing"),
+        "play_from": lambda folder, clips, confirmed=False: calls.append(("run", [c.key for c in clips], confirmed)) or PlayResult("playing"),
         "set_keep_audio": lambda folder, keep: calls.append(("keep", keep)),
     }
     stub.update(over)

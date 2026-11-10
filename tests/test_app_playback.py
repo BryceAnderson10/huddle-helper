@@ -115,11 +115,14 @@ class FakeRecorder:
         self.ring.write(tone(300, ring_ms / 1000))
 
     def recent_clip(self, clip):
-        return playback.clip_from_ring(self.ring, clip.start_ms, clip.end_ms)
+        return playback.clip_from_ring(self.ring, clip.start_ms, clip.end_ms, clip.pad_ms)
 
-    def note_playback(self, duration_s, text):
-        self.noted.append((round(duration_s, 2), text))
+    def note_playback(self, duration_s, text, run=False):
+        self.noted.append((round(duration_s, 2), text) if not run else (round(duration_s, 2), text, "run"))
         return True
+
+    def end_playback_run(self):
+        self.noted.append("run ended")
 
     def recent_oldest_ms(self):
         return {"mic": self.ring.oldest_ms, "system": self.ring.oldest_ms}
@@ -230,3 +233,127 @@ def test_the_file_handle_is_not_left_open_so_the_folder_can_be_deleted_straight_
     ctl.player.started.wait(5)
     shutil.rmtree(folder.path)  # no ignore_errors: fails on Windows if the clip's read left a handle open
     assert not folder.path.exists()
+
+
+# -- Play from here ---------------------------------------------------------------------------------------
+
+
+class RunFake:
+    """A fake output for a real Player (gain 0.0): records writes, never opens a device."""
+
+    def __init__(self):
+        self.rate, self.channels, self.writes, self.closed = 16_000, 1, [], False
+
+    def write(self, pcm):
+        time.sleep(0.002)
+        self.writes.append(pcm)
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture()
+def run_ctl(tmp_path):
+    outs = []
+
+    def factory():
+        o = RunFake()
+        outs.append(o)
+        return o
+
+    c = app.AppController(overrides={"meetings_dir": str(tmp_path)}, player=playback.Player(0.0, factory))
+    c._jobs = queue.Queue()
+    c.notes, c.outs, c.keys = [], outs, []
+    c._notify = c.notes.append
+    c._on_change = lambda: c.keys.append(c.playing_key)
+    return c
+
+
+def run_clips(*spans):
+    return [playback.Clip(playback.line_key("system", a), ("system",), a, b, f"words {a}", 120) for a, b in spans]
+
+
+def wait_idle(ctl, timeout=10):
+    end = time.monotonic() + timeout
+    while ctl.playing_key is not None and time.monotonic() < end:
+        time.sleep(0.01)
+    assert ctl.playing_key is None, "the run never ended"
+
+
+def test_play_from_walks_the_highlight_through_the_clips_and_ends_idle(run_ctl, tmp_path):
+    folder = kept(tmp_path)
+    res = run_ctl.play_from(folder, run_clips((1000, 2000), (3000, 4000), (6000, 7000)))
+    assert res.status == "playing" and run_ctl.playing_key == "line:system:1000" and run_ctl.playing_run
+    wait_idle(run_ctl)
+    seen = [k for i, k in enumerate(run_ctl.keys) if k and (i == 0 or run_ctl.keys[i - 1] != k)]
+    assert seen == ["line:system:1000", "line:system:3000", "line:system:6000"]
+    assert not run_ctl.playing_run and len(run_ctl.outs) == 1 and run_ctl.outs[0].closed  # one stream for the run
+    assert not any(np.frombuffer(b"".join(run_ctl.outs[0].writes), dtype=np.int16))  # gain 0.0: silence
+
+
+def test_stop_playback_ends_a_run_and_clicking_another_clip_replaces_it(run_ctl, tmp_path):
+    folder = kept(tmp_path, seconds=40.0)
+    run_ctl.play_from(folder, run_clips((1000, 9000), (10_000, 19_000), (20_000, 29_000)))
+    time.sleep(0.2)
+    run_ctl.stop_playback()
+    assert run_ctl.playing_key is None and not run_ctl.playing_run and run_ctl.outs[0].closed
+    run_ctl.play_from(folder, run_clips((1000, 9000), (10_000, 19_000)))
+    time.sleep(0.1)
+    assert run_ctl.play_clip(folder, clip(start=2000, end=3000)).status == "playing"
+    assert not run_ctl.playing_run and run_ctl.playing_key == "line:system:2000"
+    wait_idle(run_ctl)
+    assert run_ctl.notes == []
+
+
+def test_a_run_over_unreadable_audio_says_so_and_does_not_stay_busy(run_ctl, tmp_path):
+    folder = make_meeting(tmp_path, LINES, status=mt.STATUS_PROCESSING)  # no audio files
+    run_ctl.play_from(folder, run_clips((1000, 2000)))
+    wait_idle(run_ctl)
+    assert run_ctl.notes == ["Could not read that audio."] and run_ctl.outs == []
+    assert run_ctl.play_from(folder, []).status == "unavailable"
+
+
+def test_while_recording_every_clip_of_a_run_opens_its_window_and_comes_from_the_ring(run_ctl, tmp_path):
+    folder = recording(run_ctl, tmp_path)
+    res = run_ctl.play_from(folder, run_clips((10_000, 12_000), (14_000, 16_000)))
+    assert res.status == "playing" and res.notice == playback.HEADPHONES
+    wait_idle(run_ctl)
+    noted = run_ctl._recorder.noted
+    assert [n[1:] for n in noted[:2]] == [("words 10000", "run"), ("words 14000", "run")] and noted[-1] == "run ended"
+    assert noted[0][0] == pytest.approx(2.24, abs=0.05)  # 2 s + 120 ms of padding each side
+    again = run_ctl.play_from(folder, run_clips((20_000, 21_000)))
+    assert again.notice == ""  # the warning is once per meeting, not once per run
+    wait_idle(run_ctl)
+
+
+def test_a_run_while_recording_asks_once_when_echo_dedupe_has_seen_echo(run_ctl, tmp_path):
+    folder = recording(run_ctl, tmp_path, echo=2)
+    res = run_ctl.play_from(folder, run_clips((10_000, 12_000)))
+    assert res.status == "confirm" and run_ctl._recorder.noted == [] and run_ctl.outs == []
+    assert run_ctl.play_from(folder, run_clips((10_000, 12_000)), confirmed=True).status == "playing"
+    wait_idle(run_ctl)
+
+
+def test_lines_that_left_the_ring_during_a_run_are_skipped_not_played(run_ctl, tmp_path):
+    folder = recording(run_ctl, tmp_path)
+    run_ctl._recorder.ring = RecentAudio(10)
+    run_ctl._recorder.ring.write(tone(300, 30.0))  # holds 20 s .. 30 s
+    run_ctl.play_from(folder, run_clips((5_000, 6_000), (22_000, 23_000)))
+    wait_idle(run_ctl)
+    assert [n[1] for n in run_ctl._recorder.noted if isinstance(n, tuple)] == ["words 22000"]  # the old one is not played
+
+
+def test_the_clip_device_setting_reaches_the_player_and_a_missing_device_is_told_once(run_ctl):
+    run_ctl.update_settings(replace_settings(run_ctl, clip_output_device="Headset (USB)"))
+    assert run_ctl.player.device_name == "Headset (USB)"
+    run_ctl._clip_device_missing("Headset (USB)")
+    run_ctl._clip_device_missing("Headset (USB)")
+    assert len(run_ctl.notes) == 1 and "Windows default output" in run_ctl.notes[0]
+    run_ctl.update_settings(replace_settings(run_ctl, clip_output_device=None))
+    assert run_ctl.player.device_name is None
+
+
+def replace_settings(ctl, **kw):
+    from dataclasses import replace
+
+    return replace(ctl.settings, **kw)

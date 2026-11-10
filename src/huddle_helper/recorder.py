@@ -372,17 +372,24 @@ class Recorder:
         for playback; None when it has left the 10-minute window."""
         rings = {src: w.ring for src, w in self._workers.items() if w.ring is not None}
         if len(clip.sources) == 1:
-            return playback.clip_from_ring(rings.get(clip.sources[0]), clip.start_ms, clip.end_ms)
+            return playback.clip_from_ring(rings.get(clip.sources[0]), clip.start_ms, clip.end_ms, clip.pad_ms)
         return playback.mixed_from_rings(rings, clip)
 
-    def note_playback(self, duration_s: float, text: str) -> bool:
+    def note_playback(self, duration_s: float, text: str, run: bool = False) -> bool:
         """A clip of ``duration_s`` is about to play: open a playback window for it (the drop rule).
-        False when not recording (nothing to drop)."""
+        ``run``: one clip of a continuous Play from here, which also gets a joined window with the
+        clips just before it. False when not recording (nothing to drop)."""
         now = self.now_ms()
         if now is None or self.status.state != "recording":
             return False
-        self.playbacks.add(now, duration_s, text)
+        if run:
+            self.playbacks.add_run_clip(now, duration_s, text)
+        else:
+            self.playbacks.add(now, duration_s, text)
         return True
+
+    def end_playback_run(self) -> None:
+        self.playbacks.end_run()
 
     def _sync_playbacks(self) -> None:
         """Write the playback counts to meta.json when they changed (on the ticker, never the capture path)."""

@@ -8,7 +8,7 @@ Pure parts (no Tk, no audio device, easy to test):
   ``snap_end`` / ``snap_start``); read from the kept
   ``audio\\*.flac`` (inside a ``with`` block, so no file handle outlives the read: the folder can be
   deleted at once) or from the recorder's in-memory ring while recording. Quiet clips are raised with
-  the transcriber's gain rule (``normalize_level``), for playback only.
+  the speech-level rule of ``leveling.level_clip``, for playback only.
 * ``mix`` / ``bookmark_range`` / ``Clip`` / ``line_clip`` / ``bookmark_clip`` / ``pick_voice_line``
   what to play for a line, a bookmark ("what you heard": both streams, 10 s before to 5 s after) or
   a speaker ("Hear this voice").
@@ -41,7 +41,7 @@ import numpy as np
 
 from . import echo
 from .audio import SAMPLE_RATE
-from .transcribe import normalize_level
+from .leveling import level_clip
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ MAX_CLIP_S = 30.0  # nothing longer is played (a runaway range, not a real line)
 WINDOW_BEFORE_MS = 250  # a window opens this long before the play call...
 WINDOW_LEAD_MS = 1_000  # ...the device takes up to this long to start (a PyAudio instance is opened per clip)...
 WINDOW_TAIL_MS = 1_500  # ...and the loopback and the transcriber see the end this much late
+RUN_JOIN_MS = 12_000  # a joined window spans the clips started in the last 12 s (max_utterance_s)
 RING_SECONDS = 600  # the in-memory recent audio, per stream
 
 HEADPHONES = "Use headphones: without them, people on the call will hear this clip."
@@ -201,7 +202,7 @@ def clip_from_files(folder, source: str, start_ms: int, end_ms: int, pad_ms: int
     a, b = clip_range(start_ms, end_ms, pad_ms)
     x_ms = max(0, a - EXTRA_MS)
     data = read_file_span(folder.audio_file(source), x_ms, b + EXTRA_MS)
-    return None if data is None else normalize_level(_finish_line(data, x_ms, start_ms, end_ms, pad_ms))
+    return None if data is None else level_clip(_finish_line(data, x_ms, start_ms, end_ms, pad_ms))
 
 
 def clip_from_ring(ring, start_ms: int, end_ms: int, pad_ms: int = PAD_MS) -> np.ndarray | None:
@@ -212,13 +213,13 @@ def clip_from_ring(ring, start_ms: int, end_ms: int, pad_ms: int = PAD_MS) -> np
     a, b = clip_range(start_ms, end_ms, pad_ms)
     x_ms = max(a - EXTRA_MS, ring.oldest_ms)
     data = ring.read(x_ms, b + EXTRA_MS)
-    return None if data is None else normalize_level(_finish_line(data, x_ms, start_ms, end_ms, pad_ms))
+    return None if data is None else level_clip(_finish_line(data, x_ms, start_ms, end_ms, pad_ms))
 
 
 def mixed_from_files(folder, clip: "Clip") -> np.ndarray | None:
     """A multi-stream clip (a bookmark) from the kept audio: the raw spans summed, then levelled once."""
     got = mix([read_file_span(folder.audio_file(src), clip.start_ms, clip.end_ms) for src in clip.sources])
-    return None if got is None else normalize_level(got)
+    return None if got is None else level_clip(got)
 
 
 def mixed_from_rings(rings: dict, clip: "Clip") -> np.ndarray | None:
@@ -230,7 +231,7 @@ def mixed_from_rings(rings: dict, clip: "Clip") -> np.ndarray | None:
         if ring is not None:
             parts.append(ring.read(max(clip.start_ms, ring.oldest_ms), clip.end_ms))
     got = mix(parts)
-    return None if got is None else normalize_level(got)
+    return None if got is None else level_clip(got)
 
 
 def mix(clips: Sequence[np.ndarray | None]) -> np.ndarray | None:
@@ -259,6 +260,7 @@ class Clip:
     start_ms: int  # unpadded span
     end_ms: int
     text: str  # what is said in it, for the drop rule
+    pad_ms: int = PAD_MS  # a line of "Play from here" carries less padding (playsequence.RUN_PAD_MS)
 
     @property
     def duration_s(self) -> float:
@@ -328,6 +330,7 @@ class PlaybackWindows:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._windows: list[_Window] = []
+        self._run: list[tuple[int, str]] = []  # (start, text) of the latest clips of the run in progress
         self.count = 0  # clips played
         self.dropped = 0  # utterances dropped
 
@@ -338,6 +341,25 @@ class PlaybackWindows:
         with self._lock:
             self._windows.append(win)
             self.count += 1
+
+    def add_run_clip(self, now_ms: int, duration_s: float, text: str) -> None:
+        """One clip of a continuous run (Play from here). Besides its own window, a *joined* window covers
+        the clips started in the last ``RUN_JOIN_MS`` of the run together (the longest utterance the
+        transcriber cuts): clips with under half a second between them come back through the loopback as one
+        utterance holding the words of several, which matched against one clip's words alone falls under
+        the 0.6 threshold and would become a transcript line. A joined window is not counted as a clip."""
+        self.add(now_ms, duration_s, text)
+        end = int(now_ms + WINDOW_LEAD_MS + duration_s * 1000 + WINDOW_TAIL_MS)
+        with self._lock:
+            self._run.append((now_ms, text))
+            self._run = [r for r in self._run if r[0] >= now_ms - RUN_JOIN_MS]
+            if len(self._run) > 1:
+                words = echo.normalize_words(" ".join(r[1] for r in self._run))
+                self._windows.append(_Window(max(0, self._run[0][0] - WINDOW_BEFORE_MS), end, words))
+
+    def end_run(self) -> None:
+        with self._lock:
+            self._run = []
 
     def match(self, start_ms: int, end_ms: int, text: str) -> bool:
         words = echo.normalize_words(text)
@@ -382,17 +404,28 @@ def headphone_check(recording: bool, warned: bool, confirmed: bool, echo_dropped
 
 
 class PortAudioOutput:
-    """One output stream on the default WASAPI output device, with its own ``PyAudio`` instance.
-    ``close`` terminates the instance, so nothing of PortAudio stays initialised between clips."""
+    """One output stream, with its own ``PyAudio`` instance. ``device_name`` is the user's "Play clips on"
+    choice (``outputs.py``); None, or a name that is not found any more, plays on the Windows default
+    output (``fell_back`` says the latter). ``close`` terminates the instance, so nothing of PortAudio
+    stays initialised between clips."""
 
-    def __init__(self) -> None:
+    def __init__(self, device_name: str | None = None) -> None:
         import pyaudiowpatch as pyaudio
+
+        from . import outputs
 
         self._pa = pyaudio.PyAudio()
         self._stream = None
+        self.fell_back = False
         try:
             wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-            dev = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+            infos = [self._pa.get_device_info_by_index(i) for i in range(self._pa.get_device_count())]
+            pick = outputs.pick_output(outputs.read_outputs(infos, wasapi["index"]), device_name,
+                                       wasapi["defaultOutputDevice"])
+            if pick.device is None:
+                raise OSError("No output device")
+            dev = self._pa.get_device_info_by_index(pick.device.index)
+            self.fell_back = pick.fell_back
             self.rate = int(dev["defaultSampleRate"])
             self.channels = max(1, int(dev["maxOutputChannels"]))
             self.device_name = dev["name"]
@@ -444,12 +477,25 @@ class Player:
 
     BLOCK_S = 0.1  # written in blocks this long, so stop is heard within a block
 
-    def __init__(self, gain: float = 1.0, output_factory: Callable[[], object] | None = None):
+    def __init__(self, gain: float = 1.0, output_factory: Callable[[], object] | None = None,
+                 device_name: str | None = None):
         self.gain = min(1.0, max(0.0, float(gain)))
-        self._factory = output_factory or PortAudioOutput
+        self.device_name = device_name  # "Play clips on": None = the Windows default output
+        self.on_fallback: Callable[[str], None] | None = None  # told when the chosen device was not found
+        self._factory = output_factory or self._open_output
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
+
+    def _open_output(self):
+        wanted = self.device_name
+        out = PortAudioOutput(wanted)
+        if out.fell_back and self.on_fallback is not None and wanted:
+            try:
+                self.on_fallback(wanted)
+            except Exception:  # noqa: BLE001
+                log.exception("Playback fallback callback failed")
+        return out
 
     @property
     def playing(self) -> bool:
@@ -464,6 +510,34 @@ class Player:
             self._thread = threading.Thread(target=self._run, args=(np.array(samples, dtype=np.float32), cancel, on_done),
                                             name="playback", daemon=True)
             self._thread.start()
+
+    def play_run(self, clips: Sequence["Clip"], load: Callable[["Clip"], np.ndarray | None],
+                 on_clip: Callable[["Clip", np.ndarray], None] | None = None,
+                 on_done: Callable[[str], None] | None = None) -> None:
+        """Play ``clips`` one after the other on one output stream (Play from here, ``playsequence``).
+        ``load`` and ``on_clip`` run on the worker thread; ``on_done`` as for ``play``, plus
+        ``"unavailable"`` when no clip could be read."""
+        self.stop()
+        with self._lock:
+            cancel = threading.Event()
+            self._cancel = cancel
+            self._thread = threading.Thread(target=self._run_clips, args=(list(clips), load, on_clip, cancel, on_done),
+                                            name="playback-run", daemon=True)
+            self._thread.start()
+
+    def _run_clips(self, clips, load, on_clip, cancel, on_done) -> None:
+        from . import playsequence
+
+        try:
+            reason = playsequence.run_sequence(self._factory, clips, load, cancel, self.gain, on_clip).reason
+        except Exception as exc:  # noqa: BLE001 - a device problem must not leave the app stuck "playing"
+            log.exception("Playback failed")
+            reason = f"error: {exc}"
+        if on_done is not None:
+            try:
+                on_done(reason)
+            except Exception:  # noqa: BLE001
+                log.exception("Playback callback failed")
 
     def stop(self) -> None:
         with self._lock:

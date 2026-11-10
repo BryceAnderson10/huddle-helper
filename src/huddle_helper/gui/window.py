@@ -210,6 +210,7 @@ class MainWindow:
         self.view.line_name_menu = self._line_menu
         self.view.on_play = self._play_row
         self.view.on_hear_voice = self._hear_voice
+        self.view.on_play_from = self._play_from
         self.view.voice_state = self._voice_state
         self.win.bind("<Escape>", lambda e: self.app.stop_playback())
         self.win.bind("<Key>", self._on_key, add="+")  # 1-9 name the latest voice (attendees)
@@ -396,7 +397,7 @@ class MainWindow:
 
     def _refresh_play(self) -> None:
         if self.session is not None:
-            self.view.set_audio(self.audio_context(), self.app.playing_key)
+            self.view.set_audio(self.audio_context(), self.app.playing_key, self.app.playing_run)
 
     def _play_row(self, row) -> None:
         """The play control of a line or bookmark row (also Space on the selected line)."""
@@ -413,6 +414,30 @@ class MainWindow:
             self._say_banner(state.reason)
             return
         self._start_clip(clip)
+
+    def _play_from(self, row) -> None:
+        """"Play from here" in a line's menu: that line and the following ones, one after the other (L19)."""
+        if self.session is None:
+            return
+        ctx = self.audio_context()
+        clips = logic.run_clips(self.session.model, row, ctx)
+        if not clips:
+            self._say_banner(logic.row_play_state(ctx, row).reason or "There is nothing to play from here.")
+            return
+        self._start_run(clips)
+
+    def _start_run(self, clips: list[playback.Clip], confirmed: bool = False) -> None:
+        result = self.app.play_from(self.session.folder, clips, confirmed=confirmed)
+        if result.status == "confirm":
+            if messagebox.askyesno("Play this clip?", result.message, parent=self.win, default="no"):
+                self._start_run(clips, confirmed=True)
+            return
+        if result.status != "playing":
+            self._say_banner(result.message)
+            return
+        if result.notice:
+            self._say_banner(result.notice)
+        self.view.set_playing(self.app.playing_key, self.app.playing_run)
 
     def _start_clip(self, clip: playback.Clip, confirmed: bool = False) -> None:
         result = self.app.play_clip(self.session.folder, clip, confirmed=confirmed)
@@ -724,7 +749,7 @@ class MainWindow:
         s = self.session
         if s is None:
             return FAST_MS
-        self.view.set_playing(self.app.playing_key)
+        self.view.set_playing(self.app.playing_key, self.app.playing_run)
         ops = s.poll()
         self._apply(ops)
         return FAST_MORE_MS if s.has_more else FAST_MS

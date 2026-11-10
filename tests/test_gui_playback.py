@@ -205,7 +205,7 @@ def test_speaker_chips_and_hear_this_voice(root, tmp_path):
     assert str(w.chip_menu.entrycget(hear, "state")) == "normal"
     row_menu = w.view.build_menu(w.view._rows[0])
     labels = [row_menu.entrycget(i, "label") for i in range(row_menu.index("end") + 1) if row_menu.type(i) == "command"]
-    assert labels[:2] == ["Play", "Hear this voice (SPEAKER_01)"]
+    assert labels[:3] == ["Play", "Play from here", "Hear this voice (SPEAKER_01)"]
     w.destroy()
 
 
@@ -252,3 +252,79 @@ def test_headphone_notice_shows_in_the_notice_bar_and_the_confirmation_asks_firs
 def test_copying_selected_text_leaves_out_the_play_controls():
     assert logic.copyable("▶\t09:30:01\tYou\thello.\n■\t09:30:05\tDana\tworld.") == "09:30:01\tYou\thello.\n09:30:05\tDana\tworld."
     assert logic.copyable("just words") == "just words" and logic.copyable("▶ not a control") == "▶ not a control"
+
+
+# -- Play from here (L19) ---------------------------------------------------------------------------------
+
+
+def menu_labels(menu):
+    return [(menu.entrycget(i, "label"), str(menu.entrycget(i, "state")))
+            for i in range(menu.index("end") + 1) if menu.type(i) == "command"]
+
+
+def test_play_from_here_is_in_a_lines_menu_and_starts_a_run_from_that_line(root, tmp_path):
+    folder = make_meeting(tmp_path, LINES, status=mt.STATUS_PROCESSING)
+    with_audio(folder)
+    w, ctl = make_window(root, tmp_path, folder)
+    menu = w.view.build_menu(w.view._rows[1])
+    assert ("Play from here", "normal") in menu_labels(menu)
+    menu.invoke(menu_labels(menu).index(("Play from here", "normal")))
+    assert ctl.play_calls == [("run", ["line:system:5000", "line:system:10000"], False)]  # that line and the one after
+    mark_menu = w.view.build_menu(None)
+    assert "Play from here" not in [l for l, _ in menu_labels(mark_menu)]
+    w.destroy()
+
+
+def test_play_from_here_is_greyed_out_with_the_reason_when_there_is_no_audio(root, tmp_path):
+    folder = make_meeting(tmp_path, LINES, final=LINES)
+    w, ctl = make_window(root, tmp_path, folder)
+    assert ("Play from here", "disabled") in menu_labels(w.view.build_menu(w.view._rows[0]))
+    w._play_from(w.view._rows[0])
+    assert ctl.play_calls == [] and "deleted" in w._banner[0].lower()
+    w.destroy()
+
+
+def test_run_clips_start_at_the_line_and_skip_what_the_ring_no_longer_holds(root, tmp_path):
+    folder = make_meeting(tmp_path, LINES, status=mt.STATUS_PROCESSING)
+    w, ctl = make_window(root, tmp_path, folder)
+    model, rows = w.session.model, [r for r in w.session.model.rows if hasattr(r, "person_key")]
+    files = playback.AudioContext("files", present=frozenset({"mic", "system"}))
+    assert [c.key for c in logic.run_clips(model, rows[0], files)] == [
+        "line:mic:1000", "line:system:5000", "line:system:10000"]
+    ring = playback.AudioContext("ring", oldest_ms=(("mic", 0), ("system", 4000)))
+    assert [c.key for c in logic.run_clips(model, rows[0], ring)] == [
+        "line:mic:1000", "line:system:5000", "line:system:10000"]  # all inside both streams' windows
+    late = playback.AudioContext("ring", oldest_ms=(("mic", 0), ("system", 7000)))
+    assert [c.key for c in logic.run_clips(model, rows[0], late)] == ["line:mic:1000", "line:system:10000"]
+    assert logic.run_clips(model, rows[1], late) == []  # the line itself is out of the ring
+    assert logic.run_clips(model, rows[0], playback.AudioContext("none", "gone")) == []
+    w.destroy()
+
+
+def test_the_view_scrolls_the_heard_line_into_view_until_the_user_scrolls(root, tmp_path):
+    many = [("system", 2000 * i, 2000 * i + 1500, "SPEAKER_01", f"line number {i} " + "word " * 12) for i in range(60)]
+    folder = make_meeting(tmp_path, many, status=mt.STATUS_PROCESSING)
+    with_audio(folder, 130.0)
+    w, ctl = make_window(root, tmp_path, folder)
+    w.win.geometry("700x400+0+0")
+    w.win.update()
+    v = w.view
+    v.text.yview_moveto(0.0)
+    v.update()
+    last = playback.line_key("system", 2000 * 40)
+    assert v.text.bbox(v._start(40)) is None  # off screen
+    v.set_playing("line:system:0", run=True)
+    v.set_playing(last, run=True)  # the run reaches line 40
+    v.update()
+    assert v.text.bbox(v._start(40)) is not None  # scrolled into view
+    v._user_scrolled()
+    v.text.yview_moveto(0.0)
+    v.update()
+    v.set_playing(playback.line_key("system", 2000 * 55), run=True)
+    v.update()
+    assert v.text.bbox(v._start(55)) is None and v.text.bbox(v._start(0)) is not None  # the user's position stays
+    v.set_playing(None)
+    v.set_playing(playback.line_key("system", 2000 * 55), run=True)  # a new run follows again
+    v.update()
+    assert v.text.bbox(v._start(55)) is not None
+    w.destroy()

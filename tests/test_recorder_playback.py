@@ -232,3 +232,28 @@ def test_a_line_played_back_just_after_it_was_said_is_kept_because_the_words_spa
     rec.stop()
     segs = lines(folder)
     assert [s["text"] for s in segs] == ["Tone1100."] and rec.playbacks.snapshot() == (1, 0)
+
+
+def test_two_clips_of_a_run_heard_back_to_back_are_both_dropped_and_found_no_speaker(tmp_path):
+    tr = GatedTranscriber()
+    rec, folder, cap, _ = start(tmp_path, tr)
+    cap.push(silence(1.0), silence(1.0))
+    cap.push(silence(2.0), tone(1100, 2.0))  # 1-3 s: a remote person
+    cap.push(silence(3.0), silence(3.0))
+    cap.push(silence(2.0), tone(1600, 2.0))  # 6-8 s: the first clip of a run, heard through the loopback
+    cap.push(silence(0.4), silence(0.4))
+    cap.push(silence(2.0), tone(2000, 2.0))  # 8.4-10.4 s: the second clip
+    cap.push(silence(4.0), silence(4.0))
+    cap.push(silence(2.0), tone(2500, 2.0))  # 14.4-16.4 s: a remote person after the run ended
+    cap.push(silence(2.0), silence(2.0))
+    rec.playbacks.add_run_clip(6000, 2.0, "Tone1600.")
+    rec.playbacks.add_run_clip(8400, 2.0, "Tone2000.")
+    rec.playbacks.end_run()
+    tr.go.set()
+    rec.stop()
+    segs = lines(folder)
+    assert [s["text"] for s in segs] == ["Tone1100.", "Tone2500."]
+    assert [s["speaker"] for s in segs] == ["SPEAKER_01", "SPEAKER_02"]  # the clips took no speaker numbers
+    meta = folder.read_meta()
+    # 0.4 s between the clips is under the VAD's 0.5 s: the loopback delivered them as one utterance
+    assert meta["playbacks"] == 2 and meta["playback_segments_dropped"] == 1

@@ -23,7 +23,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .. import export as export_mod, meeting as mt
-from .. import marks as marks_mod, playback
+from .. import marks as marks_mod, playback, playsequence
 from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
 from . import theme
 
@@ -477,6 +477,15 @@ def row_play_state(ctx: playback.AudioContext, row) -> playback.PlayState:
         start, end = playback.bookmark_range(row.at_ms)
         return ctx.clip_state(playback.Clip("", ("mic", "system"), start, end, ""))
     return playback.PlayState(False, "")
+
+
+def run_clips(model: TranscriptModel, row, ctx: playback.AudioContext) -> list[playback.Clip]:
+    """The clips of "Play from here" on ``row`` (a line): that line and the lines after it whose audio can be
+    read now (``playsequence.plan_run``). Empty when the line itself cannot be played."""
+    if not isinstance(row, LineRow) or not ctx.state(row.source, row.start_ms).enabled:
+        return []
+    return playsequence.plan_run(model.rows, playback.line_key(row.source, row.start_ms),
+                                 lambda r: ctx.state(r.source, r.start_ms).enabled)
 
 
 def voice_sample(model: TranscriptModel, person_key: str, ctx: playback.AudioContext

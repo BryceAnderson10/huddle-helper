@@ -580,3 +580,21 @@ What went well:
   call voice.
 - [ ] *Needs a person:* the keys on a real keyboard (numpad, non-US layout) during a real
   call; that the bar never takes focus from another app.
+
+### WP9b: Play from here, clip levels, output device (L19)
+
+- [x] Built: "Play from here" on a line's menu (`playsequence.py`), clip levelling to
+  -20 dBFS with a +24 dB cap and a soft limiter (`leveling.py`), and "Play clips on" in
+  Settings (`outputs.py`, `clip_output_device`). 72 clips from Tests #2 and #3: no peak
+  over 1.0, 67 within ±1 dB of the target, 4–5 very quiet mic lines capped. A windowed
+  Test #3 replay with four runs at gain 0 gave the same live (21) and final (13) lines as
+  a replay without playback; `playbacks` 16, dropped 0.
+- [ ] **Not proven on real loopback:** the replay feeds files, so no played sound comes
+  back. That a run's clips are dropped (the joined 12 s window) rests on unit tests.
+- [ ] **Decide:** a run still playing at Stop carries on from the kept files.
+- [ ] With no attendees the "Who is this?" bar and the headphone warning stack in the
+  same yellow and take three rows (`lab\wp9b\shots\02`); see the WP9a decision.
+- [ ] The "↓ N new lines" button overlaps the last row's text (older behaviour).
+- [ ] *Needs a person:* listen to levelled clips and to line changes in a run (nothing
+  was played audibly); a real non-default "Play clips on" device and unplugging it;
+  switching the default output during a run.

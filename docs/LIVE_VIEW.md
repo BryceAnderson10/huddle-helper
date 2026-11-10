@@ -485,9 +485,14 @@ that line started a little earlier.
 
 **What plays.** The line's own stream (`mic` or `system`), from `start_ms − 300` to
 `end_ms + 300` ms so the first and last words aren't clipped. Audio is 16 kHz mono, so
-it sounds like a phone call, which is enough to recognise a voice and a word. Clips
-whose peak is very low (the quiet-mic problem from Test #2) are raised toward a normal
-level for playback only, using the same gain cap as transcription. Clicking another line
+it sounds like a phone call, which is enough to recognise a voice and a word. Quiet clips
+(the quiet-mic problem from Test #2) are raised to a normal level for playback only
+(`leveling.py`): the clip's *speech level* (rms of its active 20 ms steps) is moved to
+-20 dBFS, never lowered, with a boost of at most +24 dB; the boosted noise floor is kept under
+-30 dBFS; a clip with nothing standing out of its noise (or below -54 dBFS) is not raised at
+all; a soft limiter keeps the result under 1.0 without flattening peaks. Measured on Tests
+#2 and #3: 67 of 72 clips land within 1 dB of the target, 4-5 mic clips (the quietest, at
+-45 to -55 dBFS) hit the cap and stay quieter. Clicking another line
 stops the current clip; `Space` replays the selected line, `Esc` stops.
 
 **When audio exists.**
@@ -548,8 +553,30 @@ may be dropped too, or kept with clip words in it. That is why layer 1 is the re
 - **Hear this voice** (speaker chip): plays the longest line of that speaker with high
   confidence, preferring 3–8 s. Live labels during the meeting, final labels after.
 - **Bookmark:** play from 10 s before the bookmark to 5 s after.
-- **Play from here** (P1): plays continuously from a line on its stream, or both streams
-  mixed (what you heard), and highlights each line as it plays.
+- **Play from here** (L19, line menu): plays the line and every line after it, in transcript
+  order, each from its own stream (overlapping lines of the two streams play one after the
+  other, not mixed), on one output stream, and highlights the line being heard (the same
+  row background as a single clip; its play control shows the stop square). The lines are
+  those at the moment of the click: a run never follows lines that arrive while it plays, so
+  it cannot feed on its own sound. Lines whose audio is not available (older than the 10 minutes
+  held in memory, no file for that stream) are left out. Silence is not played: each clip has
+  120 ms of padding (not 300 ms, which would play the same sound twice) and the pause between
+  two lines is their gap minus that padding, at most 0.4 s, so a two-minute silence plays as a
+  0.4 s pause. The view scrolls the heard line into view until the user scrolls themselves
+  (wheel, scrollbar, navigation keys); a new run follows again. It ends after the last line, on
+  `Esc`, on the stop square of the line being heard, when another clip is played, when the
+  window leaves the meeting or the app quits, or when the capture re-opens its devices. A
+  run that is still going when recording stops carries on from the kept audio files. While recording every clip of
+  a run is a playback window like a single clip (drop rule, `playbacks` counts clips, the
+  headphone warning once per meeting), plus a *joined* window over the clips of the last 12 s,
+  because clips with under half a second between them come back through the loopback as one
+  utterance holding the words of several, which no single clip's window would match.
+- **Play clips on** (L19, Settings): the playback device, stored by name in
+  `clip_output_device` (default: the Windows default output; not the capture's *Meeting audio
+  from*). A device that is not connected any more is kept in the list as "(not connected)" and
+  clips play on the default output with one notice. The clip's own `PyAudio` instance is opened
+  per clip or run and terminated at its end, so the capture's re-bind still sees a fresh
+  device list.
 
 ## Meetings and housekeeping
 

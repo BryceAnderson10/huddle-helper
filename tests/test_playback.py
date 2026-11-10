@@ -9,12 +9,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from huddle_helper import meeting as mt, playback
+from huddle_helper import leveling, meeting as mt, playback
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.audio.ring import RecentAudio
-from huddle_helper.transcribe import MAX_GAIN, TARGET_PEAK
 
-from .conftest import tone
+from .conftest import speechlike, tone
 
 
 def write_flac(path, samples, rate=SAMPLE_RATE):
@@ -74,16 +73,16 @@ def test_the_file_handle_is_closed_after_a_read(folder, tmp_path):
     assert not folder.path.exists()
 
 
-def test_quiet_clips_are_raised_with_the_transcribers_gain_cap_and_loud_ones_left_alone(folder):
-    write_flac(folder.audio_file("mic"), tone(300, 2.0, amp=0.04))
-    write_flac(folder.audio_file("system"), tone(300, 2.0, amp=0.6))
+def test_quiet_clips_are_raised_to_the_speech_level_and_loud_ones_left_alone(folder):
+    write_flac(folder.audio_file("mic"), speechlike(2.0, amp=0.04))
+    write_flac(folder.audio_file("system"), speechlike(2.0, amp=0.6))
     quiet = playback.clip_from_files(folder, "mic", 200, 1500)
-    assert float(np.abs(quiet).max()) == pytest.approx(TARGET_PEAK, rel=0.02)  # 0.04 -> 0.5 is x12.5, under the cap
+    assert leveling.measure(quiet).speech_rms == pytest.approx(leveling.TARGET_RMS, rel=0.1)
     loud = playback.clip_from_files(folder, "system", 200, 1500)
-    assert float(np.abs(loud).max()) == pytest.approx(0.6, rel=0.02)
-    write_flac(folder.audio_file("mic"), tone(300, 2.0, amp=0.001))  # needs x500: capped
+    assert float(np.abs(loud).max()) == pytest.approx(0.6, rel=0.02)  # already above the target: untouched
+    write_flac(folder.audio_file("mic"), speechlike(2.0, amp=0.001))  # needs x100: capped at +24 dB
     very_quiet = playback.clip_from_files(folder, "mic", 200, 1500)
-    assert float(np.abs(very_quiet).max()) <= 0.001 * MAX_GAIN * 1.05
+    assert float(np.abs(very_quiet).max()) <= 0.001 * 10 ** (leveling.MAX_BOOST_DB / 20) * 1.05
 
 
 def test_mix_sums_streams_pads_the_shorter_and_never_clips():

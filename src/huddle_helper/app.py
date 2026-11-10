@@ -154,6 +154,10 @@ class AppController:
         self._retry_waiting: list[mt.MeetingFolder] = []  # retries held back while a meeting records
         # Click to hear (WP7): one clip at a time; the output gain is 1.0 unless a dev script lowers it.
         self.player = player or playback.Player()
+        self.player.device_name = self.settings.clip_output_device  # "Play clips on" (outputs.py)
+        self.player.on_fallback = self._clip_device_missing
+        self._fallback_told: set[str] = set()
+        self._run_active = False  # a Play from here run is loading or playing
         self._playing: tuple[str, int] | None = None  # (clip key, token) while a clip is loading or playing
         self._play_token = 0
         self._play_lock = threading.Lock()
@@ -408,21 +412,81 @@ class AppController:
         threading.Thread(target=self._load_and_play, args=(folder, clip, token), name="clip-read", daemon=True).start()
         return PlayResult("playing")
 
+    @property
+    def playing_run(self) -> bool:
+        """True while a Play from here run is going (the window follows its highlight)."""
+        return self._run_active and self._playing is not None
+
+    def _clip_device_missing(self, name: str) -> None:
+        if name not in self._fallback_told:  # once per device name, not once per clip
+            self._fallback_told.add(name)
+            self._notify(f"The output device '{name}' for clips is not available. Playing on the Windows default output.")
+
+    def play_from(self, folder: mt.MeetingFolder, clips: list[playback.Clip], *, confirmed: bool = False) -> PlayResult:
+        """Play ``clips`` (``playsequence.plan_run``) one after the other. Same rules as ``play_clip`` for
+        every clip: while the meeting records the audio comes from the ring, each clip opens a playback
+        window (plus a joined one, see ``PlaybackWindows.add_run_clip``) just before its sound starts, and
+        the headphone warning applies once for the run. The key of the clip being heard is ``playing_key``."""
+        if not clips:
+            return PlayResult("unavailable", "There is nothing to play from here.")
+        mid = folder.meeting_id
+        notice = ""
+        if self._is_live(folder):
+            rec = self._recorder
+            check = playback.headphone_check(True, mid in self._hp_warned, mid in self._hp_confirmed or confirmed,
+                                             rec.echo_dropped)
+            if check.action == "confirm":
+                return PlayResult("confirm", check.message)
+            if confirmed:
+                self._hp_confirmed.add(mid)
+            if check.action == "warn":
+                self._hp_warned.add(mid)
+                notice = check.message
+        token = self._claim(clips[0].key)
+        self._run_active = True
+        self.player.play_run(clips, lambda c, f=folder: self._load_clip(f, c),
+                             lambda c, s, f=folder, t=token: self._run_clip_started(f, c, s, t),
+                             lambda reason, t=token: self._run_finished(t, reason))
+        return PlayResult("playing", notice=notice)
+
+    def _load_clip(self, folder: mt.MeetingFolder, clip: playback.Clip):
+        if self._is_live(folder):
+            return self._recorder.recent_clip(clip)
+        return self._read_clip_files(folder, clip)
+
+    def _run_clip_started(self, folder: mt.MeetingFolder, clip: playback.Clip, samples, token: int) -> None:
+        with self._play_lock:
+            if self._play_token != token:
+                return
+            self._playing = (clip.key, token)
+        if self._is_live(folder):
+            self._recorder.note_playback(len(samples) / playback.SAMPLE_RATE, clip.text, run=True)
+        self._on_change()
+
+    def _run_finished(self, token: int, reason: str) -> None:
+        rec = self._recorder
+        if rec is not None:
+            rec.end_playback_run()
+        with self._play_lock:
+            if self._play_token == token:
+                self._run_active = False
+        if reason == "unavailable":
+            self._notify("Could not read that audio.")
+        self._play_finished(token, reason)
+
     def _claim(self, key: str) -> int:
         """Make ``key`` the current clip (the window shows ■ at once); stops the previous one."""
         self.player.stop()
         with self._play_lock:
             self._play_token += 1
+            self._run_active = False
             self._playing = (key, self._play_token)
             token = self._play_token
         self._on_change()
         return token
 
     def _load_and_play(self, folder: mt.MeetingFolder, clip: playback.Clip, token: int) -> None:
-        if len(clip.sources) == 1:
-            samples = playback.clip_from_files(folder, clip.sources[0], clip.start_ms, clip.end_ms)
-        else:
-            samples = playback.mixed_from_files(folder, clip)
+        samples = self._read_clip_files(folder, clip)
         with self._play_lock:
             current = self._playing is not None and self._playing[1] == token
         if not current:
@@ -432,6 +496,12 @@ class AppController:
             self._notify("Could not read that audio.")
             return
         self._play(samples, token)
+
+    @staticmethod
+    def _read_clip_files(folder: mt.MeetingFolder, clip: playback.Clip):
+        if len(clip.sources) == 1:
+            return playback.clip_from_files(folder, clip.sources[0], clip.start_ms, clip.end_ms, clip.pad_ms)
+        return playback.mixed_from_files(folder, clip)
 
     def _play(self, samples, token: int) -> None:
         self.player.play(samples, lambda reason, t=token: self._play_finished(t, reason))
@@ -448,6 +518,7 @@ class AppController:
     def stop_playback(self) -> None:
         with self._play_lock:
             self._play_token += 1  # a clip still being read must not start
+            self._run_active = False
             self._playing = None
         self.player.stop()
         self._on_change()
@@ -648,12 +719,16 @@ class AppController:
         config.save(replace(new, **self._persisted) if self._persisted else new)
         old = self.settings
         self.settings = replace(new, **self._overrides) if self._overrides else new
+        self.player.device_name = self.settings.clip_output_device  # from the next clip, even while recording
         rec = self._recorder
         vocab_changed = list(old.vocabulary) != list(new.vocabulary)
         if self.is_recording and rec is not None and vocab_changed:
             rec.set_vocabulary(settings_terms=list(new.vocabulary))
         if self.is_recording:
-            if vocab_changed and _same_apart_from_vocabulary(old, new):
+            if old.clip_output_device != new.clip_output_device and \
+                    {**old.to_dict(), "clip_output_device": None} == {**new.to_dict(), "clip_output_device": None}:
+                self._notify("Settings saved. Clips play on the new device from the next clip.")
+            elif vocab_changed and _same_apart_from_vocabulary(old, new):
                 self._notify("Vocabulary saved. It applies from the next line.")
             else:
                 self._notify("Settings saved. They apply from the next recording"
