@@ -30,7 +30,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from . import marks as marks_mod, meeting as mt, playback, vocab
+from . import attendees as attendees_mod, marks as marks_mod, meeting as mt, playback, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
 from .audio.gate import MicGate
@@ -217,7 +217,8 @@ class Recorder:
             self.folder.update_meta(vocabulary=list(self._terms_used),
                                     vocabulary_changed_at_ms=list(self._vocab_changed_at_ms))
 
-    def start(self, title: str, meeting_terms: Iterable[str] = (), start_muted: bool = False) -> mt.MeetingFolder:
+    def start(self, title: str, meeting_terms: Iterable[str] = (), start_muted: bool = False,
+              attendees: Iterable[str] = ()) -> mt.MeetingFolder:
         if self.status.state not in ("idle", "error"):
             raise RuntimeError("Already recording")
         s = self.settings
@@ -244,6 +245,9 @@ class Recorder:
             "vocabulary_changed_at_ms": [],
             "mic_muted_since_ms": 0 if start_muted else None,
         }
+        names = attendees_mod.clean_attendees(attendees)
+        if names:  # additive (L13): absent when none were entered
+            meta["attendees"] = names
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
         self._writer = JsonlWriter(self.folder.live_path)
         self.gate = MicGate(muted=start_muted)

@@ -233,7 +233,7 @@ class NamePicker:
     double click on a name) accepts, Esc cancels. ``on_done(name)`` gets the trimmed, non-empty name."""
 
     def __init__(self, parent: tk.Misc, title: str, prompt: str, choices: list[str], current: str = "",
-                 on_done: Callable[[str], None] | None = None):
+                 on_done: Callable[[str], None] | None = None, heading: str = "Used in this meeting"):
         self._on_done = on_done
         self.win = tk.Toplevel(parent)
         self.win.title(title)
@@ -248,7 +248,7 @@ class NamePicker:
         self.entry.grid(row=1, column=0, sticky="we", pady=(6, 8))
         self.list = None
         if choices:
-            ttk.Label(frm, text="Used in this meeting", foreground=theme.MUTED,
+            ttk.Label(frm, text=heading, foreground=theme.MUTED,
                       font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL)).grid(row=2, column=0, sticky="w")
             self.list = tk.Listbox(frm, height=min(6, len(choices)), exportselection=False, activestyle="none")
             for c in choices:

@@ -702,6 +702,30 @@ While muted, an amber bar sits under the header:
 - **Speaker bar.** One chip per live label (merged by name). Click to name; names entered
   earlier in the meeting and the attendee list (see brainstorm) are offered first.
   A new unnamed voice gets a highlighted "Who is this?" chip.
+- **Attendees (L13, built in WP9a).** The Start dialog has an optional "Who's on the call" box (one
+  name per line, or separated by commas or semicolons; an invite's `Name <email>` works). The list is
+  saved in `meta.json` as `attendees` (only when not empty) and shown as a numbered strip under the speaker
+  bar while the meeting is recording or being processed: "Keys 1-4 name SPEAKER_02: 1 Ana  2 Ben ✓  3 Cy". The name
+  picker and "This line is…" offer attendees not yet used first, then the names already in use.
+  - **Number keys.** With the window focused and no text box focused, keys 1-9 name a voice as attendee N,
+    exactly as the chip's Name… does (a speaker-level tag, past and future lines). The voice is the one the
+    "Who is this?" bar is asking about, when it is showing; otherwise the speaker of the latest call line whose
+    speaker is still unnamed; when every call speaker is named, the speaker of the latest call line (so a wrong
+    name can be replaced). The strip's heading names the voice a key will name. The keys do nothing in the final
+    view, on the Meetings page, without attendees, with Ctrl or Alt held, or while an entry, spin box or editable
+    text has the focus. A key beyond the list ("7" with three names) says so in the status bar.
+  - **Confirmation.** A bar under the notice says "SPEAKER_03 is now Ana · [Undo] [OK]" for 10 s. Undo puts
+    the touched labels and lines back to the tag they had (including none).
+  - **"Who is this?" for new voices.** The first time a call label (not `You`/`Remote`) appears unnamed in the
+    live view, a bar under the notice bar asks "New voice SPEAKER_03 ("…first words…"). Who is this?" with
+    buttons for the attendees not yet used (each with its own number), "Other…" (the name picker) and "Not now". It is
+    part of the window: no dialog, no focus change, nothing when the window is hidden. One voice at a time, the others
+    queue, oldest first; naming a voice any other way, or "Not now", moves on, and a voice is asked about once. Voices
+    already on screen when the window is opened mid-meeting are queued too. It works with or without attendees.
+  - **Names and speech recognition.** The names are *not* given to Whisper by default (WP3 spike: a wrong
+    name is a wrong fact, so L34's automatic add was not built). The Start dialog has an opt-in box, "Also give
+    these names to speech recognition", off by default; ticked, they join the meeting's terms (so they appear in
+    `vocabulary` in `meta.json` like any term).
 - **Transcript.** Colour per person, time from `start_ms` + `started_at`. Auto-scroll
   while at the bottom; scrolling up pauses it and shows "Jump to live". Right-click a
   line: "This line is…", "Add to vocabulary…", "Copy".

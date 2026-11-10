@@ -314,7 +314,8 @@ class AppController:
             return self.bookmark(name, "hotkey")
         return {"action": "none"}
 
-    def start(self, title: str, terms: list[str] | tuple[str, ...] = ()) -> None:
+    def start(self, title: str, terms: list[str] | tuple[str, ...] = (),
+              attendees: list[str] | tuple[str, ...] = ()) -> None:
         if not self.can_start:
             return
         self._set(phase="starting", message="Starting…")
@@ -325,7 +326,7 @@ class AppController:
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m),
                                           before_reopen=self.player.stop)  # decision 7: nothing open on re-bind
-                folder = self._recorder.start(title or "meeting", terms)
+                folder = self._recorder.start(title or "meeting", terms, attendees=attendees)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
             except Exception as exc:  # noqa: BLE001

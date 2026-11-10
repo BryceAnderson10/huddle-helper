@@ -562,3 +562,21 @@ What went well:
   could not be photographed by script); the full 22-minute Test #4 replay with tags; the
   downstream reader for `speaker_tags.jsonl` and the new `speakers.json` fields
   (`from_tags`, `conflicts`).
+
+## From the P1 polish branches (WP9)
+
+### WP9a: attendees, number keys, "Who is this?" (L13)
+
+- [x] Built: "Who's on the call" on the Start dialog (`meta.json` `attendees`, absent when
+  empty), a numbered strip, keys 1–9, a confirmation with Undo, and a "Who is this?" bar
+  for each new call voice. Checked in a windowed replay of Test #3.
+- [x] **Attendee names are not given to Whisper unless a box is ticked** (off by default),
+  following the WP3 decision. LIVE_VIEW L34 still says "added automatically" in two
+  places; the new Attendees paragraph is the one that is right.
+- [ ] **Decide:** the "Who is this?" bar also appears when no attendees were entered, so
+  every meeting shows it for every new call voice. Keep, or show it only with attendees?
+- [ ] **Decide:** while the bar is showing, a number key answers the voice the bar asks
+  about (oldest unanswered), not the latest line. Otherwise it names the latest unnamed
+  call voice.
+- [ ] *Needs a person:* the keys on a real keyboard (numpad, non-US layout) during a real
+  call; that the bar never takes focus from another app.

@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import config, hotkeys, models, vocab
+from . import attendees as attendees_mod, config, hotkeys, models, vocab
 from .gui import logic
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
@@ -34,8 +34,9 @@ class _TermsBox:
     counting is vocab.plan, called through ``plan``."""
 
     def __init__(self, parent, *, height: int, initial: str, plan: PlanFn | None,
-                 meeting_only: bool, wraplength: int):
+                 meeting_only: bool, wraplength: int, extra: Callable[[], list[str]] | None = None):
         self._plan = plan
+        self._extra = extra  # more terms counted with these (the attendee names, when the box is ticked)
         self._meeting_only = meeting_only
         self.text = tk.Text(parent, height=height, width=44, wrap="word", undo=True)
         self.text.insert("1.0", initial)
@@ -49,7 +50,7 @@ class _TermsBox:
     def refresh(self, other_terms: list[str] | None = None) -> None:
         if self._plan is None:
             return
-        terms = self.terms()
+        terms = vocab.parse_terms(chr(10).join([*self.terms(), *(self._extra() if self._extra else [])]))
         # plan(settings_terms, meeting_terms): the Start box holds the meeting terms
         p = self._plan(other_terms or [], terms) if self._meeting_only else self._plan(terms)
         count, dropped = vocab.summary_lines(p)
@@ -58,7 +59,7 @@ class _TermsBox:
 
 
 class StartDialog:
-    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str]], None],
+    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str]], None],
                  plan: PlanFn | None = None, settings_terms: list[str] | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Start recording")
@@ -71,27 +72,51 @@ class StartDialog:
         self.title = tk.StringVar(value="")
         entry = ttk.Entry(frm, textvariable=self.title, width=44)
         entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(2, 10))
-        ttk.Label(frm, text="Extra terms for this meeting (one per line, optional)").grid(
+        ttk.Label(frm, text="Who's on the call (optional; one per line or separated by commas)").grid(
             row=2, column=0, columnspan=2, sticky="w")
-        self.terms = _TermsBox(frm, height=3, initial="", plan=plan, meeting_only=True, wraplength=330)
-        self.terms.text.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 2))
-        self.terms.count.grid(row=4, column=0, columnspan=2, sticky="w")
-        self.terms.dropped.grid(row=5, column=0, columnspan=2, sticky="w")
-        self.terms.text.bind("<KeyRelease>", lambda e: self.terms.refresh(self._settings_terms))
+        self.attendees = tk.Text(frm, height=3, width=44, wrap="word", undo=True)
+        self.attendees.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 2))
+        ttk.Label(frm, text="They become one-click names, and keys 1-9 in the transcript window name the "
+                            "latest new voice.", wraplength=330, foreground="#555").grid(
+            row=4, column=0, columnspan=2, sticky="w")
+        self.names_as_terms = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Also give these names to speech recognition", variable=self.names_as_terms,
+                        command=self._refresh_terms).grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(frm, text="Off by default: it can make a name appear where nobody said it.",
+                  wraplength=330, foreground="#555").grid(row=6, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        ttk.Label(frm, text="Extra terms for this meeting (one per line, optional)").grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.terms = _TermsBox(frm, height=3, initial="", plan=plan, meeting_only=True, wraplength=330,
+                               extra=self._name_terms)
+        self.terms.text.grid(row=8, column=0, columnspan=2, sticky="we", pady=(2, 2))
+        self.terms.count.grid(row=9, column=0, columnspan=2, sticky="w")
+        self.terms.dropped.grid(row=10, column=0, columnspan=2, sticky="w")
+        self.terms.text.bind("<KeyRelease>", lambda e: self._refresh_terms())
+        self.attendees.bind("<KeyRelease>", lambda e: self._refresh_terms() if self.names_as_terms.get() else None)
         ttk.Label(frm, text=CONSENT_REMINDER, wraplength=330, foreground="#a33").grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(8, 12))
-        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=7, column=0, sticky="e", padx=6)
-        ttk.Button(frm, text="Start recording", command=self._start).grid(row=7, column=1, sticky="e")
+            row=11, column=0, columnspan=2, sticky="w", pady=(8, 12))
+        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=12, column=0, sticky="e", padx=6)
+        ttk.Button(frm, text="Start recording", command=self._start).grid(row=12, column=1, sticky="e")
         entry.bind("<Return>", lambda e: self._start())
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         _center(self.win)
         entry.focus_set()
 
+    def attendee_names(self) -> list[str]:
+        return attendees_mod.parse_attendees(self.attendees.get("1.0", "end"))
+
+    def _name_terms(self) -> list[str]:
+        return self.attendee_names() if self.names_as_terms.get() else []
+
+    def _refresh_terms(self) -> None:
+        self.terms.refresh(self._settings_terms)
+
     def _start(self) -> None:
         title = self.title.get().strip() or "meeting"
-        terms = self.terms.terms()
+        names = self.attendee_names()
+        terms = attendees_mod.merge_terms(self.terms.terms(), names, self.names_as_terms.get())
         self.win.destroy()
-        self._on_start(title, terms)
+        self._on_start(title, terms, names)
 
 
 HotkeyResultsFn = Callable[[dict[str, str]], "tuple[dict[str, hotkeys.Registration], bool]"]

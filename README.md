@@ -20,7 +20,9 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
 
 1. Run `HuddleHelper.exe` (or `python -m huddle_helper` from a dev setup). A grey
    microphone icon appears in the tray.
-2. Click it → **Start recording…**, name the meeting, and start. The icon turns red with a
+2. Click it → **Start recording…**, name the meeting, optionally list who is on the call (names
+   become numbered one-click choices: press 1-9 in the Transcript window to name the latest new voice,
+   with Undo; a bar asks "Who is this?" when a new voice appears), and start. The icon turns red with a
    dot while recording. Tell participants you're recording; laws vary by place.
 3. **Stop recording** when done. The icon turns amber while speaker labels are refined
    (a few minutes for a long meeting on a laptop CPU), then you get a notification.
@@ -87,6 +89,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `vad.py` | Streaming Silero VAD and utterance segmentation |
 | `transcribe.py` | faster-whisper wrapper |
 | `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence |
+| `attendees.py` | The attendee list from the Start dialog: parse, dedupe, `meta.json` `attendees`, the opt-in to add names to the vocabulary |
 | `diarize.py` | Live clustering and offline diarization |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
 | `recorder.py` | Threads and lifecycle of one recording |
@@ -106,6 +109,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `session.py` | `MeetingSession`: the Transcript window's polling of one meeting (tails, meta, `DONE`, live-to-final swap), no Tk |
 | `replay.py` | `tray --replay <folder>` dev aid: feeds a kept meeting's audio through the recorder; unattended-run logic |
 | `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Main window: header (mute, Keep this meeting's audio, Export), notice bar, status bar, read-only transcript text with a play control on each line and bookmark, "This line is…" in the line menu, Export, bookmark, name-picker and delete-confirmation dialogs (thin Tk); the window swaps between the Transcript and Meetings pages |
+| `gui/attendee_logic.py` | Attendees in the window: name choices (unused attendees first), the number-key target and guards, the undo, the numbered strip, the "Who is this?" queue for new voices (UI-free) |
 | `gui/speaker_bar.py` | The speaker bar: one chip per person under the notice bar; a new unnamed voice asks "Who is this?"; a click opens the chip menu (Name…, Remove name, Hear this voice) (thin Tk) |
 | `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |

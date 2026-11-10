@@ -406,6 +406,15 @@ class TranscriptModel:
         """The line has a name of its own (a "This line is..." tag), which beats its speaker's name."""
         return (source, start_ms) in self._tags.lines
 
+    def speaker_tag(self, label: str) -> str | None:
+        """The name given to the live label as a whole (not the one-off line names), if any."""
+        return self._tags.speakers.get(label)
+
+    def line_tag(self, source: str, start_ms: int) -> str | None:
+        """The line's own name, if it has one."""
+        hit = self._tags.lines.get((source, start_ms))
+        return hit[0] if hit else None
+
     def _refresh_names(self) -> list[Op]:
         ops: list[Op] = []
         for i, r in enumerate(self.rows):

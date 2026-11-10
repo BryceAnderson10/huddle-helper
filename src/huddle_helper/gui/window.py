@@ -25,6 +25,12 @@ speaker bar's chips open a menu with "Hear this voice". Controls that cannot pla
 reason in a tooltip (and in the notice bar when clicked). The header's "Keep this meeting's audio" check box
 calls ``set_keep_audio``. The once-per-meeting headphone warning is shown in the notice bar, and the
 confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
+
+Attendees (WP9a, L13): a meeting started with a list of attendees gets a numbered strip under the speaker
+bar; while the window has the focus (and no text box does) the keys 1-9 name the latest call voice as that
+attendee, with a confirmation and Undo. A new unnamed call voice raises a "Who is this?" bar with the attendees
+as buttons. Both bars are part of the window (no dialog, no focus change); the decisions are in
+``attendee_logic``.
 """
 
 from __future__ import annotations
@@ -33,14 +39,15 @@ import logging
 import queue
 import time
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Callable
 
-from .. import marks as marks_mod, meeting as mt, playback
+from .. import attendees as att, marks as marks_mod, meeting as mt, playback
 from ..session import MeetingSession
 from ..transcript_model import LineRow, MarkRow, Reset
-from . import logic, theme
+from . import attendee_logic as al, logic, theme
 from .dialogs import ExportDialog, MarkEditor, NamePicker
 from .meetings_view import MeetingsView
 from .speaker_bar import SpeakerBar
@@ -50,6 +57,7 @@ log = logging.getLogger(__name__)
 
 FAST_MS, FAST_MORE_MS, STATUS_MS, SLOW_MS = 250, 20, 500, 1000
 FEEDBACK_S = 3.0  # how long "Decision added" stays in the status bar
+TOAST_S = 10.0  # how long "SPEAKER_03 is now Ana · Undo" stays
 BANNER_S = 8.0  # how long a one-off notice (headphone warning, "why can't I play this") replaces the notice bar
 
 
@@ -156,11 +164,25 @@ class MainWindow:
         self._notice_shown = False
         self._banner: tuple[str, float] = ("", 0.0)  # (text, until): replaces the notice bar for a few seconds
 
+        # "Who is this?" prompt / naming confirmation (packed only while there is one; never takes the focus)
+        self.prompter = al.WhoPrompter()
+        self._toast: tuple[str, al.NamingUndo, Path, float] | None = None
+        self.prompt_bar = tk.Frame(self.tpage, bg=theme.CHIP_NEW_BG)
+        self.prompt_text = tk.Label(self.prompt_bar, text="", anchor="w", justify="left", font=base,
+                                    bg=theme.CHIP_NEW_BG, fg=theme.MUTE_BAR_FG, padx=int(10 * scale),
+                                    pady=int(3 * scale), wraplength=int(740 * scale))
+        self.prompt_btns = tk.Frame(self.prompt_bar, bg=theme.CHIP_NEW_BG)
+        self._prompt_sig: tuple | None = None
+        self._prompt_shown = False
+
         # speaker bar (chips; packed only while the meeting has lines)
         self.speakers = SpeakerBar(self.tpage)
         self.speakers.on_chip = self._chip_menu
         self.chip_menu = tk.Menu(self.speakers, tearoff=False)
         self._speakers_shown = False
+        self.strip = tk.Label(self.tpage, text="", anchor="w", justify="left", font=base, bg="white",
+                              fg="#4b5563", padx=int(10 * scale), pady=int(2 * scale), wraplength=int(740 * scale))
+        self._strip_shown = False
 
         # status bar (packed before the transcript so it keeps its place when the window is small)
         ttk.Separator(self.tpage, orient="horizontal").pack(side="bottom", fill="x")
@@ -185,11 +207,12 @@ class MainWindow:
         self.view.on_bookmark_line = self._bookmark_line
         self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
         self.view.on_name_line = self._name_line
-        self.view.line_name_menu = lambda row: logic.line_name_menu(self.session.model, row)
+        self.view.line_name_menu = self._line_menu
         self.view.on_play = self._play_row
         self.view.on_hear_voice = self._hear_voice
         self.view.voice_state = self._voice_state
         self.win.bind("<Escape>", lambda e: self.app.stop_playback())
+        self.win.bind("<Key>", self._on_key, add="+")  # 1-9 name the latest voice (attendees)
 
         self.meetings = MeetingsView(self.win, app, post=self._post, on_open=self.open_meeting,
                                      on_back=self.show_transcript, has_session=lambda: self.session is not None,
@@ -279,6 +302,8 @@ class MainWindow:
             self.app.stop_playback()  # a clip of the meeting just left would play on, unlabelled
         self.view.clear()
         self.session = MeetingSession(folder)
+        self.prompter.reset()
+        self._toast = None
         st = self.app.state
         phase = logic.meeting_phase(folder.meeting_id, self.session.model, st)
         # Follow the end while lines are still arriving; a finished meeting opens at its top.
@@ -446,9 +471,10 @@ class MainWindow:
         m = self.session.model
         chip = next((c for c in logic.speaker_chips(m) if c.person_key == person_key), None)
         shown = chip.display if chip else person_key
+        att_names = self._attendees()
         NamePicker(self.win, "Who is this?", f"Who is {shown}? The name is used for every line of this voice.",
-                   logic.name_choices(m, exclude=person_key), "" if chip is None or chip.unnamed else shown,
-                   on_done=lambda name: self._apply_person_name(person_key, name))
+                   al.pick_names(m, att_names, exclude=person_key), "" if chip is None or chip.unnamed else shown,
+                   on_done=lambda name: self._apply_person_name(person_key, name), heading=self._pick_heading())
 
     def _apply_person_name(self, person_key: str, name: str | None) -> None:
         s = self.session
@@ -474,17 +500,173 @@ class MainWindow:
             return
         if name is None:
             NamePicker(self.win, "This line is…", f"Who said this line? Only this line changes.{chr(10)}“{logic.short_name(row.text, 60)}”",
-                       logic.name_choices(s.model, exclude=row.name), "",
-                       on_done=lambda n: self._name_line(row, n))
+                       al.pick_names(s.model, self._attendees(), exclude=row.name), "",
+                       on_done=lambda n: self._name_line(row, n), heading=self._pick_heading())
             return
         self.app.tag_line(s.folder, row, name or None)
         self._poll_now()
         self._refresh_all()
 
+    # -- attendees (WP9a, L13) -------------------------------------------------------------------
+    def _attendees(self) -> list[str]:
+        return att.from_meta(self.session.model.meta) if self.session is not None else []
+
+    def _pick_heading(self) -> str:
+        return "On the call, and used in this meeting" if self._attendees() else "Used in this meeting"
+
+    def _line_menu(self, row: LineRow) -> logic.LineNameMenu:
+        m = self.session.model
+        nm = logic.line_name_menu(m, row)
+        if not nm.enabled:
+            return nm
+        return replace(nm, choices=tuple(al.pick_names(m, self._attendees(), exclude=row.name)))
+
+    def _live_naming(self) -> bool:
+        """The live view of a meeting being recorded or processed: where keys and prompts work."""
+        s = self.session
+        return (s is not None and self.page == "transcript" and not s.model.final
+                and logic.meeting_phase(s.meeting_id, s.model, self.app.state)
+                in (logic.RECORDING, logic.STOPPING, logic.PROCESSING))
+
+    def _on_key(self, event) -> str | None:
+        """Keys 1-9 with the window focused: name the latest call voice as attendee N. Does nothing in a text
+        box, in the final view, on the Meetings page or without attendees."""
+        n = al.digit_of(event.char, event.state)
+        if n is None or self.session is None or not self._live_naming():
+            return None
+        try:
+            w = self.win.focus_get()
+            cls = w.winfo_class() if w is not None else ""
+            state = str(w.cget("state")) if cls == "Text" else "normal"
+        except (KeyError, tk.TclError):
+            cls, state = "", "normal"
+        if al.focus_blocks_keys(cls, state):
+            return None
+        names = self._attendees()
+        if not names:
+            return None
+        if n > len(names):
+            self._say(f"No attendee {n} (the list has {len(names)})")
+            return "break"
+        self.name_latest_as(names[n - 1])
+        return "break"
+
+    def name_latest_as(self, name: str) -> None:
+        """Name the voice the keys point at (``attendee_logic.key_voice``) as ``name``."""
+        s = self.session
+        target = al.key_voice(s.model, self.prompter.current) if s is not None else None
+        if target is None:
+            self._say("No line from the call to name yet")
+            return
+        if target[1] == name:
+            self._say(f"{name} is already named")
+            return
+        self._name_with_undo(target[0], target[1], name)
+
+    def _name_with_undo(self, person_key: str, before: str, name: str) -> None:
+        s = self.session
+        undo = al.capture_undo(s.model, person_key)
+        self._apply_person_name(person_key, name)
+        self._toast = (al.confirmation_text(before, name), undo, s.folder.path, time.monotonic() + TOAST_S)
+        self._refresh_all()
+
+    def _undo_naming(self) -> None:
+        t, self._toast = self._toast, None
+        s = self.session
+        if t is None or s is None or s.folder.path != t[2]:
+            return
+        for label, prev in t[1].labels:
+            self.app.tag_speaker(s.folder, label, prev)
+        for row, prev in t[1].lines:
+            self.app.tag_line(s.folder, row, prev)
+        self._poll_now()
+        self._say("Naming undone")
+
+    def _prompt_action(self, action: str) -> None:
+        voice = self.prompter.current
+        if action == "undo":
+            self._undo_naming()
+        elif action == "dismiss":
+            if self._toast is not None:
+                self._toast = None
+            else:
+                self.prompter.dismiss()
+        elif voice is not None and action == "other":
+            NamePicker(self.win, "Who is this?", f"Who is {voice.display}? The name is used for every line of this voice.",
+                       al.pick_names(self.session.model, self._attendees()), "",
+                       on_done=lambda name, v=voice: self._name_with_undo(v.person_key, v.display, name),
+                       heading=self._pick_heading())
+        elif voice is not None and action.startswith("pick:"):
+            names = self._attendees()
+            n = int(action.split(":")[1])
+            if 1 <= n <= len(names):
+                self._name_with_undo(voice.person_key, voice.display, names[n - 1])
+        self._refresh_all()
+
+    def _prompt_view(self) -> al.PromptView | None:
+        s = self.session
+        voice = self.prompter.update(s.model, self._live_naming()) if s is not None else None
+        if self._toast is not None and (s is None or time.monotonic() >= self._toast[3] or s.folder.path != self._toast[2]):
+            self._toast = None
+        if self._toast is not None:
+            return al.undo_view(self._toast[0] + " ·")
+        if voice is not None:
+            return al.prompt_view(voice, self._attendees(), al.used_names(s.model))
+        return None
+
+    def _set_prompt(self) -> None:
+        v = self._prompt_view()
+        if v is None:
+            if self._prompt_shown:
+                self.prompt_bar.pack_forget()
+                self._prompt_shown = False
+            return
+        sig = (v.text, v.buttons, v.inline)
+        if sig != self._prompt_sig:
+            self._prompt_sig = sig
+            self.prompt_text.configure(text=v.text)
+            self.prompt_text.pack_forget()
+            self.prompt_btns.pack_forget()
+            side = "left" if v.inline else "top"
+            self.prompt_text.pack(side=side, fill="none" if v.inline else "x")
+            self.prompt_btns.pack(side=side, fill="none" if v.inline else "x", padx=int(10 * self._scale),
+                                  pady=(0 if v.inline else 0, int(4 * self._scale)))
+            for child in self.prompt_btns.winfo_children():
+                child.destroy()
+            for b in v.buttons:  # takefocus off: the bar must not pull the keyboard focus from the transcript
+                ttk.Button(self.prompt_btns, text=b.label, takefocus=False,
+                           command=lambda a=b.action: self._prompt_action(a)).pack(side="left", padx=(0, 6))
+        if not self._prompt_shown:
+            self.prompt_bar.pack(fill="x", before=self._below(self.prompt_bar))
+            self._prompt_shown = True
+
+    def _set_strip(self) -> None:
+        s = self.session
+        names = self._attendees()
+        text = al.strip_text(s.model, names, self.prompter.current) if s is not None and names and self._live_naming() else ""
+        if not text:
+            if self._strip_shown:
+                self.strip.pack_forget()
+                self._strip_shown = False
+            return
+        if self.strip.cget("text") != text:
+            self.strip.configure(text=text)
+        if not self._strip_shown:
+            self.strip.pack(fill="x", before=self.view)
+            self._strip_shown = True
+
+    def _below(self, widget) -> tk.Misc:
+        """The first shown bar under ``widget`` in the stack (mute bar, notice, prompt, speakers, strip), else the transcript."""
+        stack = [(self.mute_bar, self._mute_bar_shown), (self.notice, self._notice_shown),
+                 (self.prompt_bar, self._prompt_shown), (self.speakers, self._speakers_shown),
+                 (self.strip, self._strip_shown)]
+        i = next(k for k, (w, _) in enumerate(stack) if w is widget)
+        return next((w for w, on in stack[i + 1:] if on), self.view)
+
     def _set_speakers(self, model) -> None:
         chips = logic.speaker_chips(model) if model is not None else []
         if chips and not self._speakers_shown:
-            self.speakers.pack(fill="x", before=self.view)
+            self.speakers.pack(fill="x", before=self._below(self.speakers))
             self._speakers_shown = True
         elif not chips and self._speakers_shown:
             self.speakers.pack_forget()
@@ -606,7 +788,9 @@ class MainWindow:
             self.head_text.configure(text="No meeting open")
             self._set_mute(None, None)
             self._set_keep(logic.KeepAudioView(False))
+            self._set_prompt()
             self._set_speakers(None)
+            self._set_strip()
             self._set_notice(None)
             self._set_status(logic.StatusView(None, None, "", False, False))
             self._placeholder()
@@ -623,7 +807,9 @@ class MainWindow:
         self._set_notice(self._banner_view() or logic.notice_view(mid, model, state))
         self._set_status(logic.status_view(mid, model, state))
         self._set_keep(logic.keep_audio_view(mid, model, state))
+        self._set_prompt()
         self._set_speakers(model)
+        self._set_strip()
         self._refresh_play()
 
     def _set_mute(self, button: logic.MuteButtonView | None, bar: logic.MuteBarView | None) -> None:
@@ -642,8 +828,7 @@ class MainWindow:
             if self.mute_bar_text.cget("text") != bar.text:
                 self.mute_bar_text.configure(text=bar.text)
             if not self._mute_bar_shown:
-                self.mute_bar.pack(fill="x", before=self.notice if self._notice_shown else (
-                    self.speakers if self._speakers_shown else self.view))
+                self.mute_bar.pack(fill="x", before=self._below(self.mute_bar))
                 self._mute_bar_shown = True
         elif self._mute_bar_shown:
             self.mute_bar.pack_forget()
@@ -660,7 +845,7 @@ class MainWindow:
         if self.notice.cget("text") != n.text or self.notice.cget("bg") != bg:
             self.notice.configure(text=n.text, bg=bg, fg=fg)
         if not self._notice_shown:
-            self.notice.pack(fill="x", before=self.speakers if self._speakers_shown else self.view)
+            self.notice.pack(fill="x", before=self._below(self.notice))
             self._notice_shown = True
 
     def _set_status(self, v: logic.StatusView) -> None:
