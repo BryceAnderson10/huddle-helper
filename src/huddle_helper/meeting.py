@@ -27,6 +27,8 @@ LIVE = "transcript.jsonl"
 FINAL = "transcript.final.jsonl"
 FINAL_TMP = "transcript.final.jsonl.tmp"
 SPEAKERS = "speakers.json"
+MARKS = "marks.jsonl"
+TAGS = "speaker_tags.jsonl"
 DONE = "DONE"
 AUDIO = "audio"
 
@@ -68,12 +70,39 @@ def read_json(path: Path) -> dict:
         return json.load(fh)
 
 
+_FOLDER_LOCKS: dict[str, threading.Lock] = {}
+_REGISTRY_LOCK = threading.Lock()
+
+
+def folder_lock(path: Path) -> threading.Lock:
+    """One lock per resolved folder path, shared by every MeetingFolder for that folder."""
+    key = os.path.normcase(str(Path(path).resolve()))
+    with _REGISTRY_LOCK:
+        lock = _FOLDER_LOCKS.get(key)
+        if lock is None:
+            lock = _FOLDER_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def append_jsonl(path: Path, event: dict) -> None:
+    """Append one compact JSON line to a file in a meeting folder, under that folder's lock."""
+    path = Path(path)
+    with folder_lock(path.parent):
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
 class MeetingFolder:
     """A single meeting's folder plus its metadata."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
-        self._lock = threading.Lock()
+
+    @property
+    def _lock(self) -> threading.Lock:
+        return folder_lock(self.path)
 
     # -- creation -------------------------------------------------------
     @classmethod
@@ -140,6 +169,14 @@ class MeetingFolder:
         return self.path / SPEAKERS
 
     @property
+    def marks_path(self) -> Path:
+        return self.path / MARKS
+
+    @property
+    def tags_path(self) -> Path:
+        return self.path / TAGS
+
+    @property
     def done_path(self) -> Path:
         return self.path / DONE
 
@@ -188,7 +225,8 @@ class MeetingFolder:
 
     def write_speakers(self, mapping: dict[str, str]) -> None:
         clean = {k: v.strip() for k, v in mapping.items() if v and v.strip() and v.strip() != k}
-        write_json_atomic(self.speakers_path, {"speakers": clean, "updated_at": iso(now_local())})
+        with self._lock:
+            write_json_atomic(self.speakers_path, {"speakers": clean, "updated_at": iso(now_local())})
 
     # -- completion -----------------------------------------------------
     def mark_done(self) -> None:

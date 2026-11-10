@@ -66,7 +66,7 @@ def _ensure_models(s: config.Settings) -> None:
         models.install_all(s.whisper_model, s.needs_diarization, progress=print)
 
 
-def _finalize(folder, s: config.Settings) -> None:
+def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> None:
     from .diarize import SherpaEmbedder, SherpaOfflineDiarizer
     from .finalize import finalize_meeting
 
@@ -74,7 +74,8 @@ def _finalize(folder, s: config.Settings) -> None:
         print(f"\r{stage}: {frac:4.0%}   ", end="", flush=True)
 
     count = finalize_meeting(folder, lambda: SherpaOfflineDiarizer(threshold=s.final_cluster_threshold),
-                             keep_audio=s.keep_audio, progress=progress, embedder_factory=SherpaEmbedder,
+                             keep_audio=s.keep_audio if keep_audio is None else keep_audio,
+                             progress=progress, embedder_factory=SherpaEmbedder,
                              voice_threshold=s.final_voice_threshold)
     print(f"\nFinal transcript: {folder.final_path} ({count} segments)")
 
@@ -232,7 +233,7 @@ def cmd_finalize(args) -> int:
     folder = MeetingFolder(Path(args.folder))
     if folder.done_path.exists():
         folder.done_path.unlink()
-    _finalize(folder, s)
+    _finalize(folder, s, keep_audio=not getattr(args, "delete_audio", False))
     return 0
 
 
@@ -311,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("finalize", help="re-run the after-Stop pass on a meeting folder")
     sp.add_argument("folder")
+    sp.add_argument("--delete-audio", action="store_true",
+                    help="remove the buffered audio afterwards (default: keep it)")
     common(sp)
     sp.set_defaults(func=cmd_finalize)
 

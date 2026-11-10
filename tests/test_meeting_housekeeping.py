@@ -91,3 +91,77 @@ def test_settings_roundtrip_ignores_unknown_keys(tmp_path):
     assert config.load(path).whisper_model == "tiny.en"
     path.write_text("not json", encoding="utf-8")
     assert config.load(path) == config.Settings()
+
+
+# -- WP0 foundations -----------------------------------------------------
+def _in_threads(*fns):
+    import threading
+
+    threads = [threading.Thread(target=fn) for fn in fns]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
+def test_two_instances_do_not_lose_meta_updates(tmp_path):
+    from tests.helpers import make_meeting
+
+    a = make_meeting(tmp_path, [])
+    b = mt.MeetingFolder(a.path)
+
+    def work(folder, tag):
+        return lambda: [folder.update_meta(**{f"{tag}{i}": i}) for i in range(50)]
+
+    _in_threads(work(a, "a"), work(b, "b"))
+    meta = a.read_meta()
+    assert all(meta[f"a{i}"] == i and meta[f"b{i}"] == i for i in range(50))
+
+
+def test_append_jsonl_threads_yield_whole_lines(tmp_path):
+    import json
+
+    from tests.helpers import make_meeting
+
+    folder = make_meeting(tmp_path, [])
+    other = mt.MeetingFolder(folder.path)
+
+    def work(f, tag):
+        return lambda: [mt.append_jsonl(f.marks_path, {"who": tag, "n": i, "text": "x" * 200})
+                        for i in range(50)]
+
+    _in_threads(work(folder, "a"), work(other, "b"))
+    lines = folder.marks_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 100
+    parsed = [json.loads(line) for line in lines]
+    assert sorted(p["n"] for p in parsed if p["who"] == "a") == list(range(50))
+
+
+def test_make_meeting_is_readable(tmp_path):
+    from tests.helpers import make_meeting
+
+    folder = make_meeting(
+        tmp_path, [("mic", 0, 900, "You", "Hello."), {"source": "system", "start_ms": 1000, "end_ms": 2000,
+                                                        "speaker": "SPEAKER_01", "text": "Hi."}],
+        final=[("mic", 0, 900, "You", "Hello.")], marks=[{"type": "mark", "ms": 5}],
+        tags=[{"type": "tag", "speaker": "SPEAKER_01", "name": "Dana"}],
+        gaps=[{"source": "mic", "start_ms": 1, "end_ms": 2, "reason": "rebind"}])
+    events = read_events(folder.live_path)
+    assert [e["type"] for e in events] == ["meeting_start", "segment", "segment", "meeting_end"]
+    assert len(read_events(folder.final_path)) == 3 and folder.is_done
+    assert len(read_events(folder.marks_path)) == 1 and len(read_events(folder.tags_path)) == 1
+    meta = folder.read_meta()
+    assert meta["status"] == "complete" and meta["segments"] == 2 and meta["gaps"][0]["reason"] == "rebind"
+    assert [m.meeting_id for m in mt.iter_meetings(tmp_path)] == [folder.meeting_id]
+
+
+def test_recover_stores_error(tmp_path):
+    folder = mt.MeetingFolder.create(tmp_path, "Crash", mt.now_local(), {})
+    JsonlWriter(folder.live_path).close()
+
+    def boom(_folder):
+        raise RuntimeError("model exploded")
+
+    housekeeping.recover(tmp_path, boom)
+    meta = folder.read_meta()
+    assert meta["status"] == "failed" and meta["error"] == "model exploded"

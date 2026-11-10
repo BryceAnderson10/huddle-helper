@@ -86,10 +86,10 @@ def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | N
             if finalize is not None:
                 finalize(folder)
             recovered.append(folder.meeting_id)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             log.exception("Could not recover meeting %s", folder.meeting_id)
             try:
-                folder.update_meta(status=mt.STATUS_FAILED)
+                folder.update_meta(status=mt.STATUS_FAILED, error=str(exc))
             except Exception:  # noqa: BLE001
                 pass
     return recovered

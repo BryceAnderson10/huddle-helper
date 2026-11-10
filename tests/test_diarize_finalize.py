@@ -301,3 +301,36 @@ def test_speakers_json(tmp_path):
     data = json.loads(folder.speakers_path.read_text(encoding="utf-8"))
     assert data["speakers"] == {"SPEAKER_01": "Dana"}
     assert folder.read_speakers() == {"SPEAKER_01": "Dana"}
+
+
+def test_finalize_writes_final_stats(tmp_path):
+    folder = _make_meeting(tmp_path)
+    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    stats = folder.read_meta()["final_stats"]
+    assert stats["audio_s"] == 3.0 and stats["took_s"] >= 0 and stats["speed"] is not None
+    assert {"read_audio", "diarize_system", "write"} <= set(stats["stages"])
+
+
+def test_finalize_honours_keep_audio_set_in_meta_late(tmp_path):
+    folder = _make_meeting(tmp_path)  # meta says keep_audio False when the worker read it
+    seen = {}
+
+    class LateDiarizer(FakeDiarizer):
+        def diarize(self, audio, progress=None):
+            folder.update_meta(settings={**folder.read_meta()["settings"], "keep_audio": True})
+            seen["done"] = True
+            return super().diarize(audio, progress)
+
+    finalize_meeting(folder, LateDiarizer, keep_audio=False)
+    assert seen and folder.audio_file("system").exists() and folder.read_meta()["audio_kept"] is True
+
+
+def test_cmd_finalize_keeps_audio_unless_asked(tmp_path, monkeypatch):
+    from huddle_helper import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: calls.append(keep_audio))
+    folder = _make_meeting(tmp_path)
+    assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path)]) == 0
+    assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path), "--delete-audio"]) == 0
+    assert calls == [True, False]

@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from typing import Callable
 
 from . import meeting as mt
@@ -294,6 +295,24 @@ def join_fragments(segments: list[Segment]) -> list[Segment]:
     return out
 
 
+def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
+    """Delete the audio folder unless Keep audio is on, re-reading meta.json so a late change is honoured."""
+    if not folder.audio_dir.exists():
+        return
+    try:
+        keep_audio = keep_audio or bool(folder.read_meta().get("settings", {}).get("keep_audio"))
+    except (OSError, ValueError):
+        pass
+    if keep_audio:
+        return
+    shutil.rmtree(folder.audio_dir, ignore_errors=True)
+    if folder.audio_dir.exists():
+        time.sleep(1.0)  # a file may still be open (antivirus, indexer)
+        shutil.rmtree(folder.audio_dir, ignore_errors=True)
+        if folder.audio_dir.exists():
+            log.warning("Could not remove all buffered audio in %s", folder.audio_dir)
+
+
 # -- the full pass -------------------------------------------------------
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
                      keep_audio: bool, progress: Progress | None = None,
@@ -301,6 +320,8 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
                      voice_threshold: float = 0.65) -> int:
     """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count."""
     progress = progress or (lambda stage, frac: None)
+    t_start = time.perf_counter()
+    stages: dict[str, float] = {}
     meta = folder.read_meta()
     folder.update_meta(status=mt.STATUS_PROCESSING)
 
@@ -326,11 +347,14 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             turns_by_source[src] = None
             continue
         try:
+            t0 = time.perf_counter()
             audio_by_source[src] = read_audio(audio_path)
+            stages["read_audio"] = stages.get("read_audio", 0.0) + time.perf_counter() - t0
         except Exception:  # noqa: BLE001
             log.exception("Could not read buffered %s audio; keeping live labels", src)
             turns_by_source[src] = None
             continue
+        t0 = time.perf_counter()
         try:
             if diarizer is None:
                 if diarizer_factory is None:
@@ -342,7 +366,9 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
         except Exception:  # noqa: BLE001 - fall back rather than lose the meeting
             log.exception("Refined diarization failed for %s", src)
             turns_by_source[src] = None
+        stages[f"diarize_{src}"] = time.perf_counter() - t0
 
+    audio_s = max((len(a) / SAMPLE_RATE for a in audio_by_source.values()), default=None)
     embed = None
     if embedder_factory is not None and audio_by_source:
         try:
@@ -358,20 +384,29 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             embed = None
 
     progress("Grouping voices", 1.0)
+    t0 = time.perf_counter()
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold)
     final_segments = join_fragments(final_segments)
+    if embed is not None:  # embedding and clustering are timed together
+        stages["voice_labels"] = time.perf_counter() - t0
     refined = sorted(s for s in diarized
                      if s in audio_by_source and (embed is not None or turns_by_source.get(s)))
     audio_by_source.clear()
     progress("Writing final transcript", 1.0)
+    t0 = time.perf_counter()
     count = write_transcript(folder.final_tmp_path, folder.meeting_id, started_at, ended_at, final_segments)
     os.replace(folder.final_tmp_path, folder.final_path)
 
-    if not keep_audio and folder.audio_dir.exists():
-        shutil.rmtree(folder.audio_dir, ignore_errors=True)
+    stages["write"] = time.perf_counter() - t0
+
+    _remove_audio(folder, keep_audio)
+    took = time.perf_counter() - t_start
+    final_stats = {"took_s": round(took, 2), "audio_s": round(audio_s, 2) if audio_s is not None else None,
+                   "speed": round(took / audio_s, 2) if audio_s else None,
+                   "stages": {k: round(v, 2) for k, v in stages.items()}}
 
     folder.update_meta(status=mt.STATUS_COMPLETE, final_written_at=mt.iso(mt.now_local()),
-                       final_segments=count, audio_kept=bool(keep_audio and folder.audio_dir.exists()),
-                       refined_streams=refined)
+                       final_segments=count, audio_kept=folder.audio_dir.exists(),
+                       refined_streams=refined, final_stats=final_stats)
     folder.mark_done()
     return count
