@@ -651,3 +651,25 @@ What went well:
 - [ ] **A speaker-level name cannot split voices 0.7 or more alike:** naming a live label
   that mixed Test #4's 74 s and 38 s speakers merged them (118 s). A line-level name on
   one of them is the way out.
+
+## From the process-loopback spike (WP10)
+
+Nothing in the product changed. Finding and numbers: `docs/WP10_SPIKE.md`; tool:
+`tools/process_loopback_spike.py`.
+
+- [x] **Process loopback works through comtypes** (Windows build 26300, no native code).
+  A tone this process played was at -34 dBFS in device loopback and exact zero in process
+  loopback; tones from other processes were at -34 in both. A 20-minute capture gave
+  1200.14 s of audio for 1200.13 s of wall clock with no flags or timeouts.
+- [ ] **Decide: build it** (recommended, with device loopback kept as the fallback when
+  activation fails). About 300–400 lines: a new `audio\procloop.py`, edits in
+  `capture.py`, a `meta.json` field for the capture method.
+- [ ] **Tree exclusion reached only direct children on this build:** a grandchild's tone
+  was captured. A helper process that plays sound would have to be a direct child.
+- [ ] The client delivers zeros every 10 ms during silence (device loopback delivers
+  nothing), which would simplify the meeting clock. The soak ran in silence only. One
+  23 ms step between packets in a 14 s run is unexplained.
+- [ ] *Needs a person before building:* a 30-minute capture during a real call with a
+  clip played; switching the default output mid-capture (expected to carry on without a
+  re-open; untested); a Bluetooth headset; the packaged exe; a Windows build below
+  20348 for the fallback; the engine's 16 kHz conversion against soxr.
