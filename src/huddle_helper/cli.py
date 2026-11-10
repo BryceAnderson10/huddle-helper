@@ -398,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.set_defaults(func=cmd_download)
 
     args = p.parse_args(argv)
-    if args.cmd is None:
-        args.func = cmd_tray
+    if args.cmd is None:  # no subcommand (the exe double-clicked): the tray, with the tray's own defaults
+        args = p.parse_args(["tray"], namespace=args)
     setup_logging(args.verbose, console=args.cmd not in (None, "tray"))
     return args.func(args)
