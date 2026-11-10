@@ -12,11 +12,12 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Iterable, Protocol
 
 import numpy as np
 
 from . import models
+from .audio import SAMPLE_RATE
 from .segments import Word
 
 log = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class Transcription:
 class Transcriber(Protocol):
     name: str
 
-    def transcribe(self, audio: np.ndarray) -> Transcription: ...
+    def transcribe(self, audio: np.ndarray, prompt: str | None = None) -> Transcription: ...
 
 
 class WhisperTranscriber:
@@ -54,12 +55,23 @@ class WhisperTranscriber:
         self._model = WhisperModel(str(model_path), device="cpu", compute_type="int8",
                                    cpu_threads=cpu_threads, local_files_only=True)
 
-    def transcribe(self, audio: np.ndarray) -> Transcription:
+    def count_tokens(self, text: str) -> int:
+        """Whisper tokens in ``text``, for the vocabulary budget."""
+        return len(self._model.hf_tokenizer.encode(text, add_special_tokens=False).ids)
+
+    def transcribe(self, audio: np.ndarray, prompt: str | None = None) -> Transcription:
+        """``prompt`` (the vocabulary sentence) goes to Whisper as ``hotwords``. Only then are
+        the segments cut short and trimmed (see ``read_segments``); without one the output is
+        exactly what Whisper returns."""
+        prompt = prompt or None
+        extra = {"hotwords": prompt} if prompt else {}
         segments, _info = self._model.transcribe(
             normalize_level(audio), language="en", beam_size=self._beam, vad_filter=False,
             word_timestamps=True, condition_on_previous_text=False, without_timestamps=False,
-            temperature=[0.0, 0.2, 0.4],
+            temperature=[0.0, 0.2, 0.4], **extra,
         )
+        if prompt:
+            segments = read_segments(segments, len(audio) / SAMPLE_RATE)
         texts: list[str] = []
         words: list[Word] = []
         logprob_sum = 0.0
@@ -85,6 +97,48 @@ class WhisperTranscriber:
             return Transcription("", 0.0, [])
         confidence = math.exp(logprob_sum / weight) if weight else 0.0
         return Transcription(text, max(0.0, min(1.0, confidence)), words)
+
+
+# With a prompt, Whisper decodes one more window over the 0.2 s of padding after the last
+# word and invents text there ("Mm.", "SOT", echoes of the list), and the low score triggers
+# temperature retries, 3.6x slower overall. So stop reading segments once one ends this close
+# to the end of the audio. Without a prompt the extra window comes back empty and cheap, and
+# stopping would cut real last words, so it is not applied. Values: TODO.md, "Transcription
+# quality" (stop 0.7, chosen over 1.0 and 0.5).
+PROMPT_STOP_S = 0.7
+# Later segments (after the first kept one) that look like that junk are dropped. Real later
+# segments sit at avg_logprob -0.77 or better and no-speech 0.06 or less; junk at -0.9 or
+# worse and 0.2 or more. Same TODO.md section.
+LATE_MIN_AVG_LOGPROB = -0.8
+LATE_MAX_COMPRESSION_RATIO = 2.4
+LATE_MAX_NO_SPEECH_PROB = 0.2
+
+
+def is_skipped(seg) -> bool:
+    """Segments the transcriber ignores: confident non-speech, or no text."""
+    return (seg.no_speech_prob > 0.6 and seg.avg_logprob < -1.0) or not seg.text.strip()
+
+
+def read_segments(segments: Iterable, audio_s: float) -> list:
+    """Read Whisper's (lazy) segments for a prompted call: stop after a segment that ends
+    within PROMPT_STOP_S of the end of the audio, so the leftover window is never decoded, and
+    drop later segments that look like invented text. Pure; works on any objects with
+    start/end/text/avg_logprob/compression_ratio/no_speech_prob."""
+    kept: list = []
+    seen = False  # a real segment has been kept
+    for seg in segments:
+        if is_skipped(seg):
+            kept.append(seg)  # the caller ignores these
+        elif seen and (seg.avg_logprob < LATE_MIN_AVG_LOGPROB
+                       or seg.compression_ratio > LATE_MAX_COMPRESSION_RATIO
+                       or seg.no_speech_prob > LATE_MAX_NO_SPEECH_PROB):
+            pass
+        else:
+            seen = True
+            kept.append(seg)
+        if audio_s - seg.end < PROMPT_STOP_S:
+            break
+    return kept
 
 
 def _clean(text: str) -> str:

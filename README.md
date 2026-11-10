@@ -82,6 +82,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `audio/buffer.py` | FLAC buffer per stream |
 | `vad.py` | Streaming Silero VAD and utterance segmentation |
 | `transcribe.py` | faster-whisper wrapper |
+| `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence |
 | `diarize.py` | Live clustering and offline diarization |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
 | `recorder.py` | Threads and lifecycle of one recording |

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from . import config, housekeeping, meeting as mt, models
+from . import config, housekeeping, meeting as mt, models, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -26,6 +26,10 @@ class AppState:
     finalize_queue: int = 0
     message: str = ""
     last_meeting: str | None = None
+
+
+def _same_apart_from_vocabulary(a: config.Settings, b: config.Settings) -> bool:
+    return {**a.to_dict(), "vocabulary": []} == {**b.to_dict(), "vocabulary": []}
 
 
 class AppController:
@@ -99,7 +103,7 @@ class AppController:
     def is_recording(self) -> bool:
         return self.state.phase == "recording"
 
-    def start(self, title: str) -> None:
+    def start(self, title: str, terms: list[str] | tuple[str, ...] = ()) -> None:
         if not self.can_start:
             return
         self._set(phase="starting", message="Starting…")
@@ -109,7 +113,7 @@ class AppController:
                 comps = self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m))
-                folder = self._recorder.start(title or "meeting")
+                folder = self._recorder.start(title or "meeting", terms)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
             except Exception as exc:  # noqa: BLE001
@@ -190,12 +194,30 @@ class AppController:
         config.save(new)
         old = self.settings
         self.settings = new
+        rec = self._recorder
+        vocab_changed = list(old.vocabulary) != list(new.vocabulary)
+        if self.is_recording and rec is not None and vocab_changed:
+            rec.set_vocabulary(settings_terms=list(new.vocabulary))
         if self.is_recording:
-            self._notify("Settings saved. They apply from the next recording.")
+            if vocab_changed and _same_apart_from_vocabulary(old, new):
+                self._notify("Vocabulary saved. It applies from the next line.")
+            else:
+                self._notify("Settings saved. They apply from the next recording"
+                             + (" (the vocabulary applies from the next line)." if vocab_changed else "."))
         model_changed = (old.whisper_model, old.needs_diarization) != (new.whisper_model, new.needs_diarization)
         if model_changed and not self.is_recording:
             self._set(phase="starting", message="Loading models…")
             self.boot()
+
+    def plan_vocabulary(self, settings_terms: list[str], meeting_terms: list[str] = ()) -> vocab.VocabPlan:
+        """What would be sent to Whisper for these terms (for the dialogs). While recording, the
+        running meeting's own terms come first when none are given."""
+        rec = self._recorder
+        if not meeting_terms and self.is_recording and rec is not None:
+            meeting_terms = rec.meeting_terms
+        comps = self._components
+        return vocab.plan(meeting_terms, settings_terms,
+                          vocab.counter_for(comps.transcriber) if comps is not None else None)
 
     # -- helpers --------------------------------------------------------
     def _set(self, **changes) -> None:

@@ -119,10 +119,11 @@ class WordSpanTranscriber(ToneTranscriber):
     """Fake ASR that reports word timings: the first line spans 1.8 s, later ones only 1.2 s."""
 
     def __init__(self):
+        super().__init__()
         self.calls = 0
 
-    def transcribe(self, audio):
-        result = super().transcribe(audio)
+    def transcribe(self, audio, prompt=None):
+        result = super().transcribe(audio, prompt)
         if not result.text:
             return result
         self.calls += 1

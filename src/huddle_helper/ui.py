@@ -1,4 +1,4 @@
-"""Small Tk dialogs: start recording, settings, rename speakers."""
+"""Small Tk dialogs: start recording, settings (with vocabulary), rename speakers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import config, meeting as mt, models
+from . import config, meeting as mt, models, vocab
 from .writer import read_events
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
@@ -26,22 +26,62 @@ def _center(win: tk.Toplevel) -> None:
     win.focus_force()
 
 
+PlanFn = Callable[..., vocab.VocabPlan]  # AppController.plan_vocabulary
+
+
+class _TermsBox:
+    """Multi-line box of vocabulary terms with a live "N of M terms used" line. Thin Tk: the
+    counting is vocab.plan, called through ``plan``."""
+
+    def __init__(self, parent, *, height: int, initial: str, plan: PlanFn | None,
+                 meeting_only: bool, wraplength: int):
+        self._plan = plan
+        self._meeting_only = meeting_only
+        self.text = tk.Text(parent, height=height, width=44, wrap="word", undo=True)
+        self.text.insert("1.0", initial)
+        self.count = ttk.Label(parent, text="")
+        self.dropped = ttk.Label(parent, text="", wraplength=wraplength, foreground="#a60")
+        self.text.bind("<KeyRelease>", lambda e: self.refresh())
+
+    def terms(self) -> list[str]:
+        return vocab.parse_terms(self.text.get("1.0", "end"))
+
+    def refresh(self, other_terms: list[str] | None = None) -> None:
+        if self._plan is None:
+            return
+        terms = self.terms()
+        # plan(settings_terms, meeting_terms): the Start box holds the meeting terms
+        p = self._plan(other_terms or [], terms) if self._meeting_only else self._plan(terms)
+        count, dropped = vocab.summary_lines(p)
+        self.count.config(text=count)
+        self.dropped.config(text=dropped)
+
+
 class StartDialog:
-    def __init__(self, root: tk.Tk, on_start: Callable[[str], None]):
+    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str]], None],
+                 plan: PlanFn | None = None, settings_terms: list[str] | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Start recording")
         self.win.resizable(False, False)
         self._on_start = on_start
+        self._settings_terms = settings_terms or []
         frm = ttk.Frame(self.win, padding=14)
         frm.grid()
         ttk.Label(frm, text="Meeting name").grid(row=0, column=0, sticky="w")
         self.title = tk.StringVar(value="")
         entry = ttk.Entry(frm, textvariable=self.title, width=44)
         entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(2, 10))
+        ttk.Label(frm, text="Extra terms for this meeting (one per line, optional)").grid(
+            row=2, column=0, columnspan=2, sticky="w")
+        self.terms = _TermsBox(frm, height=3, initial="", plan=plan, meeting_only=True, wraplength=330)
+        self.terms.text.grid(row=3, column=0, columnspan=2, sticky="we", pady=(2, 2))
+        self.terms.count.grid(row=4, column=0, columnspan=2, sticky="w")
+        self.terms.dropped.grid(row=5, column=0, columnspan=2, sticky="w")
+        self.terms.text.bind("<KeyRelease>", lambda e: self.terms.refresh(self._settings_terms))
         ttk.Label(frm, text=CONSENT_REMINDER, wraplength=330, foreground="#a33").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(0, 12))
-        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=3, column=0, sticky="e", padx=6)
-        ttk.Button(frm, text="Start recording", command=self._start).grid(row=3, column=1, sticky="e")
+            row=6, column=0, columnspan=2, sticky="w", pady=(8, 12))
+        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=7, column=0, sticky="e", padx=6)
+        ttk.Button(frm, text="Start recording", command=self._start).grid(row=7, column=1, sticky="e")
         entry.bind("<Return>", lambda e: self._start())
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         _center(self.win)
@@ -49,21 +89,37 @@ class StartDialog:
 
     def _start(self) -> None:
         title = self.title.get().strip() or "meeting"
+        terms = self.terms.terms()
         self.win.destroy()
-        self._on_start(title)
+        self._on_start(title, terms)
 
 
 class SettingsDialog:
     def __init__(self, root: tk.Tk, settings: config.Settings, devices: dict[str, list[str]],
-                 on_save: Callable[[config.Settings], None]):
+                 on_save: Callable[[config.Settings], None], plan: PlanFn | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Settings")
         self.win.resizable(False, False)
         self._on_save = on_save
         self._orig = settings
         default = "(Windows default)"
-        frm = ttk.Frame(self.win, padding=14)
-        frm.grid()
+        tabs = ttk.Notebook(self.win)
+        tabs.grid(row=0, column=0, padx=8, pady=(8, 0))
+        frm = ttk.Frame(tabs, padding=14)
+        tabs.add(frm, text="General")
+        vtab = ttk.Frame(tabs, padding=14)
+        tabs.add(vtab, text="Vocabulary")
+        ttk.Label(vtab, text="Words Whisper should expect: acronyms, product names, project code "
+                             "names. One per line, spelled as you want them written. Lines starting "
+                             "with # are ignored. Changes apply from the next line, even during a "
+                             "meeting.", wraplength=380, foreground="#555").grid(
+            row=0, column=0, sticky="w", pady=(0, 6))
+        self.vocab = _TermsBox(vtab, height=12, initial="\n".join(settings.vocabulary), plan=plan,
+                               meeting_only=False, wraplength=380)
+        self.vocab.text.grid(row=1, column=0, sticky="we")
+        self.vocab.count.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.vocab.dropped.grid(row=3, column=0, sticky="w")
+        self.vocab.refresh()
         r = 0
 
         def row(label, widget):
@@ -111,8 +167,8 @@ class SettingsDialog:
         ttk.Label(purge_frame, text="days (0 = never)").pack(side="left", padx=6)
         row("Delete kept audio after", purge_frame)
 
-        btns = ttk.Frame(frm)
-        btns.grid(row=r, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        btns = ttk.Frame(self.win)
+        btns.grid(row=1, column=0, sticky="e", padx=14, pady=(8, 12))
         ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side="left", padx=6)
         ttk.Button(btns, text="Save", command=self._save).pack(side="left")
         self.win.bind("<Escape>", lambda e: self.win.destroy())
@@ -140,6 +196,7 @@ class SettingsDialog:
         s.echo_dedupe = self.echo.get()
         s.keep_audio = self.keep.get()
         s.auto_purge_days = days
+        s.vocabulary = self.vocab.terms()
         self.win.destroy()
         self._on_save(s)
 

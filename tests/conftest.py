@@ -26,7 +26,11 @@ class ToneTranscriber:
 
     name = "fake-tone"
 
-    def transcribe(self, audio: np.ndarray) -> Transcription:
+    def __init__(self):
+        self.prompts: list[str | None] = []  # the prompt of every call, for tests
+
+    def transcribe(self, audio: np.ndarray, prompt: str | None = None) -> Transcription:
+        self.prompts.append(prompt)
         if len(audio) == 0 or np.abs(audio).max() < 0.01:
             return Transcription("", 0.0)
         spectrum = np.abs(np.fft.rfft(audio))

@@ -155,7 +155,8 @@ class TrayApp:
         from .ui import StartDialog
 
         if self.app.can_start:
-            StartDialog(self.root, self.app.start)
+            StartDialog(self.root, self.app.start, self.app.plan_vocabulary,
+                        self.app.settings.vocabulary)
 
     def stop(self) -> None:
         self.app.stop()
@@ -174,7 +175,8 @@ class TrayApp:
         except Exception:  # noqa: BLE001
             log.exception("Could not list devices")
             devices = {"inputs": [], "outputs": []}
-        SettingsDialog(self.root, self.app.settings, devices, self.app.update_settings)
+        SettingsDialog(self.root, self.app.settings, devices, self.app.update_settings,
+                       self.app.plan_vocabulary)
 
     def show_speakers(self) -> None:
         from .ui import SpeakersDialog

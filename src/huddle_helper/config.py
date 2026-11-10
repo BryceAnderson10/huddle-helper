@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from . import paths
@@ -53,6 +53,9 @@ class Settings:
     keep_audio: bool = False
     auto_purge_days: int = 0  # 0 disables auto-purge
 
+    # Custom vocabulary (WP3): terms Whisper should expect, one per entry. See vocab.py.
+    vocabulary: list[str] = field(default_factory=list)
+
     # Segmentation.
     vad_threshold: float = 0.5
     min_silence_ms: int = 500
@@ -74,6 +77,9 @@ class Settings:
             if saved_version < version:
                 for key in keys:
                     clean.pop(key, None)
+        vocab = clean.get("vocabulary")
+        if not (isinstance(vocab, list) and all(isinstance(t, str) for t in vocab)):
+            clean.pop("vocabulary", None)
         clean["settings_version"] = SETTINGS_VERSION
         return cls(**clean)
 

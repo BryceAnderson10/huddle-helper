@@ -18,11 +18,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 import numpy as np
 
-from . import meeting as mt
+from . import meeting as mt, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
 from .config import Settings
@@ -144,16 +144,61 @@ class Recorder:
         self._quiet_mic_warned = False
         self._max_backlog = 0
         self._max_lag_s = 0.0
+        self._vocab_lock = threading.Lock()
+        self._meeting_terms: list[str] = []
+        self._settings_terms: list[str] = []
+        self._terms_used: list[str] = []
+        self._prompt: str | None = None
+        self._vocab_changed_at_ms: list[int] = []
 
     # -- public API -----------------------------------------------------
     @property
     def recording(self) -> bool:
         return self.status.state == "recording"
 
-    def start(self, title: str) -> mt.MeetingFolder:
+    @property
+    def meeting_terms(self) -> list[str]:
+        return list(self._meeting_terms)
+
+    @property
+    def vocabulary_used(self) -> list[str]:
+        return list(self._terms_used)
+
+    def _apply_vocabulary(self) -> bool:
+        """Recompute the prompt from the meeting and Settings terms. True if the terms used changed."""
+        used, _dropped = vocab.fit_budget(self._meeting_terms, self._settings_terms,
+                                          vocab.counter_for(self.c.transcriber) or vocab.estimate_tokens)
+        changed = used != self._terms_used
+        self._terms_used = used
+        self._prompt = vocab.build_prompt(used)
+        return changed
+
+    def set_vocabulary(self, settings_terms: list[str] | None = None,
+                       meeting_terms: list[str] | None = None) -> None:
+        """Change the vocabulary during a meeting. Applies from the next utterance; lines already
+        written stay as they are. A change to the terms actually used is noted in meta.json."""
+        with self._vocab_lock:
+            if settings_terms is not None:
+                self._settings_terms = list(settings_terms)
+            if meeting_terms is not None:
+                self._meeting_terms = list(meeting_terms)
+            changed = self._apply_vocabulary()
+            if not changed or self.folder is None or self.status.state not in ("recording", "stopping"):
+                return
+            self._vocab_changed_at_ms.append(int((time.perf_counter() - self._t0) * 1000))
+            self.folder.update_meta(vocabulary=list(self._terms_used),
+                                    vocabulary_changed_at_ms=list(self._vocab_changed_at_ms))
+
+    def start(self, title: str, meeting_terms: Iterable[str] = ()) -> mt.MeetingFolder:
         if self.status.state not in ("idle", "error"):
             raise RuntimeError("Already recording")
         s = self.settings
+        with self._vocab_lock:
+            self._meeting_terms = list(meeting_terms)
+            self._settings_terms = list(s.vocabulary)
+            self._terms_used = []
+            self._vocab_changed_at_ms = []
+            self._apply_vocabulary()
         started = mt.now_local()
         meta = {
             "devices": {"mic": s.mic_device or "default", "system": s.output_device or "default"},
@@ -167,6 +212,8 @@ class Recorder:
                 "diarize_system": s.diarize_system, "diarize_mic": s.diarize_mic,
                 "echo_dedupe": s.echo_dedupe, "keep_audio": s.keep_audio,
             },
+            "vocabulary": list(self._terms_used),
+            "vocabulary_changed_at_ms": [],
         }
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
         self._writer = JsonlWriter(self.folder.live_path)
@@ -321,7 +368,7 @@ class Recorder:
             self._in_flight = 1
             worker = self._workers[utt.source]
             try:
-                result = self.c.transcriber.transcribe(utt.audio)
+                result = self.c.transcriber.transcribe(utt.audio, prompt=self._prompt)
                 if result.text:
                     offset = utt.start_ms
                     words = [Word(offset + w.start_ms, offset + w.end_ms, w.text) for w in result.words]

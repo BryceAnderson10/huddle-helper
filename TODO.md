@@ -469,6 +469,13 @@ What went well:
   last word. On Test #2 (41 utterances, none of these terms): no lines lost, one line
   gains 2 words, 26 s against 32 s for the plain run. With no vocabulary set, nothing
   changes.
+  → **Built (WP3):** Settings has a Vocabulary tab and the Start dialog takes extra terms
+  for the meeting; a change during a recording applies from the next line. The app's own
+  transcriber, run over Test #4 with these terms, matches the spike: 67 terms, 2 mishears
+  left, no lines lost, 2 / 8 lines with extra words, 157 s. Still to do: look at the two
+  dialogs by eye, try a real meeting on the laptop, and listen to the 8 changed lines.
+  *Not built, on purpose:* attendee names are opt-in only; L34's automatic add is not built.
+  The vocabulary-only-line guard (plan step 7) is skipped: the spike found no new lines.
 
 ### Microphone
 
