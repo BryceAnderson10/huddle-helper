@@ -33,9 +33,9 @@ class SpeakerBar(tk.Text):
         self.bind("<Motion>", lambda e: self.configure(cursor="hand2" if self._chip_at(e.x, e.y) is not None else "arrow"))
 
     def set_chips(self, chips: list[logic.SpeakerChip], color_of: Callable[[str], str]) -> None:
-        """Redraw when the people (or their names) changed; ``color_of(person_key)`` is the colour the
-        transcript uses for that person."""
-        sig = tuple((c.person_key, c.display, c.unnamed) for c in chips)
+        """Redraw when the people (or their names, or their "short" mark) changed; ``color_of(person_key)`` is the
+        colour to draw that person's chip in (the window dims a short speaker's)."""
+        sig = tuple((c.person_key, c.display, c.unnamed, c.short) for c in chips)
         if sig == self._signature:
             return
         self._signature, self._chips = sig, list(chips)

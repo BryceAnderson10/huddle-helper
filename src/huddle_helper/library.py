@@ -48,6 +48,7 @@ class MeetingInfo:
     total_bytes: int | None
     error: str
     finished_at: str  # final_written_at, else ended_at; "" if unknown
+    done_at: float | None = None  # modification time of DONE (what auto-purge ages a meeting by); None without DONE
 
 
 def meeting_length_s(meta: dict) -> float | None:
@@ -117,7 +118,8 @@ def read_info(folder: mt.MeetingFolder) -> MeetingInfo | None:
         done=folder.is_done, recovered=status == mt.STATUS_INTERRUPTED or meta.get("clean_exit") is False,
         speakers=_count_speakers(folder), marks=marks, has_audio=folder.audio_dir.is_dir(),
         audio_bytes=None, total_bytes=None, error=str(meta.get("error") or ""),
-        finished_at=str(meta.get("final_written_at") or meta.get("ended_at") or ""))
+        finished_at=str(meta.get("final_written_at") or meta.get("ended_at") or ""),
+        done_at=(_mtime(folder.done_path) or 0) / 1e9 or None)
 
 
 # -- sizes, measured off the Tk thread ---------------------------------------------------------
@@ -245,8 +247,11 @@ class Totals:
 
 
 def totals(infos: list[MeetingInfo]) -> Totals:
-    return Totals(len(infos), sum(i.total_bytes or 0 for i in infos), sum(i.audio_bytes or 0 for i in infos),
-                  all(i.total_bytes is not None for i in infos))
+    """Sizes of all meetings. A meeting whose audio folder was just deleted keeps its old measured sizes until the
+    worker measures it again; its audio is counted as gone at once, so the numbers do not lag behind the list."""
+    gone = sum(i.audio_bytes or 0 for i in infos if not i.has_audio)
+    return Totals(len(infos), sum(i.total_bytes or 0 for i in infos) - gone,
+                  sum(i.audio_bytes or 0 for i in infos if i.has_audio), all(i.total_bytes is not None for i in infos))
 
 
 # -- what the app is doing, and the status shown for each meeting ---------------------------------

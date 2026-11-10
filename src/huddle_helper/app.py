@@ -776,6 +776,16 @@ class AppController:
             self._set(phase="starting", message="Loading models…")
             self.boot()
 
+    def add_vocabulary_term(self, raw: str) -> vocab.TermCheck:
+        """"Add to vocabulary…" from a line (L37): append one term to the Settings vocabulary through the same path as
+        the Settings dialog (``update_settings``: saved to settings.json, and handed to the recording as
+        ``Recorder.set_vocabulary`` so it applies from the next utterance). Nothing in the transcript changes.
+        Returns the check; the term is added only when ``ok`` (a duplicate or invalid term is not)."""
+        check = vocab.check_new_term(raw, self.settings.vocabulary)
+        if check.ok:
+            self.update_settings(replace(self.settings, vocabulary=[*self.settings.vocabulary, check.term]))
+        return check
+
     def plan_vocabulary(self, settings_terms: list[str], meeting_terms: list[str] = ()) -> vocab.VocabPlan:
         """What would be sent to Whisper for these terms (for the dialogs). While recording, the
         running meeting's own terms come first when none are given."""

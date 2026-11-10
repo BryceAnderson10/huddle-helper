@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from .. import export as export_mod, meeting as mt
+from .. import export as export_mod, meeting as mt, vocab as vocab_mod
 from .. import marks as marks_mod
 from ..transcript_model import MarkRow, TranscriptModel
 from . import confirm, logic, theme
@@ -283,3 +283,65 @@ class NamePicker:
         self.win.destroy()
         if self._on_done is not None:
             self._on_done(name)
+
+
+class VocabTermDialog:
+    """"Add to vocabulary…" (L37): one entry, prefilled with the words selected in the line (blank when nothing was
+    selected: there is nothing sensible to guess). The checks are ``vocab.check_new_term`` (same rules as the Settings
+    box, no duplicates, the token budget). ``on_done(term)`` gets the cleaned term when the user presses Add."""
+
+    COLORS = {"ok": theme.MUTED, "warn": "#92400e", "error": "#b91c1c"}
+
+    def __init__(self, parent: tk.Misc, selected: str, *, existing: Callable[[], list[str]],
+                 plan: Callable[..., "vocab_mod.VocabPlan"] | None, on_done: Callable[[str], None]):
+        self._existing, self._plan, self._on_done = existing, plan, on_done
+        self.win = tk.Toplevel(parent)
+        self.win.title("Add to vocabulary")
+        self.win.transient(parent.winfo_toplevel())
+        self.win.resizable(False, False)
+        scale = max(1.0, parent.winfo_fpixels("1i") / 96)
+        frm = ttk.Frame(self.win, padding=14)
+        frm.grid()
+        ttk.Label(frm, text="Write the term as it should be spelled, for example the acronym Whisper keeps "
+                            "mishearing. It is added to Settings → Vocabulary and used from the next line. "
+                            "The transcript is not changed.", wraplength=int(360 * scale),
+                  justify="left").grid(row=0, column=0, sticky="w")
+        self.term = tk.StringVar(value=vocab_mod.clean_term(selected) if selected else "")
+        self.entry = ttk.Entry(frm, textvariable=self.term, width=44)
+        self.entry.grid(row=1, column=0, sticky="we", pady=(10, 4))
+        self.note = tk.Label(frm, text="", anchor="w", justify="left", wraplength=int(360 * scale),
+                             font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL))
+        self.note.grid(row=2, column=0, sticky="w")
+        btns = ttk.Frame(frm)
+        btns.grid(row=3, column=0, sticky="e", pady=(10, 0))
+        self.add_btn = ttk.Button(btns, text="Add", command=self.accept)
+        self.add_btn.pack(side="right")
+        ttk.Button(btns, text="Cancel", command=self.win.destroy).pack(side="right", padx=6)
+        self.term.trace_add("write", lambda *_: self.refresh())
+        self.win.bind("<Return>", lambda e: self.accept())
+        self.win.bind("<Escape>", lambda e: self.win.destroy())
+        self.refresh()
+        _place_over(self.win, parent)
+        self.entry.focus_set()
+        self.entry.selection_range(0, "end")
+
+    def check(self) -> "vocab_mod.TermCheck":
+        return vocab_mod.check_new_term(self.term.get(), self._existing(), self._plan_fn())
+
+    def _plan_fn(self):
+        plan = self._plan
+        return (lambda terms: plan(terms)) if plan is not None else None
+
+    def refresh(self) -> "vocab_mod.TermCheck":
+        c = self.check()
+        blank = not self.term.get().strip()  # nothing typed yet: no message, just no Add
+        self.note.configure(text="" if blank else c.message, fg=self.COLORS[c.level])
+        self.add_btn.configure(state="normal" if c.ok else "disabled")
+        return c
+
+    def accept(self) -> None:
+        c = self.refresh()
+        if not c.ok:
+            return
+        self.win.destroy()
+        self._on_done(c.term)

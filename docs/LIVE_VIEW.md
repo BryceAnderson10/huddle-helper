@@ -645,10 +645,28 @@ transcription for the CPU, so a retry requested while a meeting is recording wai
 starts after Stop; the row says "Retry queued until recording stops". Interrupted meetings are already
 recovered at start-up and need no button.
 
-**Storage (L32, P1).** A small panel: total size of the meetings folder, split into
-transcripts and kept audio; the largest meetings by audio; the auto-purge setting
-(same as Settings); and **Delete kept audio older than [N] days** with a preview list
-("6 meetings, 1.2 GB") before it runs.
+**Storage (L32, P1, built in WP9d).** A **Storage…** button in the Meetings view's header opens a
+small panel (`gui/storage_dialog.py`; the numbers and the wording are in `storage.py`, no Tk):
+
+- **Disk use.** The size of the meetings folder (the sum of the meeting folders) split into kept audio
+  (`audio\`) and "transcripts and the rest", and the five meetings with the most audio. The numbers come
+  from the Meetings view's last scan, whose sizes the library measures on a worker thread, so a large folder
+  never blocks the window; until the measuring is done the panel says "measuring sizes…". Audio that has just
+  been deleted stops counting at once.
+- **Auto-delete.** The same setting as Settings → "Delete kept audio after N days" (`auto_purge_days`), with its
+  own Save button; 0 means off.
+- **Delete kept audio older than [N] days.** **Preview…** lists exactly what would go ("4 meetings, 55 MB:
+  kept audio older than 30 days", with each meeting's title, finish date, age and audio size) and the
+  wording of the Delete audio confirmation (can it come back, the Recycle Bin check box). The button that
+  deletes (default "Move audio to Recycle Bin"; "Delete audio permanently" when ticked or the drive has no
+  Recycle Bin) is given exactly the previewed meetings, not a new search. Changing N, or Cancel, drops the
+  preview. Only the audio goes; transcripts and bookmarks stay: it is `library.delete_audio` per meeting, so a
+  meeting that is recording or being processed is refused, and `audio_kept: false` / `audio_deleted_at` are
+  written as in the Meetings list.
+- **The age rule is auto-purge's:** a finished meeting (DONE exists) with a non-empty `audio\`, aged by the
+  modification time of its DONE file. A meeting that is not finished (failed, interrupted) is never offered, and
+  neither is one that is recording, queued or processing. A preview made while some sizes are still being
+  measured says so and cannot be run until Preview is pressed again.
 
 ## Custom vocabulary
 
@@ -668,11 +686,25 @@ it may not keep up live on the target laptop.
 - **This meeting (L34).** The Start dialog has an "Extra terms for this meeting" box
   (names of attendees, a project codename). Attendee names from L13 are added
   automatically. These apply to this meeting only and aren't saved to Settings.
-- **From a line (L37, P1).** Right-click → "Add to vocabulary…" opens a small dialog
+- **From a line (L37, P1, built in WP9d).** Right-click → "Add to vocabulary…" opens a small dialog
   with the selected text ("Quodium") for the user to replace with the right term
-  ("QDM"). It's added to Settings and applies from the next utterance. It doesn't change
+  ("QDM"). It's added to Settings and applies from the next utterance (during a recording it goes to the
+  recorder like a Settings change, `Recorder.set_vocabulary`). It doesn't change
   the line that was misheard: the transcript isn't edited (PRD non-goal).
-- **Sharing (L38, P1).** Import/export the list as a `.txt` file, one term per line.
+  *Prefill rule:* the part of the text selection that lies inside that line's own text (not its time or speaker
+  columns), tidied into one term: line breaks and runs of spaces become one space, quotes and brackets are
+  trimmed, and `. , ; : ! ?` at the end ("Quodium." becomes "Quodium"). With nothing selected the box is empty:
+  the whole line is not a term, so there is nothing sensible to guess. *Checks as you type* (`vocab.check_new_term`):
+  not empty, not starting with `#` (a comment), at most 80 characters, not already in the list (ignoring case:
+  Add is off and the message names the existing spelling), and when the list is already at the token budget a
+  warning says the new term would be left out until others are removed (it can still be added).
+- **Sharing (L38, P1, built in WP9d).** Settings → Vocabulary has **Add from file…**, **Replace from file…**
+  and **Export to file…**. The file is a plain `.txt`, one term per line, UTF-8 (a BOM and CRLF are accepted
+  when reading, an ANSI file is read as cp1252; blank lines and `#` comment lines are ignored, duplicates
+  dropped as in the box); export writes UTF-8 without a BOM, LF line ends. *Adding* appends the terms that are
+  not already in the list (ignoring case); *replacing* swaps the list. Either way only the box changes: nothing is
+  saved until Save, so Cancel undoes an import. A file over 1 MB or with binary content is refused with a message.
+  `vocab.read_terms_file`, `write_terms_file` and `merge_import` hold the logic.
 
 **How it's used.** Whisper accepts a short text prompt that biases what it writes. The
 recorder builds one prompt per meeting, meeting terms first, then the Settings list, and
@@ -779,9 +811,16 @@ While muted, an amber bar sits under the header:
   about 35 minutes (Test #4). The live transcript stays usable throughout. On `DONE`
   the view reloads from `transcript.final.jsonl`, applies `speakers.json`, and
   highlights changed lines and any conflicts for ~10 s.
-- **Short speakers (L40).** In the final view, a speaker with little speech (under
-  ~30 s or a few lines) is shown dimmed and marked "short", never hidden: Test #4's
-  Remote D had only 28 s, and a second possible person 13 s.
+- **Short speakers (L40, built in WP9d).** In the final view, a speaker with little speech is shown dimmed
+  and marked "short", never hidden: Test #4's Remote D had only 28 s, and a second possible person 13 s. The rule
+  (`logic.short_speakers`): the **final view only** (a live label can still merge into another), and a person whose
+  lines add up to **less than 30 s** of speech (the sum of line durations; two labels with the same name count as
+  one person, so naming two voices alike can lift them over the limit). The number of lines is not used: one long
+  line is not little speech. When *every* speaker is under 30 s (a very short meeting) none is marked, because
+  nobody stands out. A named speaker is marked too ("Dana · short"). It applies to the chip ("You · short") and to the
+  speaker column of each of that person's lines ("Remote D · short"), whose text and name are drawn in a lighter
+  colour; the Who is this? prompt still appears for an unnamed one. Exports and every output file are
+  unchanged.
 - **Past meetings.** The Meetings view (above) opens any meeting read-only with names;
   speaker naming works there too. This replaces the Rename speakers dialog.
 - **Bookmarks** are drawn as a row between lines, by `at_ms`, with the type's symbol and
@@ -903,7 +942,7 @@ show that the call is active, but who is speaking is only known once the line la
    Remote B's named. B and C, and Remote D and Remote B, must come out as separate final
    speakers with the right names. Re-run Tests #2–#4 and the TTS sample with no names
    to confirm the result is unchanged when nobody names anyone.
-6. **P1 polish** (L13, L19, L24, L28, L32, L40). Attendee list at Start, number-key
+6. **P1 polish** (L13, L19, L24, L28, L32, L40; L32 and L40 built in WP9d). Attendee list at Start, number-key
    shortcuts (1–9 = attendee) for the latest line, "Who is this?" prompt for new voices,
    Play from here, Play clips on, mute reminders and Start muted, user-defined bookmark
    types, Storage panel.

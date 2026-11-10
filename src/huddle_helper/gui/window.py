@@ -48,7 +48,7 @@ from .. import attendees as att, marks as marks_mod, meeting as mt, playback
 from ..session import MeetingSession
 from ..transcript_model import LineRow, MarkRow, Reset
 from . import attendee_logic as al, logic, theme
-from .dialogs import ExportDialog, MarkEditor, NamePicker
+from .dialogs import ExportDialog, MarkEditor, NamePicker, VocabTermDialog
 from .meetings_view import MeetingsView
 from .speaker_bar import SpeakerBar
 from .transcript_view import TranscriptView
@@ -212,6 +212,7 @@ class MainWindow:
         self.view.on_play = self._play_row
         self.view.on_hear_voice = self._hear_voice
         self.view.on_play_from = self._play_from
+        self.view.on_add_vocab = self._add_vocab
         self.view.voice_state = self._voice_state
         self.win.bind("<Escape>", lambda e: self.app.stop_playback())
         self.win.bind("<Key>", self._on_key, add="+")  # 1-9 name the latest voice (attendees)
@@ -543,6 +544,24 @@ class MainWindow:
         self._poll_now()
         self._refresh_all()
 
+    # -- vocabulary from a line (L37) ---------------------------------------------------------------------
+    def _add_vocab(self, row: LineRow, selected: str) -> None:
+        """"Add to vocabulary…" on a line: ask for the term (the selected words prefilled), add it to Settings.
+        The transcript is not edited."""
+        VocabTermDialog(self.win, selected, existing=lambda: list(self.app.settings.vocabulary),
+                        plan=self.app.plan_vocabulary, on_done=self.add_vocabulary_term)
+
+    def add_vocabulary_term(self, term: str) -> None:
+        check = self.app.add_vocabulary_term(term)
+        if not check.ok:
+            self._say(check.message)
+            return
+        recording = self.app.is_recording
+        self._say(f"“{check.term}” added to the vocabulary"
+                  + (". It applies from the next line." if recording else ". It applies to your next recording."))
+        if not check.fits:
+            self._say_banner(check.message)
+
     # -- attendees (WP9a, L13) -------------------------------------------------------------------
     def _attendees(self) -> list[str]:
         return att.from_meta(self.session.model.meta) if self.session is not None else []
@@ -709,7 +728,9 @@ class MainWindow:
             self._speakers_shown = False
         if chips:
             colors = {r.person_key: r for r in model.rows if isinstance(r, LineRow)}
-            self.speakers.set_chips(chips, lambda key: self.view.color_of(colors[key]))
+            short = {c.person_key for c in chips if c.short}
+            self.speakers.set_chips(chips, lambda key: theme.dim(self.view.color_of(colors[key])) if key in short
+                                    else self.view.color_of(colors[key]))
 
     def _set_keep(self, v: logic.KeepAudioView) -> None:
         if v.visible:
@@ -784,6 +805,7 @@ class MainWindow:
 
     def _apply(self, ops) -> None:
         if ops and self.session is not None:
+            self.view.set_short(logic.short_speakers(self.session.model))  # before the rows are drawn (L40)
             self.view.apply(ops, self.session.model, self._autoscroll)
         self._placeholder()
 
@@ -844,6 +866,7 @@ class MainWindow:
         self._set_status(logic.status_view(mid, model, state))
         self._set_keep(logic.keep_audio_view(mid, model, state))
         self._set_prompt()
+        self.view.set_short(logic.short_speakers(model))  # a name given in the final view can merge two voices
         self._set_speakers(model)
         self._set_strip()
         self._refresh_play()

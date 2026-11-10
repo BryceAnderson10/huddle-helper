@@ -530,10 +530,37 @@ class SpeakerChip:
     display: str
     unnamed: bool = False  # a voice nobody has named: shown as "SPEAKER_05 · Who is this?"
     labels: tuple[str, ...] = ()  # raw labels behind this chip
+    short: bool = False  # little speech in the final transcript (L40): dimmed and marked, never hidden
 
     @property
     def text(self) -> str:
-        return f"{short_name(self.display, 24)} · {ASK_WHO}" if self.unnamed else short_name(self.display, 24)
+        parts = [short_name(self.display, 24)]
+        if self.short:
+            parts.append(SHORT_MARK)
+        if self.unnamed:
+            parts.append(ASK_WHO)
+        return " · ".join(parts)
+
+
+# -- short speakers (L40) ---------------------------------------------------------------------------------
+SHORT_MARK = "short"
+SHORT_SPEECH_S = 30.0  # a speaker with less speech than this, in the final view, is "short"
+
+
+def short_speakers(model: TranscriptModel, limit_s: float = SHORT_SPEECH_S) -> frozenset[str]:
+    """``person_key`` of the speakers to show dimmed and marked "short" (L40; never hidden).
+
+    The rule: FINAL view only (a live label can still merge into another), and a person whose lines add up to
+    less than ``limit_s`` seconds of speech (the sum of ``end - start`` over all their lines, labels with the same
+    name counting as one person). The number of lines is not used: one long line is not little speech, and many
+    tiny lines add up in the seconds. When every speaker is under the limit (a very short meeting) none is marked,
+    because nobody stands out."""
+    if not model.final:
+        return frozenset()
+    # ``You`` / ``Remote`` are never marked: the mark is for voices the grouping may have got wrong.
+    people = [s for s in model.speakers() if not set(s.labels) <= set(KNOWN_LABELS)]
+    short = frozenset(s.person_key for s in people if s.speech_ms < limit_s * 1000)
+    return frozenset() if len(short) == len(people) else short
 
 
 def speaker_chips(model: TranscriptModel) -> list[SpeakerChip]:
@@ -545,7 +572,8 @@ def speaker_chips(model: TranscriptModel) -> list[SpeakerChip]:
             e = order.setdefault(r.person_key, [r.display, r.name is None and r.label not in KNOWN_LABELS, []])
             if r.label not in e[2]:
                 e[2].append(r.label)
-    return [SpeakerChip(k, d, u, tuple(ls)) for k, (d, u, ls) in order.items()]
+    short = short_speakers(model)
+    return [SpeakerChip(k, d, u, tuple(ls), k in short) for k, (d, u, ls) in order.items()]
 
 
 @dataclass(frozen=True)

@@ -91,7 +91,8 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `audio/buffer.py` | FLAC buffer per stream |
 | `vad.py` | Streaming Silero VAD and utterance segmentation |
 | `transcribe.py` | faster-whisper wrapper |
-| `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence |
+| `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence; one term from a line (`check_new_term`: tidy, no duplicates, budget note); the plain-text vocabulary file (read, write, merge) |
+| `storage.py` | The Storage panel's numbers: meetings-folder use split into audio and the rest, the largest by audio, and the previewed set for "delete kept audio older than N days" (the age rule of auto-purge) |
 | `attendees.py` | The attendee list from the Start dialog: parse, dedupe, `meta.json` `attendees`, the opt-in to add names to the vocabulary |
 | `diarize.py` | Live clustering and offline diarization |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
@@ -117,10 +118,11 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `gui/window.py`, `gui/transcript_view.py`, `gui/dialogs.py` | Main window: header (mute, Keep this meeting's audio, Export), notice bar, status bar, read-only transcript text with a play control on each line and bookmark, "This line is…" in the line menu, Export, bookmark, name-picker and delete-confirmation dialogs (thin Tk); the window swaps between the Transcript and Meetings pages |
 | `gui/attendee_logic.py` | Attendees in the window: name choices (unused attendees first), the number-key target and guards, the undo, the numbered strip, the "Who is this?" queue for new voices (UI-free) |
 | `gui/speaker_bar.py` | The speaker bar: one chip per person under the notice bar; a new unnamed voice asks "Who is this?"; a click opens the chip menu (Name…, Remove name, Hear this voice) (thin Tk) |
-| `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
+| `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting, Storage… (thin Tk; scan and delete run on worker threads) |
+| `gui/storage_dialog.py` | The Storage panel: disk use, the auto-delete setting, Delete kept audio older than N days with a preview (thin Tk over `storage` and `confirm`) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
-| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted"; Settings has Hotkeys and Bookmark types) |
+| `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip, which final speakers are "short") as pure functions; colours, fonts, DPI awareness |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`, `add_vocabulary_term`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted"; Settings has Vocabulary with file import and export, Hotkeys and Bookmark types; "Add to vocabulary…") |
 
 ## Status against the PRD milestones
 

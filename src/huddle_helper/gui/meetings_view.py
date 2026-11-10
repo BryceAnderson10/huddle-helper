@@ -25,6 +25,7 @@ from .. import library, meeting as mt, shell
 from ..library import MeetingInfo
 from . import meetings_logic as ml, theme
 from .dialogs import DeleteDialog, ExportDialog, browse_for_meeting
+from .storage_dialog import StorageDialog
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class MeetingsView(ttk.Frame):
         self._message: tuple[str, str, float] = ("", "", 0.0)
         self._shown: dict[str, tuple] = {}
         self._busy_before: frozenset[str] = frozenset()
+        self._storage: StorageDialog | None = None
         scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
         style = ttk.Style(self)
         style.configure("Meetings.Treeview", rowheight=int(24 * scale))
@@ -68,6 +70,7 @@ class MeetingsView(ttk.Frame):
         self.summary.pack(side="left", padx=(12, 0))
         self.back_btn = ttk.Button(top, text="Transcript", command=self._on_back)
         self.back_btn.pack(side="right")
+        ttk.Button(top, text="Storage…", command=self.open_storage).pack(side="right", padx=(0, 6))
         ttk.Button(top, text="Browse…", command=self._browse).pack(side="right", padx=(0, 6))
         ttk.Button(top, text="Open meetings folder", command=self._open_root).pack(side="right", padx=(0, 6))
 
@@ -349,7 +352,23 @@ class MeetingsView(ttk.Frame):
         DeleteDialog(self, items, audio_only=audio_only, has_bin=has_bin, permanent=permanent,
                      on_confirm=lambda perm: self._run_delete(targets, audio_only, perm))
 
-    def _run_delete(self, ids: list[str], audio_only: bool, permanent: bool) -> None:
+    # -- Storage panel (L32) ---------------------------------------------------------------------------------
+    def open_storage(self) -> StorageDialog:
+        """The Storage panel (one at a time): disk use, the auto-delete setting, delete kept audio older than N days."""
+        dlg = self._storage
+        if dlg is not None and dlg.alive():
+            dlg.win.lift()
+            return dlg
+        self._storage = StorageDialog(self, self.app, infos=lambda: self.infos, delete_ids=self.delete_ids,
+                                      meetings_dir=self.app.settings.resolved_meetings_dir)
+        return self._storage
+
+    def delete_ids(self, ids: list[str], permanent: bool, done: Callable[[library.DeleteResult], None]) -> None:
+        """Delete the kept audio of exactly these meetings (already confirmed by the caller) on a worker thread;
+        ``done(result)`` runs on the Tk thread afterwards."""
+        self._run_delete(list(ids), True, permanent, done)
+
+    def _run_delete(self, ids: list[str], audio_only: bool, permanent: bool, done=None) -> None:
         self._working = True
         self.say("Deleting…")
 
@@ -359,11 +378,11 @@ class MeetingsView(ttk.Frame):
             except Exception as exc:  # noqa: BLE001
                 log.exception("Delete failed")
                 result = library.DeleteResult(failed=[(i, str(exc)) for i in ids])
-            self.post(lambda: self._deleted(result, audio_only))
+            self.post(lambda: self._deleted(result, audio_only, done))
 
         threading.Thread(target=work, name="delete-meetings", daemon=True).start()
 
-    def _deleted(self, result: library.DeleteResult, audio_only: bool) -> None:
+    def _deleted(self, result: library.DeleteResult, audio_only: bool, done=None) -> None:
         self._working = False
         text, level = ml.delete_message(result, audio_only=audio_only)
         for mid in result.done:
@@ -374,3 +393,5 @@ class MeetingsView(ttk.Frame):
         if result.done and not audio_only:
             self._on_deleted(list(result.done))
         self.tick()
+        if done is not None:
+            done(result)

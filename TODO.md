@@ -615,3 +615,21 @@ What went well:
 - [ ] *Needs a person:* the real Windows notification for the reminder; the tray Bookmark
   submenu with a custom type (built on each open; only its construction was checked);
   whether the stronger amber bar for 60 s is wanted.
+
+### WP9d: Storage panel, vocabulary from a line and from a file, short speakers (L32, L37, L38, L40)
+
+- [x] Built: "Storage…" in the Meetings view (`storage.py`), "Add to vocabulary…" on a
+  line, "Add from file… / Replace from file… / Export to file…" on the Vocabulary tab,
+  and "· short" on final speakers under 30 s of speech. On a scratch folder of 7
+  meetings the panel's sizes matched an independent sum to the byte, and the delete
+  removed exactly the 4 previewed `audio\` folders (12 files) and nothing else.
+- [x] **`You` is never marked short** (changed in review: Test #4's `You`, 8.8 s, was).
+  With that, no speaker of the Test #4 copy is marked.
+- [ ] **Decide:** short is under 30 s of speech only (the line count is not used), and
+  when every speaker is under 30 s nobody is marked.
+- [ ] Adding a term from a line while the Settings dialog is open: the dialog's Save
+  overwrites it. The Storage panel does not follow a meetings-folder change made while
+  it is open.
+- [ ] *Needs a person:* the Storage delete against the real Recycle Bin on a throwaway
+  meeting (every check used a fake bin or a permanent delete on scratch copies); the
+  file dialogs for import and export; adding a term during a real recording.

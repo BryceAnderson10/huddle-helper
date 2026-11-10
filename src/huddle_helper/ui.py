@@ -47,6 +47,11 @@ class _TermsBox:
     def terms(self) -> list[str]:
         return vocab.parse_terms(self.text.get("1.0", "end"))
 
+    def set_terms(self, terms: list[str]) -> None:
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", "\n".join(terms))
+        self.refresh()
+
     def refresh(self, other_terms: list[str] | None = None) -> None:
         if self._plan is None:
             return
@@ -312,6 +317,16 @@ class SettingsDialog:
         self.vocab.count.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.vocab.dropped.grid(row=3, column=0, sticky="w")
         self.vocab.refresh()
+        # L38: share the list as a plain text file, one term per line. Nothing is saved until Save is pressed.
+        files = ttk.Frame(vtab)
+        files.grid(row=4, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(files, text="Add from file…", command=lambda: self._pick_import(False)).pack(side="left")
+        ttk.Button(files, text="Replace from file…", command=lambda: self._pick_import(True)).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(files, text="Export to file…", command=self._pick_export).pack(side="left", padx=(6, 0))
+        self.vocab_note = ttk.Label(vtab, text="A .txt file with one term per line, to share a list with your team.",
+                                    wraplength=380, foreground="#555")
+        self.vocab_note.grid(row=5, column=0, sticky="w", pady=(4, 0))
         r = 0
 
         def row(label, widget):
@@ -373,6 +388,48 @@ class SettingsDialog:
         ttk.Button(btns, text="Save", command=self._save).pack(side="left")
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         _center(self.win)
+
+    # -- vocabulary file (L38) -------------------------------------------------------------------------
+    def import_terms(self, path: str | Path, replace: bool = False) -> str:
+        """Read a vocabulary file into the box (the settings are saved with Save, not here). Adding skips terms
+        already in the list (ignoring case); replacing swaps the whole list. Returns the message shown."""
+        try:
+            imported = vocab.read_terms_file(path)
+        except vocab.VocabFileError as exc:
+            return self._vocab_say(str(exc), error=True)
+        if not imported:
+            return self._vocab_say("That file has no terms (blank lines and lines starting with # are ignored).",
+                                   error=True)
+        result = vocab.merge_import(self.vocab.terms(), imported, replace=replace)
+        self.vocab.set_terms(result.terms)
+        return self._vocab_say(result.message + " Press Save to keep the change.")
+
+    def export_terms(self, path: str | Path) -> str:
+        """Write the terms in the box (saved or not) to a text file, one per line, UTF-8."""
+        terms = self.vocab.terms()
+        if not terms:
+            return self._vocab_say("There are no terms to export.", error=True)
+        try:
+            n = vocab.write_terms_file(path, terms)
+        except vocab.VocabFileError as exc:
+            return self._vocab_say(str(exc), error=True)
+        return self._vocab_say(f"Saved {n} term{'' if n == 1 else 's'} to {path}")
+
+    def _vocab_say(self, text: str, error: bool = False) -> str:
+        self.vocab_note.configure(text=text, foreground="#b91c1c" if error else "#047857")
+        return text
+
+    def _pick_import(self, replace: bool) -> None:
+        path = filedialog.askopenfilename(parent=self.win, title="Vocabulary file",
+                                          filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if path:
+            self.import_terms(path, replace)
+
+    def _pick_export(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self.win, title="Save vocabulary", defaultextension=".txt",
+                                            initialfile="vocabulary.txt", filetypes=[("Text files", "*.txt")])
+        if path:
+            self.export_terms(path)
 
     def _browse(self) -> None:
         chosen = filedialog.askdirectory(parent=self.win, initialdir=self.folder.get())

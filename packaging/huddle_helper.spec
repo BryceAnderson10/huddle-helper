@@ -21,7 +21,9 @@ hiddenimports += ["huddle_helper.gui", "huddle_helper.gui.window", "huddle_helpe
                   "huddle_helper.gui.dialogs", "huddle_helper.gui.logic", "huddle_helper.gui.theme",
                   "huddle_helper.session", "huddle_helper.replay", "huddle_helper.attendees",
                   "huddle_helper.gui.attendee_logic",
-                  "huddle_helper.leveling", "huddle_helper.outputs", "huddle_helper.playsequence"]
+                  "huddle_helper.leveling", "huddle_helper.outputs", "huddle_helper.playsequence",
+                  "huddle_helper.storage", "huddle_helper.gui.storage_dialog", "huddle_helper.gui.meetings_view",
+                  "huddle_helper.gui.meetings_logic", "huddle_helper.gui.confirm"]
 
 a = Analysis(
     ["launcher.py"],

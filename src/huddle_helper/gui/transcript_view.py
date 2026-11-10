@@ -65,6 +65,7 @@ class TranscriptView(ttk.Frame):
         self.on_play: Callable[[Row], None] | None = None
         self.on_hear_voice: Callable[[str], None] | None = None
         self.on_play_from: Callable[[LineRow], None] | None = None  # "Play from here" (L19)
+        self.on_add_vocab: Callable[[LineRow, str], None] | None = None  # "Add to vocabulary…" (L37): row, selected words
         # Play from here scrolls the heard line into view until the user scrolls themselves (wheel, scrollbar,
         # keys): their position is then left alone for the rest of the run.
         self._run_follow = True
@@ -94,6 +95,7 @@ class TranscriptView(ttk.Frame):
         self._follow = True
         self._new_lines = 0
         self._model: TranscriptModel | None = None
+        self._short: frozenset[str] = frozenset()  # people shown dimmed and marked "short" (L40)
 
     # -- setup ----------------------------------------------------------------
     def _configure_tags(self) -> None:
@@ -109,6 +111,7 @@ class TranscriptView(ttk.Frame):
         t.tag_bind("markrow", "<Leave>", lambda e: t.configure(cursor="arrow"))
         t.tag_configure("time", foreground=theme.MUTED, font=self.f_small)
         t.tag_configure("body", font=self.f_base)
+        t.tag_configure("short-body", foreground=theme.SHORT_FG)  # a short speaker's text (L40)
         t.tag_configure("spk", font=self.f_bold)
         for kind, color in theme.KIND_COLORS.items():
             t.tag_configure(f"kind:{kind}", foreground=color, font=self.f_bold)
@@ -305,7 +308,10 @@ class TranscriptView(ttk.Frame):
             for item in self.bookmark_items():
                 sub.add_command(label=item.label, command=lambda k=item.kind, r=row: self.on_bookmark_line(r, k))
             menu.add_cascade(label="Bookmark this line as…", menu=sub)
-        elif isinstance(row, MarkRow) and self.on_edit_mark is not None:
+        if isinstance(row, LineRow) and self.on_add_vocab is not None:
+            words = self.selection_in_row(row)  # taken now: the menu may clear the selection
+            menu.add_command(label="Add to vocabulary…", command=lambda r=row, w=words: self.on_add_vocab(r, w))
+        if isinstance(row, MarkRow) and self.on_edit_mark is not None:
             menu.add_command(label="Edit bookmark…", command=lambda r=row: self.on_edit_mark(r))
             if self.on_delete_mark is not None:
                 menu.add_command(label="Delete bookmark", command=lambda r=row: self.on_delete_mark(r))
@@ -425,12 +431,44 @@ class TranscriptView(ttk.Frame):
         self.text.mark_unset(self._ids[i])
         del self._ids[i], self._rows[i]
 
-    def _fit(self, name: str) -> str:
+    def _fit(self, name: str, suffix: str = "") -> str:
+        """The speaker column's text: the name shortened until name + ``suffix`` fits."""
         name = logic.short_name(name, 24)
         limit = self.spk_w - int(12 * self._scale)
-        while len(name) > 2 and self.f_bold.measure(name) > limit:
+        while len(name) > 2 and self.f_bold.measure(name + suffix) > limit:
             name = name[:-2].rstrip() + "…"
-        return name
+        return name + suffix
+
+    def set_short(self, keys: frozenset[str]) -> None:
+        """The people (``person_key``) who have little speech in the final view (L40): their rows are redrawn dimmed
+        and marked "short". Only rows whose state changed are redrawn."""
+        if keys == self._short:
+            return
+        old, self._short = self._short, keys
+        self.text.configure(state="normal")
+        try:
+            for i, row in enumerate(self._rows):
+                if isinstance(row, LineRow) and (row.person_key in old) != (row.person_key in keys):
+                    self._update_row(i, row)
+        finally:
+            self.text.configure(state="disabled")
+
+    def selection_in_row(self, row: LineRow) -> str:
+        """The part of the current text selection that lies inside this line's own text (not its play control,
+        time or speaker columns), "" when there is none. Used to prefill "Add to vocabulary…"."""
+        try:
+            first, last = self.text.index("sel.first"), self.text.index("sel.last")
+        except tk.TclError:
+            return ""
+        for i, r in enumerate(self._rows):
+            if r is row or (isinstance(r, LineRow) and r == row):
+                span = self.text.tag_nextrange("body", self._start(i), self._end(i))
+                if not span:
+                    return ""
+                lo = first if self.text.compare(first, ">", span[0]) else span[0]
+                hi = last if self.text.compare(last, "<", span[1]) else span[1]
+                return self.text.get(lo, hi) if self.text.compare(lo, "<", hi) else ""
+        return ""
 
     def _color_for(self, row: LineRow) -> str:
         if row.source == "mic" and row.label == YOU and not row.name:
@@ -444,10 +482,13 @@ class TranscriptView(ttk.Frame):
         t = logic.line_time(model, row.start_ms) if model is not None else ""
         if isinstance(row, LineRow):
             tag = f"spk:{row.person_key}"
-            self.text.tag_configure(tag, foreground=self._color_for(row))
+            short = row.person_key in self._short
+            color = self._color_for(row)
+            self.text.tag_configure(tag, foreground=theme.dim(color) if short else color)
+            suffix = f" · {logic.SHORT_MARK}" if short else ""
             return [self._glyph(row), self._glyph_tags(row, "line"), "\t", ("line",), t, ("line", "time"),
-                    "\t", ("line",), self._fit(row.display), ("line", "spk", tag),
-                    "\t", ("line",), row.text.strip() + "\n", ("line", "body")]
+                    "\t", ("line",), self._fit(row.display, suffix), ("line", "spk", tag),
+                    "\t", ("line",), row.text.strip() + "\n", ("line", "body", "short-body") if short else ("line", "body")]
         if isinstance(row, GapRow):
             return ["\t" + logic.gap_text(row, model) + "\n", ("gaprow",)]
         kind_tag = f"kind:{row.kind}" if row.kind in theme.KIND_COLORS else "kind:other"
