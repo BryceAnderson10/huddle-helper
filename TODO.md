@@ -338,6 +338,35 @@ What went well:
   `huddle-helper bench --audio …\system.flac --models base.en,small.en` first.
   → Custom vocabulary is now a requirement: `docs/LIVE_VIEW.md` L33–L38 ("Custom
   vocabulary", milestone 9), with a spike on this meeting's kept audio first.
+  → **Spike run (`tools/vocab_spike.py`, base.en, `hotwords`, results in `lab\vocab\`).**
+  Re-transcribing this meeting's 253 utterances:
+
+  | | No prompt | List (29 tokens) | "Glossary: … ." (33) | List + 4 names (37) |
+  | --- | --- | --- | --- | --- |
+  | Expected terms found | 47 | 74 | 66 | 77 |
+  | Known mishears left (of 12) | 11 | 2 | 2 | 2 |
+  | New lines where the plain run had none | – | 0 | 0 | 0 |
+  | Lines with 4+ extra words on the end | – | 13 | 7 | not counted |
+  | Transcription time | 164 s | 537 s | 302 s | 904 s |
+
+  **What works:** "cover" → "KoVa", "ETO" → "ETL", "FMX" → "FMS", "bender" → "vendor",
+  "co-trees" → "code freeze", "spray cheat" → "spreadsheet", "Zendrix" → "Zentrix".
+  "Quodium" is not fixed. Tests #2 and #3 gained no new lines.
+  **What doesn't (not yet releasable under L36):**
+  - *Junk on the end of correct lines*, e.g. "…SOT", "Mm. Mm.", "Make sure to subscribe to
+    our channel." Also seen in Test #3. The plan's checks (new lines, vocabulary-only
+    lines) don't catch these; count them.
+  - *Much slower:* about 2–3× the transcription time, slowest utterance 10–17 s instead of
+    1–6 s. The times were taken while other jobs ran on the PC, so re-measure on an idle
+    machine before trusting the exact figures. Likely cause: the junk lowers the score and
+    triggers the temperature retries; not confirmed.
+  - *Names are not safe:* with names in the prompt, "Well," became "Remote A," three times and
+    two lines gained an invented name on the end ("and Remote D.", "Remote B."). Attendee
+    names stay out of the prompt by default (L34's automatic add becomes opt-in).
+  *Next:* re-time on an idle PC; find out whether the tails come with the retries
+  (log temperature per utterance); try trimming words after the last word that falls inside
+  the utterance's speech, and a `compression_ratio`/log-prob check on the tail. The extra
+  "KoVa" hits (12 with the list, 7 with the sentence) haven't been checked against the audio.
 
 ### Microphone
 
