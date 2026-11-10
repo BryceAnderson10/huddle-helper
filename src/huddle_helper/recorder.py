@@ -294,7 +294,12 @@ class Recorder:
                 self.latencies_ms.append(int((time.perf_counter() - wall) * 1000))
 
     # -- workers --------------------------------------------------------
-    def _speaker(self, utt: Utterance) -> str:
+    def _speaker(self, utt: Utterance, words: list[Word] | None = None) -> str:
+        """Provisional speaker label. ``words`` (with timings) give the speech span for the clusterer.
+
+        Test #3: a 1.6 s line measured as 2.1 s with its VAD padding and trailing silence, which
+        was enough to found a speaker. Without word timings the utterance's duration is used.
+        """
         clusterer = self._clusterers.get(utt.source)
         if clusterer is None:
             return YOU if utt.source == "mic" else REMOTE
@@ -304,7 +309,8 @@ class Recorder:
                 emb = self.c.embedder.embed(utt.audio)
             except Exception:  # noqa: BLE001
                 log.exception("Speaker embedding failed")
-        return clusterer.assign(emb, utt.duration_s)
+        speech_s = (words[-1].end_ms - words[0].start_ms) / 1000 if words else utt.duration_s
+        return clusterer.assign(emb, speech_s)
 
     def _transcribe_loop(self) -> None:
         while True:
@@ -324,7 +330,7 @@ class Recorder:
                     if end_ms <= start_ms:
                         start_ms, end_ms = utt.start_ms, utt.end_ms
                     seg = Segment(utt.source, start_ms, end_ms, result.text, result.confidence,
-                                  self._speaker(utt), words)
+                                  self._speaker(utt, words), words)
                     append_words(self.folder.words_path, seg)
                     self._utt_end_wall[(seg.source, seg.start_ms)] = self._wall_for(utt.end)
                     self._merger.add(seg)

@@ -7,13 +7,15 @@ import numpy as np
 from huddle_helper import config, meeting as mt
 from huddle_helper.audio.filesource import FileCapture
 from huddle_helper.recorder import Components, Recorder
+from huddle_helper.segments import Word
+from huddle_helper.transcribe import Transcription
 from huddle_helper.vad import EnergyScorer
 from huddle_helper.writer import read_events
 
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
 
 
-def run(tmp_path, mic, system, errors=None, **settings):
+def run(tmp_path, mic, system, errors=None, transcriber=None, **settings):
     s = config.Settings(meetings_dir=str(tmp_path / "meetings"), **settings)
     holder = {}
 
@@ -21,7 +23,7 @@ def run(tmp_path, mic, system, errors=None, **settings):
         holder["cap"] = FileCapture(kw["on_audio"], {"mic": mic, "system": system})
         return holder["cap"]
 
-    comps = Components(transcriber=ToneTranscriber(), embedder=ToneEmbedder(),
+    comps = Components(transcriber=transcriber or ToneTranscriber(), embedder=ToneEmbedder(),
                        scorer_factory=EnergyScorer, capture_factory=factory)
     rec = Recorder(s, comps, on_error=(errors.append if errors is not None else None))
     folder = rec.start("Unit Test")
@@ -111,3 +113,32 @@ def test_silent_meeting(tmp_path):
     folder, events = run(tmp_path, silence(3), None)
     assert [e["type"] for e in events] == ["meeting_start", "meeting_end"]
     assert os.path.getsize(folder.audio_file("system")) > 0
+
+
+class WordSpanTranscriber(ToneTranscriber):
+    """Fake ASR that reports word timings: the first line spans 1.8 s, later ones only 1.2 s."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def transcribe(self, audio):
+        result = super().transcribe(audio)
+        if not result.text:
+            return result
+        self.calls += 1
+        span = 1800 if self.calls == 1 else 1200
+        return Transcription(result.text, result.confidence, [Word(100, 100 + span // 2, "Tone"),
+                                                              Word(100 + span // 2, 100 + span, "words.")])
+
+
+def test_live_speaker_uses_span_between_first_and_last_word(tmp_path):
+    """Test #3: VAD padding made a 1.6 s line count as over 2 s and found a speaker."""
+    system = np.concatenate([silence(0.5), tone(1100, 2.0), silence(0.8), tone(1600, 2.0), silence(2)])
+    _folder, events = run(tmp_path, None, system, transcriber=WordSpanTranscriber())
+    segs = [e for e in events if e["type"] == "segment"]
+    # The second line is a different voice and its audio is 2 s, but its words span 1.2 s:
+    # too short to found SPEAKER_02, so it joins the closest speaker.
+    assert [s["speaker"] for s in segs] == ["SPEAKER_01", "SPEAKER_01"]
+    # Without word timings (the plain fake) the utterance duration is used, as before.
+    _folder2, events2 = run(tmp_path / "again", None, system)
+    assert [e["speaker"] for e in events2 if e["type"] == "segment"] == ["SPEAKER_01", "SPEAKER_02"]

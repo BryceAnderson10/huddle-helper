@@ -56,3 +56,29 @@ def test_truth_checks():
     truth = {"together": ["A"], "apart": [["A", "B"], ["B", "C"]]}
     result = dict(final_lab.check_truth(truth, dists))
     assert result == {"together A": True, "apart A/B": True, "apart B/C": False}
+
+
+def test_unchecked_groups_are_not_checked():
+    truth = {"together": ["A", "X"], "apart": [["A", "B"], ["A", "X"]], "unchecked": ["X"]}
+    dists = {"A": {0: 5.0}, "B": {1: 5.0}, "X": {0: 3.0, 1: 3.0}}
+    assert dict(final_lab.check_truth(truth, dists)) == {"together A": True, "apart A/B": True}
+
+
+def test_anchors_first_places_short_pieces():
+    import numpy as np
+
+    def unit(i):
+        v = np.zeros(4)
+        v[i] = 1.0
+        return v
+
+    odd = (unit(0) * 0.6 + unit(2) * 0.8)
+    vecs = [unit(0), unit(1), unit(0), unit(1), odd, unit(3)]
+    weights = [6.0, 6.0, 6.0, 6.0, 1.5, 1.5]
+    starts = [0, 10_000, 20_000, 30_000, 21_000, 29_000]
+    labels = final_lab.anchors_first(vecs, weights, starts, 0.70, 3.0, 0.55)
+    assert labels[0] == labels[2] == labels[4]  # 0.6 like the first voice: taken at assign 0.55
+    assert labels[1] == labels[3] == labels[5]  # unlike either: takes its nearest neighbour in time
+    assert labels[0] != labels[1]
+    strict = final_lab.anchors_first(vecs, weights, starts, 0.70, 3.0, 0.65)
+    assert strict[4] == strict[2]  # not alike enough, so the neighbour rule gives the same answer here

@@ -16,10 +16,11 @@ log = logging.getLogger(__name__)
 # Bump when a tuning default changes; ``_MIGRATIONS`` lists the keys whose saved values
 # from older versions are dropped so the new default applies. (Those keys aren't in the
 # Settings dialog; the dialog saves every field, so old defaults would otherwise stick.)
-SETTINGS_VERSION = 3
+SETTINGS_VERSION = 4
 _MIGRATIONS = {
     2: ("live_speaker_threshold",),  # 0.6 -> 0.75, measured on real meeting audio (Test #2)
     3: ("live_min_new_speaker_s",),  # 1.5 -> 2.0, short opening lines (Test #3)
+    4: ("final_voice_threshold",),  # 0.65 -> 0.70 with the gated fold, keeps Test #4's 28 s speaker apart
 }
 
 
@@ -43,7 +44,7 @@ class Settings:
     live_speaker_threshold: float = 0.75
     live_min_new_speaker_s: float = 2.0
     final_cluster_threshold: float = 0.6  # offline diarizer; now only decides where lines split
-    final_voice_threshold: float = 0.65  # whole-meeting voice clustering for final labels
+    final_voice_threshold: float = 0.70  # whole-meeting voice clustering for final labels
 
     # Echo handling.
     echo_dedupe: bool = True

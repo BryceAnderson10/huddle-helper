@@ -75,6 +75,9 @@ def test_settings_migration_resets_old_live_threshold(tmp_path):
     path.write_text('{"settings_version": 2, "live_speaker_threshold": 0.75, "live_min_new_speaker_s": 1.5}',
                     encoding="utf-8")
     assert config.load(path).live_min_new_speaker_s == 2.0
+    # v4 moves the final voice threshold from 0.65 to 0.70 (gated fold, Test #4).
+    path.write_text('{"settings_version": 3, "final_voice_threshold": 0.65}', encoding="utf-8")
+    assert config.load(path).final_voice_threshold == 0.70
     assert s.settings_version == config.SETTINGS_VERSION
     # A value saved on purpose under the current version is respected.
     s.live_speaker_threshold = 0.8

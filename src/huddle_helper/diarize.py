@@ -138,7 +138,7 @@ class OfflineDiarizer(Protocol):
     def diarize(self, audio: np.ndarray, progress: Callable[[float], None] | None = None) -> list[Turn]: ...
 
 
-def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: float = 0.65) -> list[int]:
+def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: float = 0.70) -> list[int]:
     """Average-linkage clustering of voice fingerprints over a whole meeting.
 
     Unlike the live pass, every line is compared with every other line, so the order lines
@@ -146,9 +146,12 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     all cross pairs (weights are line durations, so long lines count more than "Yeah.").
     Merging stops when no two clusters are at least ``threshold`` alike.
 
-    Threshold 0.65 was chosen on kept recordings: it separates the two people Test #3's old
-    final pass merged (confirmed different), keeps Test #2's two main speakers, and gets the
-    synthetic two-voice meeting exactly right.
+    Threshold 0.70 (with the gated ``fold_small_clusters``) was chosen on kept recordings with
+    ``tools/final_lab.py matrix``: every setting from 0.685 to 0.71 keeps Test #3's three speakers
+    apart (confirmed different), keeps Test #2's two main speakers, keeps Test #4's 28 s speaker
+    out of the large cluster and its 74 s speaker exactly as before, and gets the synthetic
+    two-voice meeting right. Below 0.685 Test #4's 28 s speaker merges into the 325 s one; from
+    0.715 the 74 s speaker takes in other lines. 0.65, the earlier default, merged that 28 s speaker.
     """
     n = len(vecs)
     if n == 0:
@@ -184,13 +187,25 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     return labels
 
 
-def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list[float],
-                        min_s: float = 4.0, min_fraction: float = 0.03) -> list[int]:
-    """Give clusters with very little speech to their most similar larger cluster.
+def _centroid(vecs: list[np.ndarray], weights: list[float], members: list[int]) -> np.ndarray:
+    c = np.sum([vecs[i] * weights[i] for i in members], axis=0)
+    return c / (np.linalg.norm(c) or 1.0)
+
+
+def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list[float], *,
+                        min_s: float = 4.0, min_fraction: float = 0.03, always_fold_s: float = 4.0,
+                        min_similarity: float = 0.70, protected: set[int] | None = None) -> list[int]:
+    """Give clusters with little speech to their most similar larger cluster, if they sound alike.
 
     A cluster of one or two short lines ("I don't know.", 1.3 s) is usually a known voice
-    whose short-clip fingerprint came out unusual, not a new person.
+    whose short-clip fingerprint came out unusual, not a new person, so a cluster under
+    ``always_fold_s`` is always folded. A bigger candidate (under the size limit, which is
+    ``min_s`` or ``min_fraction`` of all speech) is a real voice more often than not: Test #4's
+    28 s speaker was 0.64-0.75 like its target and was folded away. It is folded only when its
+    centroid is at least ``min_similarity`` like the target's. Clusters in ``protected`` are
+    never folded. Labels keep the target's cluster id; callers renumber.
     """
+    protected = protected or set()
     totals: dict[int, float] = {}
     for lab, wt in zip(labels, weights):
         totals[lab] = totals.get(lab, 0.0) + wt
@@ -199,18 +214,16 @@ def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list
     large = [k for k, v in totals.items() if v >= limit]
     if not large or len(large) == len(totals):
         return list(labels)
-    cents = {}
-    for k in large:
-        c = np.sum([vecs[i] * weights[i] for i in range(len(labels)) if labels[i] == k], axis=0)
-        cents[k] = c / (np.linalg.norm(c) or 1.0)
+    cents = {k: _centroid(vecs, weights, [i for i in range(len(labels)) if labels[i] == k]) for k in large}
     out = list(labels)
     for k in totals:
-        if k in large:
+        if k in large or k in protected:
             continue
         idx = [i for i in range(len(labels)) if labels[i] == k]
-        c = np.sum([vecs[i] * weights[i] for i in idx], axis=0)
-        c = c / (np.linalg.norm(c) or 1.0)
+        c = _centroid(vecs, weights, idx)
         target = max(large, key=lambda j: float(np.dot(c, cents[j])))
+        if totals[k] >= always_fold_s and float(np.dot(c, cents[target])) < min_similarity:
+            continue
         for i in idx:
             out[i] = target
     return out

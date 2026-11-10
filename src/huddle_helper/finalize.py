@@ -274,7 +274,7 @@ def split_pieces(segments: list[Segment], words: dict[tuple[str, int], list[Word
 
 def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
-            embed: Embed | None = None, voice_threshold: float = 0.65,
+            embed: Embed | None = None, voice_threshold: float = 0.70,
             timings: dict[str, float] | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
@@ -309,7 +309,29 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
 
 JOIN_GAP_MS = 2000  # Test #3's "...test number three." / "of Huddle Helper." had a 1.6 s pause
 JOIN_MAX_MS = 30_000
+ATTACH_GAP_MS = 1000  # Test #4: a sentence end cut off onto another speaker came within a second
+ATTACH_MAX_WORDS = 3  # ...and was too short to fingerprint, so it took a neighbour's label
 _CLOSERS = (".", "?", "!")
+_ELLIPSES = ("…", "...")
+
+
+def _is_closed(text: str) -> bool:
+    """True if the line ends a sentence. A trailing "…" or "..." is Whisper trailing off (Test #4)."""
+    text = text.rstrip()
+    return text.endswith(_CLOSERS) and not text.endswith(_ELLIPSES)
+
+
+def _should_join(prev: Segment, seg: Segment) -> bool:
+    gap = seg.start_ms - prev.end_ms
+    if prev.source != seg.source or gap < 0 or seg.end_ms - prev.start_ms > JOIN_MAX_MS or not seg.text:
+        return False
+    if prev.speaker == seg.speaker:
+        return gap < JOIN_GAP_MS and (seg.text[0].islower() or not _is_closed(prev.text))
+    # Cross-speaker: a very short line right after one that stops mid-sentence is its tail, whoever
+    # it was labelled as. A line that trails off ("Yeah, so…") doesn't count: on Test #4 another
+    # person's short reply ("Cool. Okay.") follows those, and attaching it would misattribute it.
+    return (gap < ATTACH_GAP_MS and not prev.text.rstrip().endswith(_CLOSERS + _ELLIPSES)
+            and len(seg.text.split()) <= ATTACH_MAX_WORDS)
 
 
 def join_fragments(segments: list[Segment]) -> list[Segment]:
@@ -319,24 +341,23 @@ def join_fragments(segments: list[Segment]) -> list[Segment]:
     out." / "the" / "Test number three." Whisper puts a full stop on every piece. Two lines
     next to each other in the transcript are joined when they have the same source and
     speaker, the gap is short, and either the next starts in lower case or the previous has
-    no closing punctuation. Only the final file is changed; the live file is append-only.
+    no closing punctuation (a trailing "…" is not closing punctuation). Test #4: a line of
+    three words or fewer less than a second after a line with no ending punctuation at all is
+    attached to it even when the speaker label differs; the earlier line's speaker is kept. Only the final file
+    is changed; the live file is append-only.
     """
     out: list[Segment] = []
     for seg in segments:
         prev = out[-1] if out else None
-        if (prev is not None and prev.source == seg.source and prev.speaker == seg.speaker
-                and 0 <= seg.start_ms - prev.end_ms < JOIN_GAP_MS
-                and seg.end_ms - prev.start_ms <= JOIN_MAX_MS and seg.text):
-            continues = seg.text[0].islower()
-            if continues or not prev.text.rstrip().endswith(_CLOSERS):
-                head = prev.text.rstrip()
-                if continues and head.endswith(".") and not head.endswith("..."):
-                    head = head[:-1]  # Whisper's full stop at the pause, not a real sentence end
-                dur_p, dur_s = prev.end_ms - prev.start_ms, seg.end_ms - seg.start_ms
-                conf = (prev.confidence * dur_p + seg.confidence * dur_s) / max(dur_p + dur_s, 1)
-                out[-1] = Segment(prev.source, prev.start_ms, seg.end_ms, f"{head} {seg.text.lstrip()}",
-                                  conf, prev.speaker, prev.words + seg.words)
-                continue
+        if prev is not None and _should_join(prev, seg):
+            head = prev.text.rstrip()
+            if seg.text[0].islower() and head.endswith(".") and not head.endswith(_ELLIPSES):
+                head = head[:-1]  # Whisper's full stop at the pause, not a real sentence end
+            dur_p, dur_s = prev.end_ms - prev.start_ms, seg.end_ms - seg.start_ms
+            conf = (prev.confidence * dur_p + seg.confidence * dur_s) / max(dur_p + dur_s, 1)
+            out[-1] = Segment(prev.source, prev.start_ms, seg.end_ms, f"{head} {seg.text.lstrip()}",
+                              conf, prev.speaker, prev.words + seg.words)
+            continue
         out.append(seg)
     return out
 
@@ -363,7 +384,7 @@ def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
                      keep_audio: bool, progress: Progress | None = None,
                      embedder_factory: Callable[[], Embedder] | None = None,
-                     voice_threshold: float = 0.65) -> int:
+                     voice_threshold: float = 0.70) -> int:
     """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count."""
     progress = progress or (lambda stage, frac: None)
     t_start = time.perf_counter()

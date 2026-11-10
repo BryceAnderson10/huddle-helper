@@ -155,6 +155,40 @@ def test_cluster_voices_and_fold_small():
     assert cluster_voices([], [], 0.65) == []
 
 
+def _blend(i, j, toward_i):
+    """Unit vector whose cosine with unit(i) is ``toward_i``, the rest along unit(j)."""
+    v = unit(i) * toward_i + unit(j) * float(np.sqrt(1 - toward_i ** 2))
+    return v / np.linalg.norm(v)
+
+
+def _fold_case(candidate_s, candidate_cos, **kw):
+    from huddle_helper.diarize import fold_small_clusters
+
+    vecs = [unit(0), unit(1), _blend(0, 2, candidate_cos)]
+    return fold_small_clusters([0, 1, 2], vecs, [100.0, 100.0, candidate_s], **kw)
+
+
+def test_fold_small_and_similar_folds():
+    assert _fold_case(5.0, 0.80) == [0, 1, 0]  # over 4 s, but 0.80 like cluster 0
+
+
+def test_fold_small_and_different_stays():
+    assert _fold_case(5.0, 0.50) == [0, 1, 2]  # Test #4's 28 s speaker: 0.64-0.75 like its target
+
+
+def test_fold_under_always_fold_s_folds_whatever_the_similarity():
+    assert _fold_case(3.0, 0.30) == [0, 1, 0]
+
+
+def test_fold_protected_never_folds():
+    assert _fold_case(3.0, 0.80, protected={2}) == [0, 1, 2]
+    assert _fold_case(5.0, 0.80, protected={2}) == [0, 1, 2]
+
+
+def test_fold_threshold_is_the_target_similarity():
+    assert _fold_case(5.0, 0.80, min_similarity=0.85) == [0, 1, 2]
+
+
 class UnitEmbedder:
     """Fake fingerprints keyed by line start time."""
 
@@ -204,7 +238,7 @@ def test_join_fragments_respects_speaker_and_gap():
     from huddle_helper.finalize import join_fragments
 
     segs = [Segment("system", 0, 1000, "and then we", 0.7, "SPEAKER_01"),
-            Segment("system", 1500, 2500, "decided to wait.", 0.7, "SPEAKER_02"),
+            Segment("system", 2500, 3500, "decided to wait.", 0.7, "SPEAKER_02"),  # 1.5 s: too far to attach
             Segment("system", 6000, 7000, "and later", 0.7, "SPEAKER_02")]
     assert len(join_fragments(segs)) == 3
 
@@ -379,3 +413,53 @@ def test_finalize_times_embedding_and_clustering_separately(tmp_path):
     finalize_meeting(folder, FakeDiarizer, keep_audio=False, embedder_factory=FlatEmbedder)
     stages = folder.read_meta()["final_stats"]["stages"]
     assert {"embed_pieces", "cluster"} <= set(stages) and "voice_labels" not in stages
+
+
+def _seg(start, end, text, speaker="SPEAKER_01", source="system"):
+    return Segment(source, start, end, text, 0.8, speaker)
+
+
+def test_join_fragments_ellipsis_is_not_a_sentence_end():
+    from huddle_helper.finalize import join_fragments
+
+    segs = [_seg(0, 3000, "We could always set up the…"),
+            _seg(3600, 5000, "Blue widget side of the process.")]
+    out = join_fragments(segs)
+    assert [s.text for s in out] == ["We could always set up the… Blue widget side of the process."]
+    assert [s.text for s in join_fragments([_seg(0, 3000, "We could set up the..."), segs[1]])] == [
+        "We could set up the... Blue widget side of the process."]
+
+
+def test_join_fragments_attaches_short_tail_of_another_speaker():
+    from huddle_helper.finalize import join_fragments
+
+    segs = [_seg(0, 4000, "Is it just a list of the", "SPEAKER_03"),
+            _seg(4400, 5000, "Red table.", "SPEAKER_01"),
+            _seg(9000, 12000, "A new thought entirely.", "SPEAKER_01")]
+    out = join_fragments(segs)
+    assert [(s.speaker, s.text) for s in out] == [
+        ("SPEAKER_03", "Is it just a list of the Red table."), ("SPEAKER_01", "A new thought entirely.")]
+    assert out[0].end_ms == 5000
+
+
+def test_join_fragments_cross_speaker_attach_has_limits():
+    from huddle_helper.finalize import join_fragments
+
+    head = _seg(0, 4000, "Is it just a list of the", "SPEAKER_03")
+    assert len(join_fragments([head, _seg(5200, 6000, "Red table.", "SPEAKER_01")])) == 2  # gap 1.2 s
+    assert len(join_fragments([head, _seg(4400, 6000, "The red table here.", "SPEAKER_01")])) == 2  # 4 words
+    closed = _seg(0, 4000, "Is it just a list of them.", "SPEAKER_03")
+    assert len(join_fragments([closed, _seg(4400, 5000, "Red table.", "SPEAKER_01")])) == 2
+    other_source = _seg(4400, 5000, "Red table.", "You", source="mic")
+    assert len(join_fragments([head, other_source])) == 2
+
+
+def test_join_fragments_does_not_attach_reply_after_trailing_off():
+    from huddle_helper.finalize import join_fragments
+
+    # Rule (ii) needs a line that stops mid-sentence; "…" is someone trailing off, and the short
+    # line after it is usually another person's reply (Test #4).
+    segs = [Segment("system", 0, 2000, "Right, so…", 0.9, "SPEAKER_01"),
+            Segment("system", 2300, 3000, "Sounds good.", 0.9, "SPEAKER_02")]
+    out = join_fragments(segs)
+    assert [(s.speaker, s.text) for s in out] == [("SPEAKER_01", "Right, so…"), ("SPEAKER_02", "Sounds good.")]

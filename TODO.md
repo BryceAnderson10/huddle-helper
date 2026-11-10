@@ -222,10 +222,12 @@ What went well:
   Partly fixed in 601d147: both ideas are in (new speaker needs 2.0 s; a speaker known from
   under 2 s of audio adopts a long line at 0.6+ similarity). The Test #3 replay goes from 5 live
   speakers to 4, with A, B and C each on one label.
-- [ ] **One spurious live speaker remains on the Test #3 replay:** line 4 ("Maybe it's
+- [x] **One spurious live speaker remains on the Test #3 replay:** line 4 ("Maybe it's
   technically complex.", 1.6 s of speech). The live pass measures the utterance including its
   VAD padding and trailing silence, so it counted as over 2 s. *Idea:* measure from the first
   to the last word. Low priority; the final file has it right.
+  Fixed in WP1: the live pass now measures a line from its first to its last word. Unit-tested;
+  not yet re-checked on a replay.
 
 ### Readability
 
@@ -263,7 +265,7 @@ What went well:
 
 ### Final pass: a real speaker was folded away (high priority)
 
-- [ ] **Remote D is merged into Remote B (`SPEAKER_03`).** Final result: 3 speakers —
+- [x] **Remote D is merged into Remote B (`SPEAKER_03`).** Final result: 3 speakers —
   `SPEAKER_01` 591 s (Remote A plus others), `SPEAKER_02` 74 s (Remote C), `SPEAKER_03` 377 s
   (Remote B + Remote D). Remote D's lines form a clean, separate voice cluster: 6 lines, 28 s,
   lines 102 ("Yeah, so I can provide that." → "Thank you, Remote D"), 119, 127, 167, 196
@@ -288,6 +290,22 @@ What went well:
   as three speakers. So 0.70 with today's fold passes Test #3. Who spoke line 67 needs a
   listen.
 
+  **Fixed in WP1:** `final_voice_threshold` 0.65 → 0.70, and `fold_small_clusters` now folds a
+  cluster of 4 s or more only if it is at least 0.70 like its target. Re-running the final
+  pass on the kept recordings (`tools/final_lab.py`):
+  - **Test #4:** five remote speakers instead of three: 582 s, 74 s (Remote C, exactly the same
+    lines as before), 343 s (Remote B), 38 s (Remote D's six lines plus line 67) and 13 s (lines
+    170/172/176, kept apart by the similarity check).
+  - **Test #3:** A, B and C are still three speakers. Line 3 (1 s, unchecked) moved from B to A.
+  - **Test #2:** the same two main speakers.
+  - **TTS sample:** correct.
+
+  **The margin is thin.** Everything passes only from 0.685 to 0.71. Below that Remote D
+  merges into Remote B; from 0.715 other lines join Remote C's speaker; from 0.73 Test #2's two
+  main speakers change. "Anchors first" (option b) passed at no setting and was not built.
+  A fixed threshold fitted to three recordings will miss on others; naming speakers (LIVE_VIEW
+  L14) is what makes it certain. Re-check on every new kept recording.
+
   **Tension with Test #3:** there, 0.70 split speaker A into pieces (see the table under
   Test #3), which is why 0.65 was chosen. A fixed threshold that works for both may not
   exist. *Options to test:* (a) 0.70 plus a similarity-gated fold (always fold clusters under
@@ -305,7 +323,7 @@ What went well:
 
 ### Final pass: fragments and mixed lines
 
-- [ ] **A sentence end cut off onto another speaker.** "Can we get a copy of that or is it just
+- [x] **A sentence end cut off onto another speaker.** "Can we get a copy of that or is it just
   a dump of the" (`SPEAKER_03`) / "GCP table." (`SPEAKER_01`); "I'm kind of just getting…"
   (`01`) / "validation from the FMX people here." (`02`); "…we can always get the address from
   joining you." (`02`) / "Another table." (`01`). The short second piece is too short to
@@ -313,10 +331,16 @@ What went well:
   `join_fragments` only joins the same speaker. *Idea:* when the previous line has no closing
   punctuation, the gap is under ~1 s and the next line is very short (≤ 3 words), attach it
   to the previous line whatever its label.
-- [ ] **Same-speaker fragments not joined:** "…all we would have to do is build out the…" /
+  Fixed in WP1 as proposed ("…dump of the" / "GCP table." is now one line). The other two
+  examples aren't covered: their first line ends with a full stop or "…". A line that
+  trails off with "…" doesn't count, because the short line after it is usually someone
+  else's reply.
+- [x] **Same-speaker fragments not joined:** "…all we would have to do is build out the…" /
   "Quodium side in the ETO process." Whisper's trailing "…" counts as closing punctuation.
   *Idea:* don't treat "…" as a sentence end in `join_fragments`. (Also "default to the" / "The
   zone code address" was not joined because its gap is 2.6 s; leave that as is.)
+  Fixed in WP1: 14 such pairs are joined in Test #4 (203 lines → 190), 2 in Test #2, 1 in
+  Test #3. The "…" stays in the joined text.
 - [ ] **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
   Yes. Yes.", "I think that is CSV. Yeah. Okay. Okay.", "…you're all good." Interjections under
   1 s / 3 words are folded into the surrounding line on purpose (Test #1 fix), so a short reply

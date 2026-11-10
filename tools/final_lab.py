@@ -2,13 +2,16 @@
 
     python tools/final_lab.py embed lab/src/<meeting> [--out lab/cache]
     python tools/final_lab.py sweep lab/cache/<meeting>.json --truth tests/data/truth/test-3.json
+    python tools/final_lab.py matrix --cache lab/cache --truth tests/data/truth --baseline lab/baseline
     python tools/final_lab.py diff lab/baseline/a/transcript.final.jsonl other/transcript.final.jsonl
     python tools/final_lab.py finalize lab/src/<meeting> --out lab/baseline/<name>
 
 Nothing here writes inside the meeting folder it is given; outputs go under ``lab\\``.
 ``embed`` runs the production steps up to ``embed_pieces`` and caches vectors, weights and
 piece positions (no transcript text). ``sweep`` re-clusters the cache at several thresholds
-and checks the groups in a truth file (letters and (source, start_ms) pairs only).
+(optionally "anchors first", see ``anchors_first``) and checks the groups in a truth file
+(letters and (source, start_ms) pairs only; groups under "unchecked" are listed, never checked).
+``matrix`` scores every setting against WP1's acceptance matrix for the three kept recordings.
 """
 
 from __future__ import annotations
@@ -141,14 +144,66 @@ def fmt_dist(dist: dict[int, float]) -> str:
 
 
 def check_truth(truth: dict, dists: dict[str, dict[int, float]]) -> list[tuple[str, bool]]:
-    """Strict checks: a 'together' group sits in one cluster; 'apart' groups share no cluster."""
+    """Strict checks: a 'together' group sits in one cluster; 'apart' groups share no cluster.
+
+    Groups listed under "unchecked" (nobody has confirmed them) are never part of a check.
+    """
     results = []
-    for g in truth.get("together", []):
+    skip = set(truth.get("unchecked", []))
+    for g in [g for g in truth.get("together", []) if g not in skip]:
         results.append((f"together {g}", len(dists.get(g, {})) == 1))
-    for a, b in truth.get("apart", []):
+    for a, b in [(a, b) for a, b in truth.get("apart", []) if a not in skip and b not in skip]:
         shared = set(dists.get(a, {})) & set(dists.get(b, {}))
         results.append((f"apart {a}/{b}", bool(dists.get(a)) and bool(dists.get(b)) and not shared))
     return results
+
+
+def anchors_first(vecs: list[np.ndarray], weights: list[float], starts: list[int], threshold: float,
+                  anchor_s: float, assign: float) -> list[int]:
+    """Lab option (WP1 (b)): cluster only pieces of ``anchor_s`` seconds or more, then place the rest.
+
+    Weighted centroids of the anchor clusters take each shorter piece if it is at least ``assign``
+    like the nearest one; any other piece takes the label of the nearest labelled piece in time
+    (the neighbour rule). With no anchor, falls back to plain clustering.
+    """
+    anchors = [i for i, w in enumerate(weights) if w >= anchor_s]
+    if not anchors:
+        return cluster_voices(vecs, weights, threshold)
+    a_labels = cluster_voices([vecs[i] for i in anchors], [weights[i] for i in anchors], threshold)
+    labels: dict[int, int] = dict(zip(anchors, a_labels))
+    cents = {}
+    for k in set(a_labels):
+        c = np.sum([vecs[i] * weights[i] for i in anchors if labels[i] == k], axis=0)
+        cents[k] = c / (np.linalg.norm(c) or 1.0)
+    rest = []
+    for i in range(len(vecs)):
+        if i in labels:
+            continue
+        k, sim = max(((k, float(np.dot(vecs[i], c))) for k, c in cents.items()), key=lambda kv: kv[1])
+        if sim >= assign:
+            labels[i] = k
+        else:
+            rest.append(i)
+    placed = dict(labels)  # the neighbour rule looks at anchors and assigned pieces only
+    for i in rest:
+        near = min(placed, key=lambda j: abs(starts[j] - starts[i]))
+        labels[i] = placed[near]
+    return [labels[i] for i in range(len(vecs))]
+
+
+def vec_starts(pieces: list[dict], n: int) -> list[int]:
+    out = [0] * n
+    for p in pieces:
+        if p["vec"] >= 0:
+            out[p["vec"]] = p["start_ms"]
+    return out
+
+
+def seconds_per_cluster(labels: list[int], weights: list[float]) -> dict[int, float]:
+    totals: dict[int, float] = {}
+    for lab, w in zip(labels, weights):
+        totals[lab] = totals.get(lab, 0.0) + w
+    return totals
 
 
 def cmd_sweep(args) -> int:
@@ -157,34 +212,163 @@ def cmd_sweep(args) -> int:
     vecs, weights = arrays[f"{source}_vecs"], arrays[f"{source}_weights"]
     pieces = info["pieces"][source]
     truth = json.loads(Path(args.truth).read_text(encoding="utf-8")) if args.truth else None
+    unchecked = set((truth or {}).get("unchecked", []))
     groups: dict[str, list[dict]] = {}
     if truth:
         for g, items in truth["groups"].items():
             groups[g], missing = resolve_group([i for i in items if i[0] == source], pieces)
             no_vec = sum(1 for p in groups[g] if p["vec"] < 0)
             notes = ([f"{missing} not found"] if missing else []) + (
-                [f"{no_vec} too short to fingerprint"] if no_vec else [])
+                [f"{no_vec} too short to fingerprint"] if no_vec else []) + (
+                ["unchecked: reported, not part of any check"] if g in unchecked else [])
             print(f"group {g}: {len(items)} lines -> {len(groups[g])} pieces" + "".join(f", {n}" for n in notes))
     vec_list, w_list = list(vecs), [float(w) for w in weights]
+    starts = vec_starts(pieces, len(vec_list))
     speech = sum(w_list)
     limit = max(4.0, 0.03 * speech)
     print(f"\n{info['meeting']} [{source}]: {len(w_list)} fingerprints, {speech:.0f} s of speech, "
           f"fold limit {limit:.1f} s")
     for g, ps in groups.items():
         print(f"  group {g}: {sum(float(weights[p['vec']]) for p in ps if p['vec'] >= 0):.1f} s")
+    settings: list[tuple[str, list[int]]] = []
     for thr in [float(t) for t in args.thresholds.split(",")]:
         raw = cluster_voices(vec_list, w_list, thr)
-        for name, labels in (("fold on", fold_small_clusters(raw, vec_list, w_list)), ("fold off", raw)):
-            totals: dict[int, float] = {}
-            for lab, w in zip(labels, w_list):
-                totals[lab] = totals.get(lab, 0.0) + w
-            sizes = " ".join(f"{v:.0f}" for v in sorted(totals.values(), reverse=True))
-            print(f"\nthreshold {thr:.2f}, {name}: {len(totals)} clusters; seconds per cluster: {sizes}")
-            dists = {g: group_clusters(ps, labels, weights) for g, ps in groups.items()}
-            for g, d in dists.items():
-                print(f"   {g}: {fmt_dist(d)}")
-            for what, ok in check_truth(truth, dists) if truth else []:
-                print(f"   {what}: {'ok' if ok else 'FAIL'}")
+        settings.append((f"threshold {thr:.2f}, gated fold", fold_small_clusters(raw, vec_list, w_list)))
+        if args.fold_off:
+            settings.append((f"threshold {thr:.2f}, fold off", raw))
+        for anchor_s in [float(x) for x in args.anchors.split(",") if x]:
+            for assign in [float(x) for x in args.assign.split(",")]:
+                raw = anchors_first(vec_list, w_list, starts, thr, anchor_s, assign)
+                settings.append((f"threshold {thr:.2f}, anchors {anchor_s:g} s assign {assign:.2f}, gated fold",
+                                 fold_small_clusters(raw, vec_list, w_list)))
+    for name, labels in settings:
+        totals = seconds_per_cluster(labels, w_list)
+        sizes = " ".join(f"{v:.0f}" for v in sorted(totals.values(), reverse=True))
+        print(f"\n{name}: {len(totals)} clusters; seconds per cluster: {sizes}")
+        dists = {g: group_clusters(ps, labels, weights) for g, ps in groups.items()}
+        for g, d in dists.items():
+            print(f"   {g}{' (unchecked)' if g in unchecked else ''}: {fmt_dist(d)}")
+        for what, ok in check_truth(truth, dists) if truth else []:
+            print(f"   {what}: {'ok' if ok else 'FAIL'}")
+    return 0
+
+
+# -- acceptance matrix ---------------------------------------------------
+RECORDINGS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*work*"}
+S_MIN_SIMILARITY = 0.70
+
+
+def baseline_speakers(pieces: list[dict], n: int, baseline: Path, source: str = "system") -> list[str | None]:
+    """Baseline final speaker of each fingerprint's piece (the line holding the piece's midpoint)."""
+    segs = [s for s in read_segments(baseline) if s["source"] == source]
+    out: list[str | None] = [None] * n
+    for p in pieces:
+        if p["vec"] < 0:
+            continue
+        mid = (p["start_ms"] + p["end_ms"]) // 2
+        hit = next((s for s in segs if s["start_ms"] <= mid < s["end_ms"]), None)
+        if hit is None and segs:
+            hit = max(segs, key=lambda s: min(s["end_ms"], p["end_ms"]) - max(s["start_ms"], p["start_ms"]))
+        out[p["vec"]] = hit["speaker"] if hit else None
+    return out
+
+
+def majority(items: list) -> object | None:
+    return max(set(items), key=items.count) if items else None
+
+
+def matrix_rows(name: str, labels: list[int], vecs: list[np.ndarray], weights: list[float], pieces: list[dict],
+                truth: dict | None, base: list[str | None]) -> list[tuple[str, bool]]:
+    """Acceptance checks of WP1 for one recording and one clustering. Rows: (name, passed).
+
+    Rows named "info ..." come from the truth file but are not part of the acceptance matrix.
+    """
+    wts = np.asarray(weights)
+    rows: list[tuple[str, bool]] = []
+    groups = {g: resolve_group([i for i in items if i[0] == "system"], pieces)[0]
+              for g, items in (truth or {}).get("groups", {}).items()}
+    dists = {g: group_clusters(ps, labels, wts) for g, ps in groups.items()}
+    if name == "test-3":
+        rows += [(w.replace("together ", "").replace("apart ", "") + (" one" if w.startswith("together") else ""), ok)
+                 for w, ok in check_truth(truth, dists)]
+        big = [k for k, v in seconds_per_cluster(labels, weights).items() if v >= 4.0]
+        rows.append(("3 clusters >= 4 s", len(big) == 3))
+    elif name == "test-4":
+        checks = dict(check_truth(truth, dists))
+        rows += [("M one", checks["together M"]), ("M/L apart", checks["apart M/L"]),
+                 ("M/J apart", checks["apart M/J"])]
+        j_labels = [labels[p["vec"]] for p in groups["J"] if p["vec"] >= 0]
+        j_base = [base[p["vec"]] for p in groups["J"] if p["vec"] >= 0]
+        j_cluster, j_spk = majority(j_labels), majority([b for b in j_base if b])
+        new = {i for i, lab in enumerate(labels) if lab == j_cluster}
+        old = {i for i, b in enumerate(base) if b == j_spk}
+        rows.append(("J exact", new == old))
+        s_idx = {p["vec"] for p in groups["S"] if p["vec"] >= 0}
+        s_ok = True  # judged on the cluster holding most of S's speech (a stray short piece may fold)
+        k = majority([labels[i] for i in s_idx for _ in range(int(weights[i] * 10))])
+        mine = [i for i in s_idx if labels[i] == k]
+        rest = [i for i, lab in enumerate(labels) if lab == k and i not in s_idx]
+        if mine and rest:
+            cs = np.sum([vecs[i] * weights[i] for i in mine], axis=0)
+            cr = np.sum([vecs[i] * weights[i] for i in rest], axis=0)
+            sim = float(np.dot(cs, cr) / ((np.linalg.norm(cs) * np.linalg.norm(cr)) or 1.0))
+            s_ok = sim >= S_MIN_SIMILARITY
+        rows.append(("S not folded below 0.70", s_ok))
+        for w in ("together J", "together L", "apart J/L"):
+            rows.append(("info " + w, checks[w]))
+    else:  # test-2: the two main speakers' partition for every line of 3 s or more
+        main = sorted({b for b in base if b}, key=lambda b: -sum(w for w, x in zip(weights, base) if x == b))[:2]
+        keep = [i for i, b in enumerate(base) if b in main and weights[i] >= 3.0]
+        pairs = {(base[i], labels[i]) for i in keep}
+        same = len({b for b, _ in pairs}) == len(pairs) == len({lab for _, lab in pairs})
+        rows.append(("main speakers equal baseline (>= 3 s)", same))
+    return rows
+
+
+def cmd_matrix(args) -> int:
+    from itertools import product
+
+    cache_dir, truth_dir, base_dir = Path(args.cache), Path(args.truth), Path(args.baseline)
+    ctx = {}
+    for name, pattern in RECORDINGS.items():
+        path = next(cache_dir.glob(pattern + ".json"))
+        info, arrays = load_cache(path)
+        pieces = info["pieces"]["system"]
+        v, w = list(arrays["system_vecs"]), [float(x) for x in arrays["system_weights"]]
+        tpath = truth_dir / f"{name}.json"
+        truth = json.loads(tpath.read_text(encoding="utf-8")) if tpath.exists() else None
+        base = baseline_speakers(pieces, len(v), base_dir / name / "transcript.final.jsonl")
+        ctx[name] = (v, w, pieces, truth, base, vec_starts(pieces, len(v)))
+    settings: list[tuple[str, dict[str, list[int]]]] = []
+
+    def run(make) -> dict[str, list[int]]:
+        return {n: fold_small_clusters(make(c[0], c[1], c[5]), c[0], c[1]) for n, c in ctx.items()}
+
+    if args.mode in ("plain", "both"):
+        for t in [float(x) for x in args.thresholds.split(",")]:
+            settings.append((f"plain T={t:.3f}", run(lambda v, w, st, t=t: cluster_voices(v, w, t))))
+    if args.mode in ("anchors", "both"):
+        for a, t, g in product([float(x) for x in args.anchors.split(",")],
+                               [float(x) for x in args.anchor_t.split(",")],
+                               [float(x) for x in args.assign.split(",")]):
+            settings.append((f"anchors a={a:g} T={t:.2f} assign={g:.2f}",
+                             run(lambda v, w, st, a=a, t=t, g=g: anchors_first(v, w, st, t, a, g))))
+    print("| setting | " + " | ".join(ctx) + " | all |")
+    print("| --- | " + " | ".join("---" for _ in ctx) + " | --- |")
+    for name, by_rec in settings:
+        cells, ok_all = [], True
+        for rec, (v, w, pieces, truth, base, _st) in ctx.items():
+            rows = matrix_rows(rec, by_rec[rec], v, w, pieces, truth, base)
+            fails = [n for n, ok in rows if not ok and not n.startswith("info ")]
+            ok_all = ok_all and not fails
+            cells.append("pass" if not fails else "FAIL: " + ", ".join(fails))
+        print(f"| {name} | " + " | ".join(cells) + f" | {'PASS' if ok_all else 'fail'} |")
+        if args.detail:
+            for rec, (v, w, pieces, truth, base, _st) in ctx.items():
+                tot = sorted(seconds_per_cluster(by_rec[rec], w).values(), reverse=True)
+                rows = matrix_rows(rec, by_rec[rec], v, w, pieces, truth, base)
+                print(f"    {rec}: clusters (s) " + " ".join(f"{x:.0f}" for x in tot) + "; "
+                      + ", ".join(f"{n} {'ok' if ok else 'FAIL'}" for n, ok in rows))
     return 0
 
 
@@ -307,7 +491,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--thresholds", default=DEFAULT_THRESHOLDS)
     p.add_argument("--truth")
     p.add_argument("--source", default="system")
+    p.add_argument("--fold-off", action="store_true", help="also show each threshold without the fold")
+    p.add_argument("--anchors", default="", help="anchors-first piece lengths in seconds, e.g. 2,3,4")
+    p.add_argument("--assign", default="0.60", help="anchors-first: similarity needed to take a short piece")
     p.set_defaults(fn=cmd_sweep)
+    p = sub.add_parser("matrix", help="score settings against WP1's acceptance matrix (Tests #2-#4)")
+    p.add_argument("--cache", default=str(Path("lab") / "cache"))
+    p.add_argument("--truth", default=str(Path("tests") / "data" / "truth"))
+    p.add_argument("--baseline", default=str(Path("lab") / "baseline"))
+    p.add_argument("--mode", choices=("plain", "anchors", "both"), default="both")
+    p.add_argument("--thresholds", default="0.66,0.68,0.70,0.72,0.74,0.76", help="plain average linkage")
+    p.add_argument("--anchors", default="2,3,4")
+    p.add_argument("--anchor-t", default="0.68,0.70,0.72,0.74")
+    p.add_argument("--assign", default="0.55,0.60,0.65")
+    p.add_argument("--detail", action="store_true", help="cluster seconds and every row per recording")
+    p.set_defaults(fn=cmd_matrix)
     p = sub.add_parser("diff", help="compare two transcript.final.jsonl files")
     p.add_argument("a")
     p.add_argument("b")
