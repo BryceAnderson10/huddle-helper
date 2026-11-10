@@ -363,7 +363,7 @@ a cluster in `protected` is never folded.
   holding a different name. Nothing else about the linkage changes, so with no names the
   result is identical to today's.
 - A cluster containing any named piece is `protected` in the fold.
-- WP11 (L39) adds the pre-merge of same-name pieces before the loop.
+- WP11 (L39) adds the pre-merge of same-name pieces before the loop (done; built after WP9d).
 
 **Which pieces are named.** `tags.piece_names(pieces, live_segments, tag_state, vecs)`:
 give each piece the name of the tagged live range it overlaps most (same stream). A

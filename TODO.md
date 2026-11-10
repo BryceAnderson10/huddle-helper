@@ -633,3 +633,21 @@ What went well:
 - [ ] *Needs a person:* the Storage delete against the real Recycle Bin on a throwaway
   meeting (every check used a fake bin or a permanent delete on scratch copies); the
   file dialogs for import and export; adding a term during a real recording.
+
+## From same name, same speaker (WP11, L39)
+
+- [x] **Lines the user gave the same name start as one cluster** (`cluster_voices`). No
+  names: Tests #2, #3 and #4 are byte-identical to before. The WP8 runs (Test #3 with two
+  names, Test #4 with two names) give the same speakers and names. On Test #4 the same
+  name on a line of the 582 s speaker and one of the 12.5 s speaker merges the two
+  (594 s, four remote speakers). Clustering time is unchanged (about 4.5 ms).
+- [x] **A name names one final speaker per stream** (`map_final_speakers`, added in
+  review). Before, a speaker-level name on a live label that mixed two voices named both
+  final speakers: 4 s of left-out pieces named a 570 s speaker. Re-mapping the seven
+  WP11 runs changes only that case.
+- [ ] **The rule obeys the user even when wrong:** the same name on lines of two
+  different people moves those lines (7–11 s on Test #4) into one speaker; the rest of
+  the other person stays apart. Nothing warns about it.
+- [ ] **A speaker-level name cannot split voices 0.7 or more alike:** naming a live label
+  that mixed Test #4's 74 s and 38 s speakers merged them (118 s). A line-level name on
+  one of them is the way out.

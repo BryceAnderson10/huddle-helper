@@ -195,11 +195,17 @@ def map_final_speakers(final_segments, ranges: list[TaggedRange], share: float =
     same stream is summed; the largest wins. Any other name with at least ``share`` of the winner's
     overlap makes a conflict: ``{"speaker": label, "names": {name: ms, ...}}`` (all the names in the
     conflict, the winner first). Speakers with no tagged overlap are left out of the mapping.
+
+    One name names one final speaker per stream: the one that overlaps its ranges most. The final pass
+    puts every piece it took a name from into one speaker (L39), so a second speaker that overlaps the
+    same name only holds pieces a speaker-level name did not fit (``piece_names``' gate), and a few
+    seconds of those must not name it.
     """
     by_source: dict[str, list[TaggedRange]] = {}
     for r in ranges:
         by_source.setdefault(r.source, []).append(r)
     totals: dict[str, dict[str, int]] = {}
+    source_of: dict[str, str] = {}
     for seg in final_segments:
         for r in by_source.get(seg.source, ()):
             if r.start_ms >= seg.end_ms:
@@ -208,6 +214,15 @@ def map_final_speakers(final_segments, ranges: list[TaggedRange], share: float =
             if ov:
                 per = totals.setdefault(seg.speaker, {})
                 per[r.name] = per.get(r.name, 0) + ov
+                source_of[seg.speaker] = seg.source
+    home: dict[tuple[str, str], tuple[int, str]] = {}  # (stream, name) -> its speaker: most overlap, then label
+    for label in sorted(totals):
+        for name, ms in totals[label].items():
+            key = (source_of[label], name)
+            if key not in home or ms > home[key][0]:
+                home[key] = (ms, label)
+    totals = {label: kept for label, per in totals.items()
+              if (kept := {n: ms for n, ms in per.items() if home[(source_of[label], n)][1] == label})}
     mapping: dict[str, str] = {}
     conflicts: list[dict] = []
     for label, per in totals.items():

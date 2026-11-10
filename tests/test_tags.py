@@ -122,6 +122,68 @@ def test_cluster_voices_same_name_may_merge_and_an_unnamed_cluster_may_join_eith
     assert labels[3] in (labels[0], labels[2])  # the unnamed piece goes to one of them
 
 
+def test_same_name_pieces_that_plain_clustering_separates_end_up_together():
+    # Two voices 90 degrees apart (cos 0): plain clustering keeps them apart; the same name joins them.
+    vecs = [vec(0), vec(0.02), vec(np.pi / 2), vec(np.pi / 2 + 0.02)]
+    w = [3.0] * 4
+    plain = cluster_voices(vecs, w, 0.70)
+    assert plain[0] == plain[1] and plain[2] == plain[3] and plain[0] != plain[2]
+    labels = cluster_voices(vecs, w, 0.70, names=["Ana", None, "Ana", None])
+    assert labels[0] == labels[2]  # the unnamed neighbours are only ~0.5 like the joined cluster: left alone
+    assert labels[1] != labels[0] and labels[3] != labels[0]
+    # Even when the user is plainly wrong about it, and both pieces are alone.
+    assert cluster_voices([vec(0), vec(np.pi)], [1.0, 1.0], 0.70, ["Ana", "Ana"]) == [0, 0]
+
+
+def test_same_name_pre_merge_is_the_state_the_loop_would_have_made():
+    # Ana's two pieces are close enough that plain linkage merges them anyway: naming them changes nothing.
+    vecs = [vec(0.0), vec(0.1), vec(0.55), vec(1.2)]
+    w = [1.0, 5.0, 1.0, 1.0]
+    plain = cluster_voices(vecs, w, 0.8)
+    assert plain[0] == plain[1]
+    assert cluster_voices(vecs, w, 0.8, ["Ana", "Ana", None, None]) == plain
+
+
+def test_different_names_still_never_merge_when_a_same_name_pre_merge_makes_centroids_closer():
+    # Ana's two pieces sit either side of Ben's piece, so the merged Ana centroid points at Ben (cos ~0.97).
+    vecs = [vec(-0.3), vec(0.3), vec(0.0), vec(0.02)]
+    labels = cluster_voices(vecs, [2.0] * 4, 0.70, ["Ana", "Ana", "Ben", None])
+    assert labels[0] == labels[1] and labels[0] != labels[2]
+    assert labels[3] == labels[2]  # the unnamed piece is nearest Ben
+    # Ben named on the near piece and Cy on the other: nothing merges across names.
+    labels = cluster_voices(vecs, [2.0] * 4, 0.70, ["Ana", "Ana", "Ben", "Cy"])
+    assert len({labels[0], labels[2], labels[3]}) == 3 and labels[0] == labels[1]
+
+
+def test_no_names_or_all_none_is_identical_with_the_pre_merge_in_place():
+    rng = np.random.default_rng(7)
+    vecs = [v / np.linalg.norm(v) for v in rng.normal(size=(30, 8)) + rng.normal(size=(1, 8)) * 2]
+    w = list(rng.uniform(0.5, 6, 30))
+    base = cluster_voices(vecs, w, 0.30)
+    assert cluster_voices(vecs, w, 0.30, None) == base
+    assert cluster_voices(vecs, w, 0.30, [None] * 30) == base
+
+
+def test_gated_out_speaker_tag_pieces_stay_unnamed_so_a_mixed_live_label_does_not_force_them_together():
+    # A live label tagged Ana that mixes two voices: 4 pieces of one, 1 of another (cos 0.2). The odd piece is
+    # gated out, stays unnamed, and the pre-merge does not drag it into Ana's cluster.
+    specs = [("system", i * 5000, i * 5000 + 4000) for i in range(5)]
+    pieces = make_pieces(specs)
+    vecs = [vec(0.0), vec(0.03), vec(0.06), vec(0.09), vec(np.arccos(0.2))]
+    w = [4.0] * 5
+    live = [seg("system", a, b, "SPEAKER_01") for _s, a, b in specs]
+    ranges = tags.tagged_ranges(tags.reduce([sp("SPEAKER_01", "Ana")]), live)
+    names = tags.piece_names(pieces, list(range(5)), vecs, w, ranges)
+    assert names == ["Ana"] * 4 + [None]
+    labels = cluster_voices(vecs, w, 0.70, names)
+    assert labels[0] == labels[1] == labels[2] == labels[3] and labels[4] != labels[0]
+    # The same odd piece named by line is a rule: it is forced into Ana's cluster.
+    ranges = tags.tagged_ranges(tags.reduce([sp("SPEAKER_01", "Ana"), ln("system", 20_000, "Ana", 24_000)]), live)
+    names = tags.piece_names(pieces, list(range(5)), vecs, w, ranges)
+    assert names == ["Ana"] * 5
+    assert set(cluster_voices(vecs, w, 0.70, names)) == {0}
+
+
 def test_cannot_link_survives_merges_through_an_unnamed_cluster():
     # Ana - u - Ben chain: u joins one side; the merged cluster can never take the other name.
     theta = 0.45
@@ -355,3 +417,14 @@ def test_a_named_small_cluster_folds_only_into_a_cluster_with_the_same_name():
     assert out[4] == 2
     # named Ben and nobody else is named Ben: never folded (the plan's rule)
     assert fold_small_clusters(labels, vecs, w, protected={2})[4] == 2
+
+
+def test_map_final_speakers_one_name_names_one_speaker_per_stream():
+    """WP11: 4 s of pieces the gate left out must not name a second, larger speaker."""
+    ranges = [tags.TaggedRange("system", 0, 60_000, "Ana", tags.SPEAKER),
+              tags.TaggedRange("system", 100_000, 104_000, "Ana", tags.SPEAKER),
+              tags.TaggedRange("mic", 0, 5_000, "Ana", tags.LINE)]
+    final = [seg("system", 0, 60_000, "SPEAKER_03"), seg("system", 100_000, 400_000, "SPEAKER_01"),
+             seg("mic", 0, 5_000, "You")]
+    mapping, conflicts = tags.map_final_speakers(final, ranges)
+    assert mapping == {"SPEAKER_03": "Ana", "You": "Ana"} and conflicts == []

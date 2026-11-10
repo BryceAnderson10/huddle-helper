@@ -210,8 +210,12 @@ apply the mapping when you read.
 
 How the names are made: the pass sums, for each final speaker, the overlap in ms between its segments and
 each name's tagged lines on the same stream, and the largest wins. The tags also steer the clustering
-itself: two lines the user gave different names are never put in the same final speaker, and a speaker
-holding a named line is never folded into a speaker that is unnamed or has another name. With no `speaker_tags.jsonl` the pass writes no
+itself: two lines the user gave different names are never put in the same final speaker, lines the user gave the
+same name always are (even if their voices differ; only lines the user named are moved, and a speaker-level
+name counts only for pieces at least 0.7 like the rest of that name's pieces), and a speaker
+holding a named line is never folded into a speaker that is unnamed or has another name. The names themselves come from overlap, and one name names one final speaker per stream (the one overlapping it most), so
+the pieces a speaker-level name left out (below 0.7) cannot give a second final speaker the same name. Two
+entries in `speakers` may still hold the same display name: on different streams, or when set after `DONE`. With no `speaker_tags.jsonl` the pass writes no
 `speakers.json` and the final transcript is exactly what it was before names existed.
 
 **The user's names win.** For a speaker the user named (by tag, or in the window after `DONE`, which

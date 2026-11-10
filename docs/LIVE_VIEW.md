@@ -204,8 +204,12 @@ clustering (`cluster_voices`, average linkage) and the small-cluster fold
   with another name. This is the part that fixes Tests #3 and #4: two clicks during the
   call keep Remote D and Remote B apart even when their voices are 0.64–0.75 alike.
 - **Same name, same speaker (L39).** Lines with the same name start in one cluster
-  before clustering begins. Less urgent: when this fails, the result is one person
-  under two labels, which the mapping already names correctly.
+  before clustering begins (`cluster_voices` merges them first, by the same weighted-average
+  update the loop uses), so they always end in one final speaker. This is a hard rule, like
+  the different-names rule: if the user gives the same name to lines of two different people,
+  those lines are forced together, and the clustering then treats the merged cluster like any
+  other (unnamed lines may join it by voice). The rule moves only the lines the user named;
+  the rest of the other speaker stays where the voices put it.
 - **Limit.** The rules only protect people the user named. An unnamed Remote D can still
   be merged into a named Remote B. The "Who is this?" prompt for every new live voice (L13)
   is what gets both named; the fixed-threshold problem itself is tracked in TODO (Test #4).
@@ -968,7 +972,7 @@ show that the call is active, but who is speaking is only known once the line la
 | **The final pass merges two people the user named, and one name is lost** | The failure seen in practice (Test #3: B+C; Test #4: Remote D into Remote B). Mapping alone can't fix it. The different-names rule (L14, P0, milestone 5) keeps named people apart; checked on Tests #3 and #4. |
 | The final pass merges an *unnamed* person into a named one | L14 only protects people the user named. "Who is this?" for every new live voice (L13) gets both named; the threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
 | Live label is wrong for some lines, so a speaker-level tag names the wrong person on them | Overlap mapping is by majority, so a few wrong lines don't win the name. For the clustering rules, a speaker-level tag only counts for lines whose voice is at least 0.7 like the rest of that name's lines. Per-line tags override. This does *not* cover a whole person being merged; see the first row. |
-| User tags a live label that the final pass splits between two people | Only one final speaker gets the name; the other stays `SPEAKER_nn` and is shown as untagged. Less likely than a merge so far; L39 (same name, same speaker) fixes it later. |
+| User tags a live label that the final pass splits between two people | Lines of that label that count as named (line-level tags always; speaker-level only when at least 0.7 like the rest of that name, see above) are put in one final speaker (L39), so the name lands on one speaker. Pieces the gate leaves out are not forced: if they are a different voice they stay in another speaker, which stays `SPEAKER_nn` and is shown as untagged. Unnamed lines of the same person that fall outside the cluster by voice can also end up in an unnamed speaker. The mapping after the pass (L12) goes by overlap with the tagged live range, gated-out pieces included, but a name goes only to the final speaker (per stream) that overlaps it most, so those pieces cannot give a second speaker the same name (seen on Test #4 before this rule: 4 s of them named a 570 s speaker). |
 | Downstream app also writes `speakers.json` | Decided: the user's names win for speakers the user named, the downstream app's names are kept for the rest. Writes are atomic; Huddle Helper re-reads and merges just before writing. |
 | **The window slows live transcription on the target laptop** | Test #4 already reached max delay 6.8 s and max lag 6.6 s without the window. The window reads only appended lines and redraws only changes; milestone 1 checks live delay with the window open on the target laptop (L1). |
 | **Long wait before the final transcript on the target laptop** | 0.6× the meeting's length (13.5 min for 22.7 min; ~35 min for an hour). The window shows an estimate of the time left (L3) and the live transcript stays usable. Making the pass faster is tracked in TODO (Test #4). |

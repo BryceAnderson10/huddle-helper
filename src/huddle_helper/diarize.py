@@ -164,7 +164,9 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     0.715 the 74 s speaker takes in other lines. 0.65, the earlier default, merged that 28 s speaker.
 
     ``names[i]`` is the user's name for line ``i`` or None (L14). Two clusters that hold different names
-    are never merged: their similarity is set to -inf at the start and again after every merge. Nothing
+    are never merged: their similarity is set to -inf at the start and again after every merge. Lines with
+    the same name are merged into one cluster before the loop starts (L39), by the same weighted-average
+    update the loop uses, so they always end in one cluster, however unlike their voices are. Nothing
     else about the linkage changes, so with no names (or all None) the result is exactly the same.
     """
     n = len(vecs)
@@ -179,8 +181,31 @@ def cluster_voices(vecs: list[np.ndarray], weights: list[float], threshold: floa
     members: list[list[int]] = [[i] for i in range(n)]
     cluster_name: list[str | None] = list(names) if names is not None and any(names) else [None] * n
     named = any(cluster_name)
-    if named:  # cannot-link: different names never share a cluster
-        for i in range(n):
+    if named:
+        # Same name, same cluster (L39): merge each name's pieces first, exactly as the loop below merges
+        # two clusters (Lance-Williams), so similarity rows, weights and members are what they would be had
+        # the loop done it. Done before the cannot-link marking, so no -inf is mixed into those rows.
+        first: dict[str, int] = {}
+        for j in range(n):
+            nm = cluster_name[j]
+            if nm is None:
+                continue
+            i = first.setdefault(nm, j)
+            if i == j:
+                continue
+            new = (W[i] * S[i] + W[j] * S[j]) / (W[i] + W[j])
+            S[i, :] = new
+            S[:, i] = new
+            S[i, i] = -np.inf
+            S[j, :] = -np.inf
+            S[:, j] = -np.inf
+            W[i] += W[j]
+            members[i] += members[j]
+            members[j] = []
+            active[j] = False
+        for i in range(n):  # cannot-link: different names never share a cluster
+            if not active[i]:
+                continue
             if cluster_name[i] is not None:
                 for j in range(n):
                     if cluster_name[j] is not None and cluster_name[j] != cluster_name[i]:
@@ -234,8 +259,9 @@ def fold_small_clusters(labels: list[int], vecs: list[np.ndarray], weights: list
     centroid is at least ``min_similarity`` like the target's. Clusters in ``protected`` (they hold a
     name the user gave) are never folded into an unnamed or differently named cluster, which would hand
     the name to the wrong person. With ``cluster_names`` (cluster id -> its name) a protected cluster may
-    still fold into a larger cluster that carries the same name, by the same rules: otherwise naming a
-    speaker would leave that speaker's one-line fragments as speakers of their own. Labels keep the
+    still fold into a larger cluster that carries the same name, by the same rules. Since ``cluster_voices``
+    puts every line of one name into one cluster, that case cannot arise from its output; it is kept as a
+    guard for labels that did not come from it. Labels keep the
     target's cluster id; callers renumber.
     """
     protected = protected or set()
