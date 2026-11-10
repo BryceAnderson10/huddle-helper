@@ -18,11 +18,13 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 from .. import export as export_mod, meeting as mt
+from ..mute_reminder import duration_text
 from .. import marks as marks_mod, playback, playsequence
 from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
 from . import theme
@@ -272,16 +274,30 @@ def _mic_muted(meeting_id: str, model: TranscriptModel, state) -> bool:
 class MuteBarView:
     label: str  # "MIC MUTED", bold
     text: str
+    emphasis: bool = False  # a "still muted" reminder came in the last REMIND_HIGHLIGHT_S: stronger colours
 
 
 def _in_room(model: TranscriptModel) -> bool:
     return bool((model.meta.get("settings") or {}).get("diarize_mic"))
 
 
-def mute_bar_view(meeting_id: str, model: TranscriptModel, state) -> MuteBarView | None:
-    """The amber bar under the header, only while the displayed meeting is recording and muted."""
+REMIND_HIGHLIGHT_S = 60.0
+
+
+def mute_bar_view(meeting_id: str, model: TranscriptModel, state, now: float | None = None) -> MuteBarView | None:
+    """The amber bar under the header, only while the displayed meeting is recording and muted. After a
+    reminder (L24) it says how long the mute has lasted ("Muted for 20 min") and, for a minute, is stronger.
+    ``now`` is ``time.monotonic()`` (injectable for tests)."""
     if not _mic_muted(meeting_id, model, state):
         return None
+    rec = state.recording
+    secs = float(getattr(rec, "mute_reminder_s", 0.0) or 0.0)
+    if secs > 0:
+        now = time.monotonic() if now is None else now
+        text = f"Muted for {duration_text(secs)}. Your mic is still out of the recording (the call still hears you)."
+        if _in_room(model):
+            text += " Everyone in the room is out of the recording too."
+        return MuteBarView("MIC MUTED", text, now - float(getattr(rec, "mute_reminder_at", 0.0)) < REMIND_HIGHLIGHT_S)
     text = "You're muted in the recording (the call still hears you)."
     if _in_room(model):
         text += " Everyone in the room is out of the recording too."
@@ -319,11 +335,13 @@ class BookmarkItem:
 
 
 def bookmark_items(hotkeys: dict[str, str] | None = None, custom: dict[str, str] | None = None) -> list[BookmarkItem]:
-    """The four types, in menu order, with symbol and hotkey (Bookmark split button, tray menu, line menu)."""
+    """The four types, then the user-defined ones (``custom``: id -> name, Settings order), with symbol and
+    hotkey (Bookmark split button, tray menu, line menu). ``hotkeys`` holds the combo of every action,
+    user-defined types included (they are keyed by their id)."""
     hotkeys = hotkeys or {}
     items = [BookmarkItem(k, f"{theme.KIND_SYMBOLS[k]} {marks_mod.KIND_NAMES[k]}", hotkeys.get(k, ""))
              for k in marks_mod.KINDS]
-    items += [BookmarkItem(k, f"{theme.KIND_SYMBOLS['bookmark']} {name}", hotkeys.get(k, ""))
+    items += [BookmarkItem(k, f"{theme.CUSTOM_SYMBOL} {name}", hotkeys.get(k, ""))
               for k, name in (custom or {}).items()]
     return items
 

@@ -101,8 +101,8 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `models` | Speech, VAD and diarization models used. |
 | `settings` | Diarization, echo and Keep audio settings in force for this meeting. `keep_audio` starts as the Keep audio setting and the user can change it for this one meeting while it is recording or processing (Transcript window, "Keep this meeting's audio"); the after-Stop pass reads it just before deleting `audio\`. |
 | `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio. Silence is inserted so the clock stays aligned. **Readers must check `reason`:** most gaps are lost audio (for example while re-binding after the default device changed), but `"muted"` is deliberate (see below). |
-| `mic_muted_since_ms` | While the user has their mic out of the recording: the meeting time (ms) the mute began, so a live follower knows at once that the silence on `mic` is deliberate. `null` otherwise, and at the end of every meeting. |
-| `marks`, `mark_kinds` | Set at Stop: the number of bookmarks (deleted ones not counted) and `{"risk": "Risk"}` for any user-defined bookmark types in use (`{}` for none). |
+| `mic_muted_since_ms` | While the user has their mic out of the recording: the meeting time (ms) the mute began, so a live follower knows at once that the silence on `mic` is deliberate. `null` otherwise, and at the end of every meeting. A meeting started with "Start with my mic muted" has `0` from the first moment. |
+| `marks`, `mark_kinds` | `marks`: set at Stop, the number of bookmarks (deleted ones not counted). `mark_kinds`: `{"risk": "Risk"}`, the display names of the user-defined bookmark types this meeting's bookmarks use (`{}` for none; absent while the meeting has not used one). Written as soon as a bookmark of such a type is made (so a live follower can name it) and again at Stop; the name is the one in Settings at the time and is **kept in the meeting**, so removing or renaming the type in Settings later does not change how this meeting reads. Entries are in the user's Settings order. Built-in types never appear here. |
 | `vocabulary` | Optional. The custom vocabulary terms actually given to speech recognition for this meeting (meeting terms first, then the user's list, cut at a token budget); `[]` if none. Absent in older meetings. |
 | `attendees` | Optional, additive. The names typed in the Start dialog's "Who's on the call" box, in order (the number keys 1-9 in the Transcript window mean the first nine), at most 30 names of at most 40 characters, repeats and `You`/`Remote` removed. **Absent when none were entered** (unlike `vocabulary`, which is `[]`), so a meeting without attendees has the same `meta.json` as before. The names are not added to `vocabulary` unless the user ticked "Also give these names to speech recognition". Nothing else in the folder changes; names given to speakers are still in `speaker_tags.jsonl` and `speakers.json`. |
 | `vocabulary_changed_at_ms` | Optional. Meeting times (ms) at which the terms in use changed during the recording; `[]` if never. Lines written before a change used the earlier terms. |
@@ -130,7 +130,7 @@ should apply the events rather than trust a count.
 | Field | Meaning |
 | --- | --- |
 | `id` | 1-based, increasing within the meeting; later events refer to it. An id is never reused. |
-| `kind` | `bookmark` (plain), `decision`, `action`, `question`, or a user-defined type id (lower-case letters, digits and `-`; its display name is in `meta.json` `mark_kinds`). **Treat a kind you do not know as `bookmark`.** |
+| `kind` | `bookmark` (plain), `decision`, `action`, `question`, or a user-defined type id (lower-case letters, digits and `-`, up to four in Settings; made once from the name the user gave it, e.g. `follow-up-with-legal`, and stable when the type is renamed; its display name is in `meta.json` `mark_kinds`). **Treat a kind you do not know, or that `mark_kinds` does not name, as `bookmark`.** |
 | `at_ms` | Meeting clock (same as `start_ms` in the transcripts) at the press, or the line's `start_ms` for a line bookmark. The line being spoken at the press is written 1-2 s later, so place a bookmark by `at_ms`, not by file order. |
 | `at` | Wall-clock time of the press (or of the line, for a line bookmark). |
 | `via` | `hotkey`, `button` (window), `tray`, or `line` (right-click on a line). |
@@ -160,6 +160,7 @@ is replaced by digital silence before anything is stored or analysed, and the pe
   `segment`. There are simply no `mic` segments in the period.
 * **A `muted` gap is deliberate, not a fault.** The user chose not to be recorded: do not report it as lost
   audio and do not try to recover it. Check `reason` before treating a gap as a problem.
+* A meeting started with "Start with my mic muted" is muted from the first sample: `mic_muted_since_ms` is `0` while it lasts and the `muted` gap starts at `0`. Nothing from the mic is stored or transcribed before the user unmutes, exactly as for a later mute.
 * The mute does not touch the call app: the other people still hear the user. The `system` stream keeps
   recording.
 

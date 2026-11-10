@@ -101,7 +101,8 @@ class MarkEditor:
     ``AppController.edit_mark`` (empty when nothing changed), ``on_delete()`` the delete request."""
 
     def __init__(self, parent: tk.Misc, model: TranscriptModel, row: MarkRow,
-                 on_save: Callable[[dict], None], on_delete: Callable[[], None]):
+                 on_save: Callable[[dict], None], on_delete: Callable[[], None],
+                 custom: dict[str, str] | None = None):
         self.row = row
         self._on_save, self._on_delete = on_save, on_delete
         self.win = tk.Toplevel(parent)
@@ -113,9 +114,11 @@ class MarkEditor:
         ttk.Label(frm, text=f"At {logic.line_time(model, row.at_ms)}", foreground=theme.MUTED).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
         ttk.Label(frm, text="Type").grid(row=1, column=0, sticky="w", pady=3, padx=(0, 12))
-        kinds = [*marks_mod.KINDS, *[k for k in model.mark_kinds if k not in marks_mod.KINDS]]
-        self._names = {model.kind_name(k): k for k in kinds}
-        self.kind = tk.StringVar(value=model.kind_name(row.kind))
+        # the four built-in types, then the user-defined ones (``custom``: this meeting's own and Settings' now)
+        names = {**(custom or {}), **{k: v for k, v in model.mark_kinds.items() if k not in marks_mod.KIND_NAMES}}
+        shown = {**marks_mod.KIND_NAMES, **names}
+        self._names = {shown[k]: k for k in [*marks_mod.KINDS, *names]}
+        self.kind = tk.StringVar(value=shown.get(row.kind, model.kind_name(row.kind)))
         ttk.Combobox(frm, textvariable=self.kind, state="readonly", width=24,
                      values=list(self._names)).grid(row=1, column=1, sticky="w", pady=3)
         ttk.Label(frm, text="Label").grid(row=2, column=0, sticky="w", pady=3, padx=(0, 12))

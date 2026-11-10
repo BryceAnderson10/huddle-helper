@@ -103,7 +103,9 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
 | `tags.py` | Speaker names: `speaker_tags.jsonl` events, the reducer, `tagged_ranges`, `piece_names` (rules before clustering, the 0.70 gate), `map_final_speakers` (largest overlap, 25% conflict rule) |
-| `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits) |
+| `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits), the `mark_kinds` names |
+| `bookmark_types.py` | User-defined bookmark types (up to four): ids from names, validation (unique, length, hotkey clashes), what Settings stores |
+| `mute_reminder.py` | The "still muted" reminder every 10 minutes of continuous mute (clock injected) |
 | `hotkeys.py` | Global hotkeys: combo parsing, the AltGr check, `HotkeyThread` (`RegisterHotKey` message loop, registered only while recording) |
 | `audio/gate.py` | `MicGate`: replaces the mic with zeros while muted (250 ms tail), counts samples so the muted period matches `mic.flac` exactly |
 | `audio/ring.py` | `RecentAudio`: the last 10 minutes of one stream in memory (16-bit), written by the stream worker after the mic gate, so muted speech can never be played back |
@@ -118,7 +120,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `gui/meetings_view.py` | Meetings page: list, filter, search, multi-select, Open, Export…, Show in Explorer, Retry final pass, Delete audio, Delete meeting (thin Tk; scan and delete run on worker threads) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
 | `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip) as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Settings has Hotkeys) |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted"; Settings has Hotkeys and Bookmark types) |
 
 ## Status against the PRD milestones
 

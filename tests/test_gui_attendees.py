@@ -206,14 +206,14 @@ def test_start_dialog_passes_names_and_adds_them_to_the_terms_only_when_ticked(r
     d.attendees.insert("1.0", "Ana, Ben\nCy")
     d.terms.text.insert("1.0", "QDM")
     d._start()
-    assert got == [("Weekly", ["QDM"], ["Ana", "Ben", "Cy"])]  # names are not terms by default
+    assert got == [("Weekly", ["QDM"], ["Ana", "Ben", "Cy"], False)]  # names are not terms by default
 
     d = StartDialog(root, lambda *a: got.append(a))
     d.attendees.insert("1.0", "Ana; ben")
     d.names_as_terms.set(True)
     d._start()
-    assert got[-1] == ("meeting", ["Ana", "ben"], ["Ana", "ben"])
+    assert got[-1] == ("meeting", ["Ana", "ben"], ["Ana", "ben"], False)
 
     d = StartDialog(root, lambda *a: got.append(a))
     d._start()
-    assert got[-1] == ("meeting", [], [])
+    assert got[-1] == ("meeting", [], [], False)

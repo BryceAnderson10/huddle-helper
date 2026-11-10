@@ -6,6 +6,7 @@ UI-agnostic; the tray (tray.py) drives it and renders its state.
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import statistics
 import threading
@@ -15,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
+from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .recorder import Components, Recorder, Status, load_components
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,19 @@ def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | Non
     if overall > OWN_RATE_FROM and elapsed_s > 0:
         expected = (1.0 - overall) * expected + overall * (elapsed_s / overall)
     return max(0.0, (1.0 - overall) * expected)
+
+
+REMINDER_ENV = "HUDDLE_HELPER_MUTE_REMINDER_S"  # test seam only: seconds between mute reminders
+
+
+def _reminder_interval() -> float:
+    """10 minutes (``mute_reminder.INTERVAL_S``); the environment variable is for tests and screenshots."""
+    from .mute_reminder import INTERVAL_S
+
+    try:
+        return float(os.environ[REMINDER_ENV])
+    except (KeyError, ValueError):
+        return INTERVAL_S
 
 
 meeting_length_s = library.meeting_length_s  # how long the meeting was (kept here for the callers of app.*)
@@ -250,6 +264,16 @@ class AppController:
     def toggle_mic_muted(self) -> bool:
         return self.set_mic_muted(not self.mic_muted)
 
+    def custom_names(self) -> dict[str, str]:
+        """The user-defined bookmark types in Settings, id -> name, in Settings order (L28)."""
+        return bookmark_types.names(self.settings.custom_bookmark_types)
+
+    def hotkey_bindings(self, settings: config.Settings | None = None) -> dict[str, str]:
+        """Every global hotkey to register while recording: the built-in actions, then the user-defined types
+        that have one (their id is the action name)."""
+        s = settings or self.settings
+        return {**s.hotkeys, **bookmark_types.hotkey_bindings(s.custom_bookmark_types)}
+
     def _marklog_for(self, folder: mt.MeetingFolder | None) -> tuple[marks_mod.MarkLog | None, bool]:
         """(MarkLog, is the live recording's). The recording's own log keeps the 2 s rule's memory."""
         rec = self._recorder
@@ -269,14 +293,15 @@ class AppController:
             return {"action": "none"}
         if live:
             if at_ms is None:
-                result = self._recorder.bookmark(kind, via)
+                result = self._recorder.bookmark(kind, via, names=self.custom_names())
             else:
-                result = self._recorder.bookmark(kind, via, at_ms, seq, self._wall_time(folder, at_ms))
+                result = self._recorder.bookmark(kind, via, at_ms, seq, self._wall_time(folder, at_ms),
+                                                 names=self.custom_names())
         else:
             if at_ms is None:
                 return {"action": "none"}
             result = log_.add(kind, at_ms, via, seq=seq, at=self._wall_time(folder, at_ms))
-            self._summarize_marks(folder)
+            self._summarize_marks(folder, self.custom_names())
         if result is None:
             return {"action": "none"}
         self._on_change()
@@ -290,14 +315,16 @@ class AppController:
             return False
         done = log_.edit(mark_id, label=label, kind=kind, delete=delete)
         if not live:
-            self._summarize_marks(folder)
+            self._summarize_marks(folder, self.custom_names())
+        elif kind is not None and self._recorder is not None:
+            self._recorder.note_mark_kinds(self.custom_names())
         self._on_change()
         return done
 
     @staticmethod
-    def _summarize_marks(folder: mt.MeetingFolder) -> None:
+    def _summarize_marks(folder: mt.MeetingFolder, names: dict[str, str] | None = None) -> None:
         try:
-            folder.update_meta(**marks_mod.summarize(folder))
+            folder.update_meta(**marks_mod.summarize(folder, names))
         except (OSError, ValueError):
             log.exception("Could not update the bookmark count of %s", folder.meeting_id)
 
@@ -314,12 +341,13 @@ class AppController:
             return {"action": "none"}
         if name == "mute":
             return {"action": "muted" if self.toggle_mic_muted() else "unmuted"}
-        if name in marks_mod.KIND_NAMES:
+        if name in marks_mod.KIND_NAMES or name in self.custom_names():
             return self.bookmark(name, "hotkey")
         return {"action": "none"}
 
     def start(self, title: str, terms: list[str] | tuple[str, ...] = (),
-              attendees: list[str] | tuple[str, ...] = ()) -> None:
+              attendees: list[str] | tuple[str, ...] = (), start_muted: bool = False) -> None:
+        """Start recording. ``start_muted`` (L24): the mic is out of the recording from the first sample."""
         if not self.can_start:
             return
         self._set(phase="starting", message="Starting…")
@@ -329,8 +357,11 @@ class AppController:
                 comps = self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m),
-                                          before_reopen=self.player.stop)  # decision 7: nothing open on re-bind
-                folder = self._recorder.start(title or "meeting", terms, attendees=attendees)
+                                          before_reopen=self.player.stop,  # decision 7: nothing open on re-bind
+                                          on_mute_reminder=self._mute_reminder,
+                                          mute_reminder_s=_reminder_interval())
+                folder = self._recorder.start(title or "meeting", terms, attendees=attendees,
+                                              start_muted=start_muted)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
             except Exception as exc:  # noqa: BLE001
@@ -363,6 +394,13 @@ class AppController:
         t.start()
         if wait:
             t.join()
+
+    def _mute_reminder(self, seconds: float) -> None:
+        """Every 10 minutes of continuous mute (L24): the app's usual notification path (the tray balloon).
+        No sound of our own; the window's mute bar changes from the status."""
+        from .mute_reminder import reminder_message
+
+        self._notify(reminder_message(seconds))
 
     def _on_status(self, st: Status) -> None:
         self.state.recording = st

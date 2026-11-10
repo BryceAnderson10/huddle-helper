@@ -7,7 +7,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from . import attendees as attendees_mod, config, hotkeys, models, outputs, vocab
+from . import attendees as attendees_mod, bookmark_types, config, hotkeys, models, outputs, vocab
 from .gui import logic
 
 CONSENT_REMINDER = ("Recording laws differ by place. Tell everyone in the meeting that you are "
@@ -59,7 +59,7 @@ class _TermsBox:
 
 
 class StartDialog:
-    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str]], None],
+    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str], bool], None],
                  plan: PlanFn | None = None, settings_terms: list[str] | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Start recording")
@@ -93,10 +93,16 @@ class StartDialog:
         self.terms.dropped.grid(row=10, column=0, columnspan=2, sticky="w")
         self.terms.text.bind("<KeyRelease>", lambda e: self._refresh_terms())
         self.attendees.bind("<KeyRelease>", lambda e: self._refresh_terms() if self.names_as_terms.get() else None)
+        # L24: not remembered between meetings; every meeting starts with the box clear.
+        self.start_muted = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Start with my mic muted", variable=self.start_muted).grid(
+            row=11, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(frm, text="Only the call is recorded until you unmute. The call app still hears you.",
+                  wraplength=330, foreground="#555").grid(row=12, column=0, columnspan=2, sticky="w", padx=(22, 0))
         ttk.Label(frm, text=CONSENT_REMINDER, wraplength=330, foreground="#a33").grid(
-            row=11, column=0, columnspan=2, sticky="w", pady=(8, 12))
-        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=12, column=0, sticky="e", padx=6)
-        ttk.Button(frm, text="Start recording", command=self._start).grid(row=12, column=1, sticky="e")
+            row=13, column=0, columnspan=2, sticky="w", pady=(8, 12))
+        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=14, column=0, sticky="e", padx=6)
+        ttk.Button(frm, text="Start recording", command=self._start).grid(row=14, column=1, sticky="e")
         entry.bind("<Return>", lambda e: self._start())
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         _center(self.win)
@@ -115,8 +121,9 @@ class StartDialog:
         title = self.title.get().strip() or "meeting"
         names = self.attendee_names()
         terms = attendees_mod.merge_terms(self.terms.terms(), names, self.names_as_terms.get())
+        muted = bool(self.start_muted.get())
         self.win.destroy()
-        self._on_start(title, terms, names)
+        self._on_start(title, terms, names, muted)
 
 
 HotkeyResultsFn = Callable[[dict[str, str]], "tuple[dict[str, hotkeys.Registration], bool]"]
@@ -202,6 +209,73 @@ class _HotkeysTab:
         return out, ""
 
 
+class _TypesTab:
+    """Settings -> Bookmark types (L28): up to four names, each with an optional hotkey. Thin Tk: the checks are
+    ``bookmark_types.validate`` and ``hotkeys.check_combo``."""
+
+    def __init__(self, parent, settings: config.Settings, other_hotkeys: Callable[[], dict[str, str]]):
+        self._other = other_hotkeys
+        ttk.Label(parent, text="Add your own kinds of bookmark, such as “Risk” or “Follow up with legal”. They "
+                               "appear next to Decision, Action item and Question in the window, the tray menu "
+                               "and the exports. A hotkey is optional; it works while recording, like the "
+                               "others. Removing a type does not change meetings already recorded: their "
+                               "bookmarks keep the name.", wraplength=520, foreground="#555").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        ttk.Label(parent, text="Name").grid(row=1, column=1, sticky="w")
+        ttk.Label(parent, text="Hotkey (optional)").grid(row=1, column=2, sticky="w", padx=(10, 0))
+        self.ids: list[str] = []
+        self.names: list[tk.StringVar] = []
+        self.keys: list[tk.StringVar] = []
+        self.status: list[tk.Label] = []
+        have = list(settings.custom_bookmark_types)
+        for i in range(bookmark_types.MAX_TYPES):
+            e = have[i] if i < len(have) else {"id": "", "name": "", "hotkey": ""}
+            ttk.Label(parent, text=f"{i + 1}").grid(row=2 + i, column=0, sticky="nw", pady=4, padx=(0, 8))
+            n, k = tk.StringVar(value=e["name"]), tk.StringVar(value=e["hotkey"])
+            ttk.Entry(parent, textvariable=n, width=26).grid(row=2 + i, column=1, sticky="nw", pady=4)
+            ttk.Entry(parent, textvariable=k, width=20).grid(row=2 + i, column=2, sticky="nw", pady=4, padx=(10, 0))
+            lbl = tk.Label(parent, text="", anchor="w", justify="left", wraplength=250, font=("Segoe UI", 9))
+            lbl.grid(row=2 + i, column=3, sticky="nw", padx=(10, 0), pady=4)
+            self.ids.append(e["id"])
+            self.names.append(n)
+            self.keys.append(k)
+            self.status.append(lbl)
+            n.trace_add("write", lambda *_: self.refresh())
+            k.trace_add("write", lambda *_: self.refresh())
+        ttk.Label(parent, text=f"Up to {bookmark_types.MAX_TYPES} types, names up to {bookmark_types.NAME_MAX} "
+                               "characters. Clear a row to remove it.", foreground="#555").grid(
+            row=7, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self.refresh()
+
+    def rows(self) -> list[tuple[str, str, str]]:
+        return [(self.ids[i], self.names[i].get(), self.keys[i].get()) for i in range(len(self.ids))]
+
+    def validate(self) -> tuple[list[dict] | None, str]:
+        """(the types to save, "") or (None, what is wrong)."""
+        entries, problems = bookmark_types.validate(self.rows(), self._other())
+        if entries is None:
+            p = problems[0]
+            return None, f"Bookmark type {p.row + 1}: {p.text}"
+        return entries, ""
+
+    def refresh(self) -> None:
+        _, problems = bookmark_types.validate(self.rows(), self._other())
+        by_row: dict[int, str] = {}
+        for p in problems:
+            by_row.setdefault(p.row, p.text)
+        for i, (_, name, key) in enumerate(self.rows()):
+            if i in by_row:
+                self.status[i].configure(text=by_row[i], fg=_LEVEL_COLORS["error"])
+                continue
+            check = hotkeys.check_combo(key)
+            if check.altgr:
+                self.status[i].configure(text=check.warning, fg=_LEVEL_COLORS["warn"])
+            elif name.strip() or key.strip():
+                self.status[i].configure(text="OK" if key.strip() else "OK, no hotkey", fg=_LEVEL_COLORS["ok"])
+            else:
+                self.status[i].configure(text="", fg=_LEVEL_COLORS["info"])
+
+
 class SettingsDialog:
     def __init__(self, root: tk.Tk, settings: config.Settings, devices: dict[str, list[str]],
                  on_save: Callable[[config.Settings], None], plan: PlanFn | None = None,
@@ -221,6 +295,12 @@ class SettingsDialog:
         htab = ttk.Frame(tabs, padding=14)
         tabs.add(htab, text="Hotkeys")
         self.hotkeys_tab = _HotkeysTab(htab, settings, hotkey_results)
+        ttab = ttk.Frame(tabs, padding=14)
+        tabs.add(ttab, text="Bookmark types")
+        self._tabs, self._types_page = tabs, ttab
+        self.types_tab = _TypesTab(ttab, settings, self.hotkeys_tab.texts)
+        for var in self.hotkeys_tab.vars.values():  # a hotkey typed in the other tab may now clash
+            var.trace_add("write", lambda *_: self.types_tab.refresh())
         ttk.Label(vtab, text="Words Whisper should expect: acronyms, product names, project code "
                              "names. One per line, spelled as you want them written. Lines starting "
                              "with # are ignored. Changes apply from the next line, even during a "
@@ -309,8 +389,14 @@ class SettingsDialog:
         if bindings is None:
             messagebox.showerror("Huddle Helper", problem, parent=self.win)
             return
+        types, problem = self.types_tab.validate()
+        if types is None:
+            self._tabs.select(self._types_page)
+            messagebox.showerror("Huddle Helper", problem, parent=self.win)
+            return
         s = config.Settings.from_dict(self._orig.to_dict())
         s.hotkeys = bindings
+        s.custom_bookmark_types = types
         s.mic_device = None if self.mic.get() == self._default else self.mic.get()
         s.output_device = None if self.out.get() == self._default else self.out.get()
         s.clip_output_device = outputs.choice_to_setting(self.clip_out.get(), self._orig.clip_output_device,

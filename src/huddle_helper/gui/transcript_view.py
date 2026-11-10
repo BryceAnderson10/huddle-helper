@@ -112,7 +112,7 @@ class TranscriptView(ttk.Frame):
         t.tag_configure("spk", font=self.f_bold)
         for kind, color in theme.KIND_COLORS.items():
             t.tag_configure(f"kind:{kind}", foreground=color, font=self.f_bold)
-        t.tag_configure("kind:other", foreground=theme.KIND_COLORS["bookmark"], font=self.f_bold)
+        t.tag_configure("kind:other", foreground=theme.CUSTOM_COLOR, font=self.f_bold)  # user-defined types
         t.tag_configure("changed", background=theme.CHANGED_BG)
         t.tag_configure("play", font=self.f_small)
         t.tag_configure("play-on", foreground=theme.PLAY_ON)
@@ -451,7 +451,7 @@ class TranscriptView(ttk.Frame):
         if isinstance(row, GapRow):
             return ["\t" + logic.gap_text(row, model) + "\n", ("gaprow",)]
         kind_tag = f"kind:{row.kind}" if row.kind in theme.KIND_COLORS else "kind:other"
-        symbol = theme.KIND_SYMBOLS.get(row.kind, theme.KIND_SYMBOLS["bookmark"])
+        symbol = theme.KIND_SYMBOLS.get(row.kind, theme.CUSTOM_SYMBOL)
         return [self._glyph(row), self._glyph_tags(row, "markrow"), "\t", ("markrow",), t, ("markrow", "time"),
                 "\t", ("markrow",), f"{symbol} {logic.mark_text(row, model)}",
                 ("markrow", kind_tag), "  [edit]", ("markrow", "markedit"), "\n", ("markrow",)]

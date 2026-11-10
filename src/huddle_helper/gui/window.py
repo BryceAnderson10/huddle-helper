@@ -150,8 +150,9 @@ class MainWindow:
 
         # amber mute bar (packed only while muted)
         self.mute_bar = tk.Frame(self.tpage, bg=theme.MUTE_BAR_BG)
-        tk.Label(self.mute_bar, text="MIC MUTED", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
-                 font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL, "bold")).pack(side="left", padx=(10, 8), pady=4)
+        self.mute_bar_label = tk.Label(self.mute_bar, text="MIC MUTED", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
+                                       font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL, "bold"))
+        self.mute_bar_label.pack(side="left", padx=(10, 8), pady=4)
         self.mute_bar_text = tk.Label(self.mute_bar, text="", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG,
                                       font=(theme.FONT_FAMILY, theme.FONT_SIZE_SMALL), anchor="w")
         self.mute_bar_text.pack(side="left", pady=4)
@@ -205,7 +206,7 @@ class MainWindow:
         self.view.on_edit_mark = self._edit_mark
         self.view.on_delete_mark = self._delete_mark
         self.view.on_bookmark_line = self._bookmark_line
-        self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._custom_kinds())
+        self.view.bookmark_items = lambda: logic.bookmark_items(self._hotkeys(), self._settings_kinds())
         self.view.on_name_line = self._name_line
         self.view.line_name_menu = self._line_menu
         self.view.on_play = self._play_row
@@ -329,11 +330,21 @@ class MainWindow:
 
     # -- bookmarks and mute (WP5) ------------------------------------------------------------
     def _hotkeys(self) -> dict[str, str]:
-        return dict(getattr(self.app.settings, "hotkeys", None) or {})
+        """Every hotkey by action name, the user-defined bookmark types' too (keyed by their id)."""
+        bindings = getattr(self.app, "hotkey_bindings", None)
+        return dict(bindings() if bindings else getattr(self.app.settings, "hotkeys", None) or {})
+
+    def _settings_kinds(self) -> dict[str, str]:
+        """The user-defined bookmark types in Settings now, id -> name: what the menus offer for new bookmarks."""
+        names = getattr(self.app, "custom_names", None)
+        return dict(names()) if names else {}
 
     def _custom_kinds(self) -> dict[str, str]:
-        return {k: v for k, v in (self.session.model.mark_kinds if self.session else {}).items()
-                if k not in marks_mod.KIND_NAMES}
+        """Names of every user-defined type that can show up here: the meeting's own (``meta.json``
+        ``mark_kinds``, so a type removed from Settings keeps its name), then Settings' types."""
+        own = {k: v for k, v in (self.session.model.mark_kinds if self.session else {}).items()
+               if k not in marks_mod.KIND_NAMES}
+        return {**self._settings_kinds(), **own}
 
     def _say(self, text: str) -> None:
         self._feedback = (text, time.monotonic() + FEEDBACK_S)
@@ -361,7 +372,7 @@ class MainWindow:
         folder = self.session.folder
         MarkEditor(self.win, self.session.model, row,
                    on_save=lambda changes: self._mark_edited(folder, row, **changes),
-                   on_delete=lambda: self._delete_mark(row))
+                   on_delete=lambda: self._delete_mark(row), custom=self._custom_kinds())
 
     def _mark_edited(self, folder, row: MarkRow, **changes) -> None:
         self.app.edit_mark(folder, row.id, **changes)
@@ -850,6 +861,12 @@ class MainWindow:
             self.mute_btn.pack_forget()
         self._mute_shown = show
         if bar is not None:
+            bg, fg = ((theme.MUTE_REMIND_BG, theme.MUTE_REMIND_FG) if bar.emphasis
+                      else (theme.MUTE_BAR_BG, theme.MUTE_BAR_FG))
+            if self.mute_bar.cget("bg") != bg:
+                self.mute_bar.configure(bg=bg)
+                for w in (self.mute_bar_label, self.mute_bar_text):
+                    w.configure(bg=bg, fg=fg)
             if self.mute_bar_text.cget("text") != bar.text:
                 self.mute_bar_text.configure(text=bar.text)
             if not self._mute_bar_shown:
@@ -922,5 +939,5 @@ class MainWindow:
 
     def _fill_bookmark_menu(self) -> None:
         self.bookmark_menu.delete(0, "end")
-        for item in logic.bookmark_items(self._hotkeys(), self._custom_kinds()):
+        for item in logic.bookmark_items(self._hotkeys(), self._settings_kinds()):
             self.bookmark_menu.add_command(label=item.menu_text, command=lambda k=item.kind: self._bookmark(k))

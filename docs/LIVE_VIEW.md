@@ -335,8 +335,15 @@ decision from a question at a glance:
 | Question | `question` | `Ctrl+Alt+Q` | ? Question |
 
 The plain Bookmark is for "something happened, I'll sort it out later"; it should stay
-the easiest to hit. Up to four user-defined types (P1, L28) can be added in Settings
-with a name and hotkey, e.g. "Risk" or "Follow up with legal".
+the easiest to hit. Up to four user-defined types (P1, L28, built in WP9c) can be added in
+Settings → Bookmark types with a name and an optional hotkey, e.g. "Risk" or "Follow up with legal".
+Names are 1-24 characters, not the same as a built-in or another custom type, and the hotkey must not
+clash with any other configured hotkey (the AltGr check applies). They appear in the window's Bookmark
+button, the mark editor's type list, the tray submenu, the hotkeys (only while recording), the view
+(a grey ◆, one neutral colour for all of them) and the exports (Markdown groups: the four built-in types,
+then the custom ones in Settings order). `marks.jsonl` holds the type's *id* (`risk`, made from the name once);
+the name is copied into the meeting's `meta.json` `mark_kinds` when first used, so a type removed or renamed
+in Settings later still reads with its original name in the meetings that used it.
 
 - **Hotkeys.** All changeable in Settings (or turned off one by one). Registered with
   the Windows `RegisterHotKey` API only while recording, so they can't clash with other
@@ -396,11 +403,16 @@ two either way is bad. The system stream (the call) keeps recording.
   muted in the recording" bar with an Unmute button. The mic level meter shows "muted"
   instead of a level. No sound on mute or unmute (it would be recorded on the system
   stream).
-- **Reminders (P1).** Every 10 minutes while muted, a notification: "Your mic is still
-  muted in the recording (12 min)". There is no "you seem to be talking" detection:
+- **Reminders (P1, built in WP9c).** Every 10 minutes of *continuous* mute, a tray notification: "Your mic is
+  still muted in the recording (20 min)." (the app's normal notification, no sound of its own, no focus
+  change). The window's amber bar changes at the same moment to "Muted for 20 min. …" in stronger colours
+  for a minute. Unmuting starts the count over, and nothing is sent after Stop. The interval is
+  `mute_reminder.INTERVAL_S`; only the test seam `HUDDLE_HELPER_MUTE_REMINDER_S` changes it. There is no "you seem to be talking" detection:
   that would mean analysing the audio the user asked not to record.
-- **Start muted (P1).** A check box on the Start dialog for meetings where the user only
-  wants the call recorded.
+- **Start muted (P1, built in WP9c).** A "Start with my mic muted" check box on the Start dialog, clear
+  every time (not remembered), for meetings where the user only wants the call recorded. The gate is closed
+  from the first sample, `meta.json` has `mic_muted_since_ms: 0` and the muted gap starts at 0; the tray
+  icon, tooltip and the window's bar show it from the start.
 - **Ends with the meeting.** Stop always unmutes; the next meeting starts unmuted unless
   "Start muted" is ticked. Crash recovery closes an open mute as a gap ending at the
   last audio.

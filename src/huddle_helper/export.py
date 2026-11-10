@@ -105,7 +105,10 @@ def _mark_groups(marks: list[MarkRow], model: TranscriptModel) -> list[tuple[str
     by_kind: dict[str, list[MarkRow]] = {}
     for m in marks:
         by_kind.setdefault(m.kind, []).append(m)
-    order = [k for k in KIND_ORDER if k in by_kind] + [k for k in by_kind if k not in KIND_ORDER]
+    # the built-in four, then user-defined types in the order meta.json lists them (Settings order)
+    order = [k for k in KIND_ORDER if k in by_kind]
+    order += [k for k in model.mark_kinds if k in by_kind and k not in order]
+    order += [k for k in by_kind if k not in order]
     return [(model.kind_plural(k), by_kind[k]) for k in order]
 
 

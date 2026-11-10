@@ -19,6 +19,7 @@ IDLE = "#6e7681"
 ERROR = "#7c3aed"
 
 MUTE_BAR_BG, MUTE_BAR_FG = "#fef3c7", "#92400e"
+MUTE_REMIND_BG, MUTE_REMIND_FG = "#fbbf24", "#451a03"  # the bar for a minute after a "still muted" reminder
 NOTICE_BG, NOTICE_FG = "#eff6ff", "#1e40af"
 FAILED_BG, FAILED_FG = "#fef2f2", "#991b1b"
 CHANGED_BG = "#fef9c3"
@@ -35,6 +36,7 @@ SPEAKER_COLORS = ("#1d4ed8", "#b45309", "#047857", "#7c3aed", "#be123c", "#0e749
 YOU_COLOR = TEXT
 KIND_COLORS = {"bookmark": "#b45309", "decision": "#047857", "action": "#1d4ed8", "question": "#7c3aed"}
 KIND_SYMBOLS = {"bookmark": "⚑", "decision": "✔", "action": "☐", "question": "?"}
+CUSTOM_COLOR, CUSTOM_SYMBOL = "#475569", "◆"  # every user-defined bookmark type (L28): neutral slate, a diamond
 
 DOT_COLORS = {"recording": RECORDING, "busy": BUSY, "idle": IDLE, "error": ERROR}
 

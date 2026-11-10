@@ -7,7 +7,7 @@
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
     huddle-helper finalize <meeting folder>             re-run the after-Stop pass
     huddle-helper recover                               close out meetings left by a crash
-    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--no-window] [--open-latest] [--open-meetings]
+    huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--start-muted] [--no-window] [--open-latest] [--open-meetings]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
     huddle-helper devices | download-models
 """
@@ -299,7 +299,7 @@ def cmd_tray(args) -> int:
         meetings_dir = Path(overrides["meetings_dir"]) if overrides else config.load().resolved_meetings_dir()
         try:
             replay = Replay.create(Path(args.replay), meetings_dir, title=args.title, auto=args.auto,
-                                   keep_open=args.keep_open)
+                                   keep_open=args.keep_open, start_muted=args.start_muted)
         except (OSError, ValueError) as exc:
             print(f"Cannot replay: {exc}", file=sys.stderr)
             return 1
@@ -336,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --auto: do not quit after the final pass (to look at the window)")
     sp.add_argument("--keep-audio", action="store_true",
                     help="keep the audio files of this run's recordings (this run only, not saved)")
+    sp.add_argument("--start-muted", action="store_true",
+                    help="with --replay: start with the mic muted, like the Start dialog's check box")
     sp.add_argument("--no-window", action="store_true",
                     help="do not open the transcript window when recording starts")
     sp.add_argument("--open-latest", action="store_true", help="open the transcript window at startup")

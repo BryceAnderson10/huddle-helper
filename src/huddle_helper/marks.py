@@ -116,17 +116,28 @@ def kind_name(kind: str, custom: dict[str, str] | None = None) -> str:
     return KIND_NAMES.get(kind) or (custom or {}).get(kind) or KIND_NAMES[BOOKMARK]
 
 
-def custom_kinds(marks: Iterable[Mark]) -> dict[str, str]:
+def custom_kinds(marks: Iterable[Mark], names: dict[str, str] | None = None,
+                 recorded: dict[str, str] | None = None) -> dict[str, str]:
     """``meta.json`` ``mark_kinds`` for the user-defined types in use: ``{"risk": "Risk"}``.
-    (User-defined types arrive with WP9; until then this is always empty.)"""
-    return {m.kind: m.kind.replace("-", " ").capitalize() for m in marks
-            if m.kind not in KIND_NAMES and KIND_PATTERN.match(m.kind)}
+
+    The name is the one the meeting already recorded (``recorded``, its own ``mark_kinds``), else the one in
+    Settings now (``names``), else the id made readable. Order: Settings order, then any other type in use
+    (a type since removed from Settings), so exports can group custom types in Settings order."""
+    used = list(dict.fromkeys(m.kind for m in marks if m.kind not in KIND_NAMES and KIND_PATTERN.match(m.kind)))
+    names, recorded = names or {}, recorded or {}
+    order = [k for k in names if k in used] + [k for k in used if k not in names]
+    return {k: recorded.get(k) or names.get(k) or k.replace("-", " ").capitalize() for k in order}
 
 
-def summarize(folder: mt.MeetingFolder) -> dict:
+def summarize(folder: mt.MeetingFolder, names: dict[str, str] | None = None) -> dict:
     """``meta.json`` fields for a meeting's bookmarks: ``marks`` (count) and ``mark_kinds``."""
     state = reduce(read_events(folder.marks_path)) if folder.marks_path.exists() else {}
-    return {"marks": len(state), "mark_kinds": custom_kinds(state.values())}
+    try:
+        recorded = folder.read_meta().get("mark_kinds")
+    except (OSError, ValueError):
+        recorded = None
+    return {"marks": len(state),
+            "mark_kinds": custom_kinds(state.values(), names, recorded if isinstance(recorded, dict) else None)}
 
 
 # -- the writer --------------------------------------------------------------------

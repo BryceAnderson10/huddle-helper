@@ -15,7 +15,7 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw
 
-from . import __version__, marks as marks_mod
+from . import __version__
 from .app import AppController
 from .gui import logic
 from .replay import Replay, next_step
@@ -102,10 +102,8 @@ class TrayApp:
                              enabled=lambda item: self.app.can_start, default=True),
             pystray.MenuItem("Stop recording", self._ui(self.stop),
                              enabled=lambda item: self.app.is_recording),
-            pystray.MenuItem("Bookmark", pystray.Menu(*[
-                pystray.MenuItem(lambda item, k=k: self._bookmark_label(k), self._ui(lambda k=k: self.bookmark(k)),
-                                 enabled=lambda item: self.app.is_recording)
-                for k in marks_mod.KINDS]), enabled=lambda item: self.app.is_recording),
+            pystray.MenuItem("Bookmark", pystray.Menu(self._bookmark_menu_items),  # rebuilt each time it opens
+                             enabled=lambda item: self.app.is_recording),
             pystray.MenuItem("Mute me in the recording", self._ui(self.toggle_mute),
                              checked=lambda item: self.app.mic_muted, enabled=lambda item: self.app.is_recording),
             pystray.Menu.SEPARATOR,
@@ -140,9 +138,11 @@ class TrayApp:
             pass
 
     # -- state rendering ------------------------------------------------
-    def _bookmark_label(self, kind: str) -> str:
-        item = next(i for i in logic.bookmark_items(self.app.settings.hotkeys) if i.kind == kind)
-        return item.menu_text
+    def _bookmark_menu_items(self):
+        """The Bookmark submenu: the four built-in types, then the user-defined ones (L28), as in Settings now."""
+        for item in logic.bookmark_items(self.app.hotkey_bindings(), self.app.custom_names()):
+            yield self.pystray.MenuItem(item.menu_text, self._ui(lambda k=item.kind: self.bookmark(k)),
+                                        enabled=lambda i: self.app.is_recording)
 
     def _status_text(self) -> str:
         st = self.app.state
@@ -195,7 +195,7 @@ class TrayApp:
         if want and self._hotkeys is None:
             from .hotkeys import HotkeyThread
 
-            thread = HotkeyThread(self.app.settings.hotkeys, lambda name: self.calls.put(lambda: self.hotkey(name)))
+            thread = HotkeyThread(self.app.hotkey_bindings(), lambda name: self.calls.put(lambda: self.hotkey(name)))
             thread.start()
             self._hotkeys = thread
             problems = [f"{r.combo or thread.bindings[n]} ({self._action_label(n)}): {r.error}"
@@ -213,11 +213,10 @@ class TrayApp:
             except Exception:  # noqa: BLE001 - registrations die with the thread anyway
                 log.exception("Could not stop the hotkey thread")
 
-    @staticmethod
-    def _action_label(name: str) -> str:
+    def _action_label(self, name: str) -> str:
         from .hotkeys import ACTION_LABELS
 
-        return ACTION_LABELS.get(name, name)
+        return ACTION_LABELS.get(name) or self.app.custom_names().get(name, name)
 
     def hotkey(self, name: str) -> None:
         """A global hotkey was pressed (on the Tk thread, via ``calls``)."""
@@ -311,7 +310,7 @@ class TrayApp:
             r.started = True
             self._replay_started_at = time.monotonic()
             log.info("Replay: starting %s", r.folder)
-            self.app.start(r.title)
+            self.app.start(r.title, start_muted=r.start_muted)
         elif step == "stop":
             r.stopped = True
             log.info("Replay: audio finished, stopping")

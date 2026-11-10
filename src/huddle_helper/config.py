@@ -8,7 +8,7 @@ import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-from . import hotkeys as hk, paths
+from . import bookmark_types, hotkeys as hk, paths
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,10 @@ class Settings:
     # "" turns one off. Additive like open_window_on_start: a missing key means the default combo.
     hotkeys: dict[str, str] = field(default_factory=lambda: dict(hk.DEFAULTS))
 
+    # User-defined bookmark types (WP9c, L28), at most four: [{"id": "risk", "name": "Risk", "hotkey": ""}].
+    # See bookmark_types.py. Additive: a missing key means none.
+    custom_bookmark_types: list[dict] = field(default_factory=list)
+
     # Segmentation.
     vad_threshold: float = 0.5
     min_silence_ms: int = 500
@@ -98,6 +102,8 @@ class Settings:
                                                        if k in hk.DEFAULTS and isinstance(v, str)}}
         else:
             clean.pop("hotkeys", None)
+        if "custom_bookmark_types" in clean:
+            clean["custom_bookmark_types"] = bookmark_types.clean(clean["custom_bookmark_types"])
         clean["settings_version"] = SETTINGS_VERSION
         return cls(**clean)
 

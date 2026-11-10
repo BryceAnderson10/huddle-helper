@@ -42,16 +42,17 @@ class Replay:
     title: str = "replay"
     auto: bool = False  # start now, stop when the audio ends, quit after the final pass
     keep_open: bool = False  # with auto: leave the app (and the window) running at the end
+    start_muted: bool = False  # start with the mic muted (L24), to exercise that path unattended
     started: bool = False
     stopped: bool = False
     capture: FileCapture | None = field(default=None, repr=False)
 
     @classmethod
     def create(cls, folder: Path, meetings_dir: Path, *, title: str = "replay", auto: bool = False,
-               keep_open: bool = False) -> "Replay":
+               keep_open: bool = False, start_muted: bool = False) -> "Replay":
         folder = Path(folder)
         check_output_dir(folder, meetings_dir)
-        return cls(folder, replay_files(folder), title, auto, keep_open)
+        return cls(folder, replay_files(folder), title, auto, keep_open, start_muted)
 
     def capture_factory(self, **kw) -> FileCapture:
         """Stands in for ``WasapiCapture`` (``Components.capture_factory``)."""

@@ -30,7 +30,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from . import attendees as attendees_mod, marks as marks_mod, meeting as mt, playback, vocab
+from . import attendees as attendees_mod, marks as marks_mod, meeting as mt, mute_reminder, playback, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
 from .audio.gate import MicGate
@@ -71,6 +71,10 @@ class Status:
     levels: dict[str, float] = field(default_factory=lambda: {"mic": 0.0, "system": 0.0})
     mic_muted: bool = False  # the user has taken their mic out of the recording (MicGate)
     marks: int = 0  # bookmarks in this meeting
+    # Mute reminder (L24): length of the continuous mute at the latest reminder (0 = none yet this mute) and
+    # when it came (time.monotonic()), for the window's bar. Both reset on unmute and at Stop.
+    mute_reminder_s: float = 0.0
+    mute_reminder_at: float = 0.0
 
 
 class _StreamWorker:
@@ -136,11 +140,15 @@ class Recorder:
     def __init__(self, settings: Settings, components: Components,
                  on_status: Callable[[Status], None] | None = None,
                  on_error: Callable[[str], None] | None = None,
-                 before_reopen: Callable[[], None] | None = None):
+                 before_reopen: Callable[[], None] | None = None,
+                 on_mute_reminder: Callable[[float], None] | None = None,
+                 mute_reminder_s: float = mute_reminder.INTERVAL_S):
         self.settings = settings
         self.c = components
         self._on_status = on_status or (lambda s: None)
         self._on_error = on_error or (lambda msg: None)
+        self._on_mute_reminder = on_mute_reminder or (lambda seconds: None)
+        self._reminder = mute_reminder.MuteReminder(mute_reminder_s)
         self.status = Status()
         self.folder: mt.MeetingFolder | None = None
         self._ids = itertools.count(1)
@@ -316,6 +324,7 @@ class Recorder:
         self.status.state = "stopping"
         self._publish()
         self._capture.stop()
+        self._reminder.reset()
         self.gate.finish()  # Stop always unmutes; an open muted period ends with the audio
         self.status.mic_muted = False
         self._sync_mute()
@@ -339,7 +348,7 @@ class Recorder:
             playbacks=self.playbacks.count, playback_segments_dropped=self.playbacks.dropped,
             duration_s=round(time.perf_counter() - self._t0, 1),
             live_stats=self.live_stats(),
-            marks=self.marklog.count, mark_kinds=marks_mod.custom_kinds(self.marklog.state().values()),
+            marks=self.marklog.count, mark_kinds=self._mark_kinds(),
         )
         folder = self.folder
         self._workers.clear()
@@ -442,14 +451,52 @@ class Recorder:
                 return
             self._pending_gaps, self._written_since = [], since
 
+    def _remind(self, st: Status) -> None:
+        """Mute reminder (L24): every interval of continuous mute, tell the controller (a tray notification)
+        and let the window's bar change. Runs on the 200 ms tick; nothing here touches audio or files."""
+        due = self._reminder.poll(st.mic_muted)
+        if not st.mic_muted:
+            st.mute_reminder_s = 0.0
+        elif due is not None:
+            st.mute_reminder_s, st.mute_reminder_at = due, time.monotonic()
+            try:
+                self._on_mute_reminder(due)
+            except Exception:  # noqa: BLE001
+                log.exception("Mute reminder callback failed")
+
+    def _mark_kinds(self, names: dict[str, str] | None = None) -> dict[str, str]:
+        """``meta.json`` ``mark_kinds``: the names of the user-defined types this meeting's bookmarks use."""
+        try:
+            recorded = self.folder.read_meta().get("mark_kinds")
+        except (OSError, ValueError):
+            recorded = None
+        return marks_mod.custom_kinds(self.marklog.state().values(), names,
+                                      recorded if isinstance(recorded, dict) else None)
+
+    def note_mark_kinds(self, names: dict[str, str]) -> None:
+        """Write the names of the custom types in use to meta.json now (``names``: Settings' id -> name), so a
+        type removed from Settings later still has its name in this meeting."""
+        if self.folder is None or self.marklog is None:
+            return
+        try:
+            kinds = self._mark_kinds(names)
+            if kinds != (self.folder.read_meta().get("mark_kinds") or {}):
+                self.folder.update_meta(mark_kinds=kinds)
+        except Exception:  # noqa: BLE001
+            log.exception("Could not record the bookmark type names in meta.json")
+
     def bookmark(self, kind: str = marks_mod.BOOKMARK, via: str = "hotkey", at_ms: int | None = None,
-                 seq: int | None = None, at: str | None = None) -> marks_mod.MarkResult | None:
-        """Add a bookmark at the meeting clock (see ``MarkLog`` for the 2 s rule). None when idle."""
+                 seq: int | None = None, at: str | None = None,
+                 names: dict[str, str] | None = None) -> marks_mod.MarkResult | None:
+        """Add a bookmark at the meeting clock (see ``MarkLog`` for the 2 s rule). None when idle.
+        ``names`` are the user-defined types in Settings, to record the name of ``kind`` in meta.json."""
         if self.marklog is None or self.status.state not in ("recording", "stopping"):
             return None
         when_ms = self.now_ms() if at_ms is None else at_ms
         result = self.marklog.add(kind, when_ms or 0, via, seq=seq, at=at)
         self.status.marks = self.marklog.count
+        if names and result.kind not in marks_mod.KIND_NAMES:
+            self.note_mark_kinds(names)
         return result
 
     def live_stats(self) -> dict:
@@ -606,6 +653,7 @@ class Recorder:
                 st.marks = self.marklog.count
             if self.gate is not None and st.state == "recording":
                 st.mic_muted = self.gate.muted
+                self._remind(st)
             if st.state == "recording":
                 self._max_backlog = max(self._max_backlog, st.backlog)
                 self._max_lag_s = max(self._max_lag_s, st.lag_s)

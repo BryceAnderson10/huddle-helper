@@ -598,3 +598,20 @@ What went well:
 - [ ] *Needs a person:* listen to levelled clips and to line changes in a run (nothing
   was played audibly); a real non-default "Play clips on" device and unplugging it;
   switching the default output during a run.
+
+### WP9c: Start muted, mute reminders, user-defined bookmark types (L24, L28)
+
+- [x] Built: "Start with my mic muted" on the Start dialog, a reminder every 10 minutes of
+  continuous mute (`mute_reminder.py`), and up to four user-defined bookmark types in a
+  new Settings tab (`bookmark_types.py`, `Settings.custom_bookmark_types`). Windowed
+  Test #3 replay started muted: no mic line and 0 of 626,400 nonzero samples in
+  `mic.flac` over the first 39 s (the source peaks at 0.20 there); reminders came every
+  interval and stopped at unmute and at Stop.
+- [x] **A removed or renamed type keeps its name in old meetings:** `marks.jsonl` holds
+  the id, `meta.json` `mark_kinds` holds the name as soon as the type is used.
+- [ ] A new type's hotkey applies from the next recording (its name applies at once).
+  The Bookmark types tab shows clashes and the AltGr warning, not whether Windows
+  accepted the registration (the Hotkeys tab does).
+- [ ] *Needs a person:* the real Windows notification for the reminder; the tray Bookmark
+  submenu with a custom type (built on each open; only its construction was checked);
+  whether the stronger amber bar for 60 s is wanted.
