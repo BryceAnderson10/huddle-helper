@@ -1,21 +1,7 @@
 """Attendees in the Transcript window (L13): name choices, the number keys, the undo, the "Who is this?"
 prompt for new voices. No Tk here; ``window.py`` draws it.
 
-Behaviour fixed here, and in docs/LIVE_VIEW.md:
-
-* **Choices.** Attendees not yet used in the meeting first (in the order typed), then the names already in
-  use. The same list feeds the name picker and the "This line is..." submenu.
-* **Number keys 1-9** name the *latest call line's speaker* as attendee N. "Latest" is the most recent
-  ``system`` line whose speaker is still unnamed; when every call speaker is named, the most recent
-  ``system`` line. While a "Who is this?" bar is showing, the keys answer *it* (the voice it asks about),
-  so the number always goes to the voice the user is looking at. They are live only in the live view of a meeting that is recording or being processed,
-  only with attendees, and never while a text box has the focus.
-* **Undo.** Each naming made from the keys or the prompt can be undone from the confirmation: the labels
-  and lines it touched go back to the tag they had.
-* **Who is this?** Only in a meeting with attendees (#18): without them nothing is queued, and an unnamed
-  voice is marked only by its "Who is this?" chip in the speaker bar. A call label seen for the first time
-  (and not named) is queued; one prompt shows at a time; naming the voice any other way, or dismissing the
-  prompt, moves to the next.
+The rules this module implements are in docs/LIVE_VIEW.md, "Attendees (L13)": change them there first.
 """
 
 from __future__ import annotations

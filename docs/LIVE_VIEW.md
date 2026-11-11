@@ -211,10 +211,8 @@ clustering (`cluster_voices`, average linkage) and the small-cluster fold
   other (unnamed lines may join it by voice). The rule moves only the lines the user named;
   the rest of the other speaker stays where the voices put it.
 - **Limit.** The rules only protect people the user named. An unnamed Remote D can still
-  be merged into a named Remote B. In a meeting with attendees, the "Who is this?" bar for each
-  new live voice (L13) is what gets both named; without attendees there is no bar (#18), and the
-  highlighted "Who is this?" chip is the only reminder, so more voices can reach the final pass
-  unnamed. The fixed-threshold problem itself is tracked in TODO (Test #4).
+  be merged into a named Remote B. Naming every voice live is the defence; how the window asks
+  for names is under "Attendees (L13)". The fixed-threshold problem itself is tracked in TODO (Test #4).
 - **Which lines are named.** Line-level tags name that line; speaker-level tags name
   every live line with that label. A speaker-level tag on a live label that mixes two
   people (see Risks) would push wrong lines into a cluster, so speaker-level
@@ -792,7 +790,7 @@ While muted, an amber bar sits under the header:
   name per line, or separated by commas or semicolons; an invite's `Name <email>` works). The list is
   saved in `meta.json` as `attendees` (only when not empty) and shown as a numbered strip under the speaker
   bar while the meeting is recording or being processed: "Keys 1-4 name SPEAKER_02: 1 Ana  2 Ben ✓  3 Cy". The name
-  picker and "This line is…" offer attendees not yet used first, then the names already in use. On a line
+  picker and "This line is…" offer attendees not yet used first (in the order typed), then the names already in use. On a line
   shorter than the fingerprint minimum (0.5 s, `diarize.MIN_FINGERPRINT_S`) both say "Too short to recognise
   the voice: the name applies to this line only." (#26): such a line cannot steer clustering, though its name
   still counts for the name mapping. The check uses the line's length; a line just over 0.5 s whose words
@@ -816,7 +814,7 @@ While muted, an amber bar sits under the header:
     already on screen when the window is opened mid-meeting are queued too. It appears **only in a meeting with
     attendees** (#18): without them every new call voice would raise it, stacked with the headphone warning in the
     same yellow. Without attendees an unnamed voice is marked only by its highlighted "Who is this?" chip, which names
-    it the same way. With attendees the bar, the strip and the headphone warning can still stack; that is accepted.
+    it the same way; more voices can then reach the final pass unnamed, where L14 does not protect them. With attendees the bar, the strip and the headphone warning can still stack; that is accepted.
   - **Names and speech recognition.** The names are *not* given to Whisper by default (WP3 spike: a wrong
     name is a wrong fact, so L34's automatic add was not built). The Start dialog has an opt-in box, "Also give
     these names to speech recognition", off by default; ticked, they join the meeting's terms (so they appear in
@@ -991,7 +989,7 @@ show that the call is active, but who is speaking is only known once the line la
 | Risk / question | Notes |
 | --- | --- |
 | **The final pass merges two people the user named, and one name is lost** | The failure seen in practice (Test #3: B+C; Test #4: Remote D into Remote B). Mapping alone can't fix it. The different-names rule (L14, P0, milestone 5) keeps named people apart; checked on Tests #3 and #4. |
-| The final pass merges an *unnamed* person into a named one | L14 only protects people the user named. With attendees, the "Who is this?" bar for every new live voice (L13) gets both named; without them only the chip asks (#18); the threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
+| The final pass merges an *unnamed* person into a named one | L14 only protects people the user named; naming every voice live is the defence (see "Attendees (L13)"). The threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
 | Live label is wrong for some lines, so a speaker-level tag names the wrong person on them | Overlap mapping is by majority, so a few wrong lines don't win the name. For the clustering rules, a speaker-level tag only counts for lines whose voice is at least 0.7 like the rest of that name's lines. Per-line tags override. This does *not* cover a whole person being merged; see the first row. |
 | User tags a live label that the final pass splits between two people | Lines of that label that count as named (line-level tags always; speaker-level only when at least 0.7 like the rest of that name, see above) are put in one final speaker (L39), so the name lands on one speaker. Pieces the gate leaves out are not forced: if they are a different voice they stay in another speaker, which stays `SPEAKER_nn` and is shown as untagged. Unnamed lines of the same person that fall outside the cluster by voice can also end up in an unnamed speaker. The mapping after the pass (L12) goes by overlap with the tagged live range, gated-out pieces included, but a name goes only to the final speaker (per stream) that overlaps it most, so those pieces cannot give a second speaker the same name (seen on Test #4 before this rule: 4 s of them named a 570 s speaker). |
 | Downstream app also writes `speakers.json` | Decided: the user's names win for speakers the user named, the downstream app's names are kept for the rest. Writes are atomic; Huddle Helper re-reads and merges just before writing. |
