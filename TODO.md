@@ -1,7 +1,9 @@
 # TODO
 
-Items to investigate or correct, from real-world tests. Check items off as they're fixed
-and note the commit.
+Findings from real-world tests, kept as the record of what was seen and measured.
+
+Open items now live in GitHub Issues: each one below is marked with the issue that tracks it.
+File new findings as issues (`gh issue create --label needs-triage`), not here.
 
 ## From Test #1: `2026-11-09_1324_test-meeting-1`
 
@@ -30,7 +32,7 @@ Stop), final transcript 35 s after Stop, and the final pass found 4 distinct voi
   found it. So this is the one…" came out as 4 segments alternating `SPEAKER_01` /
   `SPEAKER_03`. Same fix as above: fold short runs into the neighbouring speaker.
   Fixed in 079d8c9 (this exact case is a unit test).
-- [ ] **Check whether 4 speakers is right** for this clip (it was 1 in live, 4 in final).
+- [ ] (#13) **Check whether 4 speakers is right** for this clip (it was 1 in live, 4 in final).
   Needs a recording with known speakers and Keep audio on. `final_cluster_threshold` is 0.6.
   Small look-alike speakers are now merged (079d8c9), which may change the count. The best
   check is a recording where you know how many people speak.
@@ -63,7 +65,7 @@ Stop), final transcript 35 s after Stop, and the final pass found 4 distinct voi
 
 ### Transcription quality
 
-- [ ] **base.en mishears names and jargon**, e.g. "Gitli Cluster" (probably "GitLab").
+- [ ] (#32) **base.en mishears names and jargon**, e.g. "Gitli Cluster" (probably "GitLab").
   *Investigate:* run `huddle-helper bench` with small.en on the target laptop. If it keeps
   up with real time, consider making it the default.
 
@@ -116,7 +118,7 @@ in the correct time order. No echo lines were dropped, which is correct with a h
   Fixed in 079d8c9: a speaker with under max(15 s, 5% of speech) is merged into the most
   similar larger speaker if they're at least 0.7 alike. Raising the threshold instead would
   have merged the two synthetic test voices (0.50 alike). The Test #2 replay now has 2 speakers.
-- [ ] **Final pass also relabels lines the live pass got right**, e.g. line 1 is split into
+- [ ] (#13) **Final pass also relabels lines the live pass got right**, e.g. line 1 is split into
   `SPEAKER_01` "…less descriptive than that." / `SPEAKER_02` "So, so.". Revisit after the
   two fixes above. On the replay the split remains, but now at the sentence end; whether
   it's right needs someone who knows who said "So, so, so." Re-check on the next test.
@@ -148,7 +150,7 @@ in the correct time order. No echo lines were dropped, which is correct with a h
 
 ### Housekeeping
 
-- [ ] A 21-second false start ("Test #2", 13:34:09–13:34:30, 4 lines) appears in the log, but its
+- [ ] (#21) A 21-second false start ("Test #2", 13:34:09–13:34:30, 4 lines) appears in the log, but its
   folder is gone. If it was deleted by hand, nothing to do. Otherwise, find out why.
 
 ## From Test #3: `2026-11-09_1441_test-3`
@@ -314,7 +316,7 @@ What went well:
   steadier, then assign short lines to the nearest centroid. Test #3's A pieces were short
   lines. Code: `diarize.py` `cluster_voices`, `fold_small_clusters`; `finalize.py`
   `_voice_labels`.
-- [ ] **`SPEAKER_01` may still be several people.** Remote A, the person who opens the call ("I'm
+- [ ] (#13) **`SPEAKER_01` may still be several people.** Remote A, the person who opens the call ("I'm
   just trying to capture the business need…") and the lines that sound like Remote E ("…Remote D,
   feel free to correct me", "So Remote A, Remote B, early Q1, does that work for you guys?") are all
   0.82–0.92 alike, as similar as Remote A is to himself, and they stay together even at 0.8. So
@@ -341,14 +343,14 @@ What went well:
   zone code address" was not joined because its gap is 2.6 s; leave that as is.)
   Fixed in WP1: 14 such pairs are joined in Test #4 (203 lines → 190), 2 in Test #2, 1 in
   Test #3. The "…" stays in the joined text.
-- [ ] **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
+- [ ] (#24) **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
   Yes. Yes.", "I think that is CSV. Yeah. Okay. Okay.", "…you're all good." Interjections under
   1 s / 3 words are folded into the surrounding line on purpose (Test #1 fix), so a short reply
   from someone else is attributed to the main speaker. Revisit only if the downstream app needs it.
 
 ### Speed of the final pass on the laptop
 
-- [ ] **The final transcript took 13 min 34 s after Stop** for a 22.7-minute meeting
+- [ ] (#14) **The final transcript took 13 min 34 s after Stop** for a 22.7-minute meeting
   (16:28:01 → 16:41:35), 0.6× the meeting's length. The PRD accepts "several minutes", but a
   1-hour meeting would take about 35 minutes before `DONE`. Re-running the pass on the dev
   PC (Ryzen 5 5600X) takes 4 min 36 s and gives the same 203 lines. About 4 min of that is
@@ -385,7 +387,7 @@ What went well:
 
 ### Transcription quality
 
-- [ ] **Domain jargon is misheard throughout** (base.en): KoVa → "cover" / "co-va" /
+- [ ] (#32) **Domain jargon is misheard throughout** (base.en): KoVa → "cover" / "co-va" /
   "Co-ver", QDM → "Quodium" / "odium", ETL → "ETO", FMS → "FMX" / "famous" (fleet),
   vendor → "bender", code freeze → "co-trees", prod → "abroad", spreadsheet → "spray cheat",
   zone codes → "zonkers". The meaning of whole sentences is lost for a downstream summary.
@@ -479,7 +481,7 @@ What went well:
 
 ### Microphone
 
-- [ ] **The Kiyo Pro webcam mic is quiet:** speech peak median 0.046 (warning limit 0.05).
+- [ ] (#15) **The Kiyo Pro webcam mic is quiet:** speech peak median 0.046 (warning limit 0.05).
   **Confirmed by Bryce:** the quiet-mic notification appeared, so the 079d8c9 warning works on
   the target laptop. Every
   spoken mic passage was transcribed. Short sounds with no line at 03:29, 06:47 and 10:35 come
@@ -490,21 +492,21 @@ What went well:
 
 ## Still open from the PRD milestones
 
-- [ ] M1: 30-minute capture spike on a real call (`capture-spike --minutes 30`).
-- [ ] M6: 2-hour soak test (lag, memory, dropped lines).
-- [ ] Switch the default audio device mid-call and confirm rebind and the `gaps` entry in `meta.json`.
-- [ ] Echo dedupe on real speakers (no headset): remote speech must not appear as "You".
+- [ ] (#6) M1: 30-minute capture spike on a real call (`capture-spike --minutes 30`).
+- [ ] (#7) M6: 2-hour soak test (lag, memory, dropped lines).
+- [ ] (#6) Switch the default audio device mid-call and confirm rebind and the `gaps` entry in `meta.json`.
+- [ ] (#6) Echo dedupe on real speakers (no headset): remote speech must not appear as "You".
 
 ## From building the live view (WP4–WP7)
 
 ### Decisions waiting
 
-- [ ] **A missing diarization model does not fail the final pass.** The pass logs the error
+- [ ] (#16) **A missing diarization model does not fail the final pass.** The pass logs the error
   and completes on the live labels (`refined_streams: []`), so the LIVE_VIEW milestone 3
   check (rename the model folder, see the error, Retry) cannot pass as written. Decide
   whether a missing model should be a visible error. Retry itself was tested with a
   different forced failure.
-- [ ] **Hearing audio older than 10 minutes while recording** (WP7 spike, nothing built).
+- [ ] (#17) **Hearing audio older than 10 minutes while recording** (WP7 spike, nothing built).
   A second read-only handle on the live `audio\*.flac` works on Windows while the writer
   holds it: opens in 5–8 ms, reads are sample-exact up to about 3 s behind the writer, no
   `flush()` needed, and a killed process loses nothing either way. The reader must take
@@ -512,7 +514,7 @@ What went well:
   `LibsndfileError` near the end. 5-minute chunk files also work but change the
   documented `audio\` layout and about 8 call sites. *Recommended:* the second handle,
   only for lines older than the in-memory 10 minutes; don't build chunk files.
-- [ ] **Delete and the Recycle Bin:** a meeting larger than the bin's size limit, or a
+- [ ] (#22) **Delete and the Recycle Bin:** a meeting larger than the bin's size limit, or a
   drive with the bin switched off, may be deleted permanently while the dialog says it can
   be restored. Not tested. Consider a size check before the delete.
 
@@ -528,15 +530,15 @@ What went well:
 
 ### Needs a person
 
-- [ ] A real call on the laptop with the window open throughout: p90 and max delay no
+- [ ] (#8) A real call on the laptop with the window open throughout: p90 and max delay no
   worse than Test #4 (2.4 s and 6.8 s); watch the header at Stop (it once read a clipped
   "Refining speaker lab" for 18 s; not reproduced since a layout fix).
-- [ ] Mute on a real call: the other side still hears you, and nothing of your voice is in
+- [ ] (#8) Mute on a real call: the other side still hears you, and nothing of your voice is in
   `system.flac`. The AltGr hotkey warning on a German keyboard. The tray's Bookmark
   submenu and mute item.
-- [ ] Click to hear: 20 clips in a real call with a headset and without; switch the
+- [ ] (#8) Click to hear: 20 clips in a real call with a headset and without; switch the
   default output device while a clip plays (capture must rebind and log the gap).
-- [ ] All new windows and dialogs at 125–150% display scaling; a saved export in Notepad
+- [ ] (#8) All new windows and dialogs at 125–150% display scaling; a saved export in Notepad
   and a Markdown viewer; Show in Explorer.
 
 ## From naming speakers (WP8)
@@ -551,14 +553,14 @@ What went well:
   (departure from the plan's "never folded"): naming a whole speaker otherwise left its
   1 s lines as extra speakers with the same name. It is still never folded into an
   unnamed or differently named cluster.
-- [ ] **Only named people are protected.** At threshold 0.60 on Test #4 a named speaker
+- [ ] (#25) **Only named people are protected.** At threshold 0.60 on Test #4 a named speaker
   took in 74 s of an unnamed one. Not a problem at the shipped 0.70; a reason not to
   lower it.
-- [ ] A line under 0.5 s has no fingerprint, so naming it cannot steer clustering (it
+- [ ] (#26) A line under 0.5 s has no fingerprint, so naming it cannot steer clustering (it
   still counts for the mapping). Consider saying so in the picker.
-- [ ] After the swap to the final view the top row can sit partly hidden (seen in
+- [ ] (#28) After the swap to the final view the top row can sit partly hidden (seen in
   `lab\wp8\shots\10`). Likely WP4 scroll behaviour.
-- [ ] *Needs a person:* name people during a real call; the "This line is…" submenu (it
+- [ ] (#9) *Needs a person:* name people during a real call; the "This line is…" submenu (it
   could not be photographed by script); the full 22-minute Test #4 replay with tags; the
   downstream reader for `speaker_tags.jsonl` and the new `speakers.json` fields
   (`from_tags`, `conflicts`).
@@ -573,12 +575,12 @@ What went well:
 - [x] **Attendee names are not given to Whisper unless a box is ticked** (off by default),
   following the WP3 decision. LIVE_VIEW L34 still says "added automatically" in two
   places; the new Attendees paragraph is the one that is right.
-- [ ] **Decide:** the "Who is this?" bar also appears when no attendees were entered, so
+- [ ] (#18) **Decide:** the "Who is this?" bar also appears when no attendees were entered, so
   every meeting shows it for every new call voice. Keep, or show it only with attendees?
-- [ ] **Decide:** while the bar is showing, a number key answers the voice the bar asks
+- [ ] (#18) **Decide:** while the bar is showing, a number key answers the voice the bar asks
   about (oldest unanswered), not the latest line. Otherwise it names the latest unnamed
   call voice.
-- [ ] *Needs a person:* the keys on a real keyboard (numpad, non-US layout) during a real
+- [ ] (#9) *Needs a person:* the keys on a real keyboard (numpad, non-US layout) during a real
   call; that the bar never takes focus from another app.
 
 ### WP9b: Play from here, clip levels, output device (L19)
@@ -589,13 +591,13 @@ What went well:
   over 1.0, 67 within ±1 dB of the target, 4–5 very quiet mic lines capped. A windowed
   Test #3 replay with four runs at gain 0 gave the same live (21) and final (13) lines as
   a replay without playback; `playbacks` 16, dropped 0.
-- [ ] **Not proven on real loopback:** the replay feeds files, so no played sound comes
+- [ ] (#10) **Not proven on real loopback:** the replay feeds files, so no played sound comes
   back. That a run's clips are dropped (the joined 12 s window) rests on unit tests.
-- [ ] **Decide:** a run still playing at Stop carries on from the kept files.
-- [ ] With no attendees the "Who is this?" bar and the headphone warning stack in the
+- [ ] (#18) **Decide:** a run still playing at Stop carries on from the kept files.
+- [ ] (#18) With no attendees the "Who is this?" bar and the headphone warning stack in the
   same yellow and take three rows (`lab\wp9b\shots\02`); see the WP9a decision.
-- [ ] The "↓ N new lines" button overlaps the last row's text (older behaviour).
-- [ ] *Needs a person:* listen to levelled clips and to line changes in a run (nothing
+- [ ] (#27) The "↓ N new lines" button overlaps the last row's text (older behaviour).
+- [ ] (#10) *Needs a person:* listen to levelled clips and to line changes in a run (nothing
   was played audibly); a real non-default "Play clips on" device and unplugging it;
   switching the default output during a run.
 
@@ -609,10 +611,10 @@ What went well:
   interval and stopped at unmute and at Stop.
 - [x] **A removed or renamed type keeps its name in old meetings:** `marks.jsonl` holds
   the id, `meta.json` `mark_kinds` holds the name as soon as the type is used.
-- [ ] A new type's hotkey applies from the next recording (its name applies at once).
+- [ ] (#30) A new type's hotkey applies from the next recording (its name applies at once).
   The Bookmark types tab shows clashes and the AltGr warning, not whether Windows
   accepted the registration (the Hotkeys tab does).
-- [ ] *Needs a person:* the real Windows notification for the reminder; the tray Bookmark
+- [ ] (#11) *Needs a person:* the real Windows notification for the reminder; the tray Bookmark
   submenu with a custom type (built on each open; only its construction was checked);
   whether the stronger amber bar for 60 s is wanted.
 
@@ -625,12 +627,12 @@ What went well:
   removed exactly the 4 previewed `audio\` folders (12 files) and nothing else.
 - [x] **`You` is never marked short** (changed in review: Test #4's `You`, 8.8 s, was).
   With that, no speaker of the Test #4 copy is marked.
-- [ ] **Decide:** short is under 30 s of speech only (the line count is not used), and
+- [ ] (#18) **Decide:** short is under 30 s of speech only (the line count is not used), and
   when every speaker is under 30 s nobody is marked.
-- [ ] Adding a term from a line while the Settings dialog is open: the dialog's Save
+- [ ] (#29) Adding a term from a line while the Settings dialog is open: the dialog's Save
   overwrites it. The Storage panel does not follow a meetings-folder change made while
   it is open.
-- [ ] *Needs a person:* the Storage delete against the real Recycle Bin on a throwaway
+- [ ] (#12) *Needs a person:* the Storage delete against the real Recycle Bin on a throwaway
   meeting (every check used a fake bin or a permanent delete on scratch copies); the
   file dialogs for import and export; adding a term during a real recording.
 
@@ -645,10 +647,10 @@ What went well:
   review). Before, a speaker-level name on a live label that mixed two voices named both
   final speakers: 4 s of left-out pieces named a 570 s speaker. Re-mapping the seven
   WP11 runs changes only that case.
-- [ ] **The rule obeys the user even when wrong:** the same name on lines of two
+- [ ] (#25) **The rule obeys the user even when wrong:** the same name on lines of two
   different people moves those lines (7–11 s on Test #4) into one speaker; the rest of
   the other person stays apart. Nothing warns about it.
-- [ ] **A speaker-level name cannot split voices 0.7 or more alike:** naming a live label
+- [ ] (#25) **A speaker-level name cannot split voices 0.7 or more alike:** naming a live label
   that mixed Test #4's 74 s and 38 s speakers merged them (118 s). A line-level name on
   one of them is the way out.
 
@@ -661,15 +663,15 @@ Nothing in the product changed. Finding and numbers: `docs/WP10_SPIKE.md`; tool:
   A tone this process played was at -34 dBFS in device loopback and exact zero in process
   loopback; tones from other processes were at -34 in both. A 20-minute capture gave
   1200.14 s of audio for 1200.13 s of wall clock with no flags or timeouts.
-- [ ] **Decide: build it** (recommended, with device loopback kept as the fallback when
+- [ ] (#19) **Decide: build it** (recommended, with device loopback kept as the fallback when
   activation fails). About 300–400 lines: a new `audio\procloop.py`, edits in
   `capture.py`, a `meta.json` field for the capture method.
-- [ ] **Tree exclusion reached only direct children on this build:** a grandchild's tone
+- [ ] (#19) **Tree exclusion reached only direct children on this build:** a grandchild's tone
   was captured. A helper process that plays sound would have to be a direct child.
-- [ ] The client delivers zeros every 10 ms during silence (device loopback delivers
+- [ ] (#19) The client delivers zeros every 10 ms during silence (device loopback delivers
   nothing), which would simplify the meeting clock. The soak ran in silence only. One
   23 ms step between packets in a 14 s run is unexplained.
-- [ ] *Needs a person before building:* a 30-minute capture during a real call with a
+- [ ] (#19) *Needs a person before building:* a 30-minute capture during a real call with a
   clip played; switching the default output mid-capture (expected to carry on without a
   re-open; untested); a Bluetooth headset; the packaged exe; a Windows build below
   20348 for the fallback; the engine's 16 kHz conversion against soxr.
@@ -691,11 +693,11 @@ recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
 
 ### Open
 
-- [ ] **The app wrote no log for this run.** `%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`
+- [ ] (#21) **The app wrote no log for this run.** `%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`
   ends at 03:19 that day; the app was started from Explorer at 14:45 with no arguments
   and was still running at the time of the check. A bare start of the same exe with
   `HUDDLE_HELPER_DATA_DIR` set did log. Cause not found.
-- [ ] **The main remote voice is split in two in the final file** (45 s and 18 s), and the
+- [ ] (#23) **The main remote voice is split in two in the final file** (45 s and 18 s), and the
   two alternate inside sentences, which reads like one person. The live pass had it as one
   label (56 s). Without names the clustering gives the same split (51 s / 19 s at 0.70);
   the two halves only join at 0.60. Bryce: two people speak in the played recording, so
@@ -703,7 +705,7 @@ recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
   plus two of about 4 s; the long pieces (3 s and up, 46 s to the end) agree with each
   other at 0.74 to 0.88. So the split is short pieces clustering apart from long ones,
   not two people.
-- [ ] **A speaker tag carried a later live mistake into the final file.** The only piece
+- [ ] (#20) **A speaker tag carried a later live mistake into the final file.** The only piece
   that is clearly another voice is the 6.5 s line at 71 s (0.51 to 0.58 against the long
   pieces). The live pass gave it the label the user had named at 33 s, so the tag covered
   it, and the same-name rule (L39) then forced it into the named speaker. *Decision:*
@@ -711,11 +713,11 @@ recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
   hint for later ones? Bryce: the named person is the main voice. So the final file
   credits him with 13 s (the opening lines plus the other person's 71 s line) and leaves
   about 60 s of his speech unnamed across two speakers.
-- [ ] **The live pass made four remote labels in the first 40 s**, two of them from lines
+- [ ] (#24) **The live pass made four remote labels in the first 40 s**, two of them from lines
   under 1 s ("Uh...", one word). The user named two of them the same person.
-- [ ] Short fillers ("Um.", "Like...", "So...") are still lines of their own, live and
+- [ ] (#24) Short fillers ("Um.", "Like...", "So...") are still lines of their own, live and
   final, and are the lines whose speaker flips.
-- [ ] Two junk system lines at 24 s (confidence 0.30 and 0.50, under 0.5 s each) as the
+- [ ] (#24) Two junk system lines at 24 s (confidence 0.30 and 0.50, under 0.5 s each) as the
   played recording started. One mic line misheard "four" as "for".
 
 ## From the quality experiments (2026-11-10, nothing in the product changed)
@@ -735,7 +737,7 @@ truth is partly inferred: the 71 s line as the second person rests on voice evid
   range goes from 0.70–0.71 to 0.70–0.73. With 3 s anchors Test #5 still splits 8.1 s. A
   bonus for the neighbour in time made it worse. Not built.
 - [x] **Centroid linkage and joining neighbours into turns: rejected** (no setting passes all four).
-- [ ] **Next: compare fingerprint models** on the kept audio with the same score. The lower
+- [x] (done in WP13) **Next: compare fingerprint models** on the kept audio with the same score. The lower
   bound of every working range is Test #4's Remote D/Remote B pair (must be 0.70 or more to split)
   and the upper is one voice's own 3–4 s pieces (0.73), so only a model that separates
   those can widen it. Pieces of 3 s or more already pool at 5% error against 11% for all.
@@ -755,7 +757,7 @@ Each live line's audio span (200 ms before, 300 ms after) re-transcribed on the 
   Seen fixes: "binder" → "vendor", "a couple of engines" → "a couple of decisions",
   "error if I" → "a verify". Seen losses: "Huddle Helper" → "Lidle Helper", one invented
   "See ya." on a line end. No reference transcript exists, so there is no word error rate.
-- [ ] Not built. Open: time on the laptop (about 3× the dev PC), whether to keep the live
+- [x] (built in WP15; acceptance in #32) Not built. Open: time on the laptop (about 3× the dev PC), whether to keep the live
   text when the new line scores lower, and larger models (need a download).
 
 ### Speakers: other fingerprint models (2026-11-10, nothing in the product changed)
@@ -788,7 +790,7 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   people speak in that clip. *Needs Bryce.*
 - Speed at 4 threads on Test #4's 980 s of speech: 6 s (TitaNet small, CAM++), 13–14 s
   (ERes2Net, TitaNet large); the shipped model takes about 17 s.
-- [ ] **Not built.** A swap means re-fitting every cutoff on the new scale (live 0.75 and
+- [x] (done in WP13) **Not built.** A swap means re-fitting every cutoff on the new scale (live 0.75 and
   0.6, final 0.70, both folds, the offline diarizer's 0.6), a settings migration, the model
   download and the bundle, and a live replay. Check each model's licence first. Why the
   larger wespeaker models and both English CAM++ models do so badly here was not looked into.
@@ -803,7 +805,7 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   diarization results on meetings and telephone audio (AMI 1.7–2.2% and CH109 1.1–1.2%
   with given speech regions; small about equal to large). sherpa-onnx's own diarization
   examples use TitaNet small and 3D-Speaker ERes2Net, not wespeaker.
-- [ ] Unexplained: the large wespeaker models and both English CAM++ models score far below
+- [ ] (#3) Unexplained: the large wespeaker models and both English CAM++ models score far below
   what is published, here. Rule out a problem in how they are run before trusting the
   shipped model's numbers (it is the same family).
 - **Whole diarization systems: little to gain for this app.** pyannote community-1 beats
@@ -842,22 +844,22 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   | Live replay: live speakers / final speakers, Tests #2-#5 | 2/2, 3/3, 7/5, 5/2 | 4/4, 3/3, 7/6, 2/2 |
   | Final pass, Test #4, 4 threads, PC busy with other jobs | 197 s when idle | 250 s |
 
-- [ ] **The range is 0.13 wide where the plan asked for 0.15**, and its upper end is set by an
+- [ ] (#1, #23) **The range is 0.13 wide where the plan asked for 0.15**, and its upper end is set by an
   old patch, not by the model: from 0.48 the two halves of Test #5's 5 s speaker stop joining,
   and `fold_small_clusters` then gives each half away because a cluster under 4 s is always
   folded. That rule was written for the old model's unreliable short pieces. *Next:* fold a
   cluster under 4 s only when it is alike enough, and measure; nothing was removed in WP13.
-- [ ] **Test #5 with its names still reads 13 s + 64 s**: the named speaker holds the opening
+- [ ] (#20) **Test #5 with its names still reads 13 s + 64 s**: the named speaker holds the opening
   lines plus the other person's 71 s line, exactly the open "speaker tag carried a later live
   mistake" item above. The model swap does not touch that rule.
-- [ ] **Split points:** pieces per recording are within 10% of before at any split setting from
+- [ ] (#31) **Split points:** pieces per recording are within 10% of before at any split setting from
   0.6 to 0.9 (Test #2 44 → 43, Test #3 15 → 16, Test #5 31 → 32, Test #4 190 → 184 final
   lines). Line boundaries that moved were not read one by one.
-- [ ] **Not done:** the final-pass time was not measured on an idle PC or on the laptop; the
+- [ ] (#14, #31, #3) **Not done:** the final-pass time was not measured on an idle PC or on the laptop; the
   WP8/WP11 runs with names on Tests #3 and #4 were not repeated; the wespeaker check (why the
   larger wespeaker models do badly here) was started and stopped by a usage limit; the exe
   was not rebuilt yet.
-- [ ] **Needs Bryce:** how many people speak in Test #2 (now four), whether six remote speakers
+- [ ] (#13) **Needs Bryce:** how many people speak in Test #2 (now four), whether six remote speakers
   is right for Test #4, and whether Test #5's 71 s line is the second person.
 
 ## From the second transcription after Stop (WP15, built, off by default, not yet accepted)
@@ -869,12 +871,12 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   is empty, under half or over twice the words, when a call fails, or when the whole stage
   fails. Later invented segments are dropped on every second-pass call. The meeting's whole
   vocabulary is used for every line (a term added late now helps the early lines too).
-- [ ] **Paused before acceptance (Bryce, 2026-11-11):** wait for the public meeting audio and
+- [ ] (#32) **Paused before acceptance (Bryce, 2026-11-11):** wait for the public meeting audio and
   transcript as the test baseline. Not run yet: the real final pass with the stage on (Tests
   #2-#5), word error against a reference, time on the dev PC and the laptop, the Settings
   dialog by eye, the exe rebuild. Unit tests only so far (11, scripted transcriber).
-- [ ] **WP14 (Parakeet against small.en) stopped part-way** on a usage limit. `tools/retx_lab.py`,
+- [ ] (#32) **WP14 (Parakeet against small.en) stopped part-way** on a usage limit. `tools/retx_lab.py`,
   `tools/wer.py` and `tests/test_wer.py` are committed (58cf2e9) but unfinished; no
   results were reported. Until it is done the stage ships Whisper only.
-- [ ] Departures from the plan: no check on `drop_hallucinated` (the transcriber does not report
+- [ ] (#2) Departures from the plan: no check on `drop_hallucinated` (the transcriber does not report
   it); a final line's start and end follow the new word times, within 200 ms of the live line's.
