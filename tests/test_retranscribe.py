@@ -6,29 +6,12 @@ from huddle_helper import meeting as mt
 from huddle_helper.finalize import finalize_meeting
 from huddle_helper.retranscribe import MIN_SPAN_MS, POST_MS, PRE_MS, retranscribe, span, suspect
 from huddle_helper.segments import Segment, Word
-from huddle_helper.transcribe import Transcription, read_segments
+from huddle_helper.transcribe import read_segments
 from huddle_helper.writer import read_events
 
-from tests.test_diarize_finalize import FakeDiarizer, _make_meeting
+from .conftest import FakeDiarizer, ScriptedTranscriber, make_meeting_to_finalize
 
 SR = 16000
-
-
-class Scripted:
-    """Answers by the length of the audio it is given (ms) or with a default; records every call."""
-    name = "scripted"
-
-    def __init__(self, default="new text", by_ms=None, fail_on=None):
-        self.default, self.by_ms, self.fail_on, self.calls = default, by_ms or {}, fail_on, []
-
-    def transcribe(self, audio, prompt=None):
-        ms = len(audio) * 1000 // SR
-        self.calls.append((ms, prompt))
-        if self.fail_on == ms:
-            raise RuntimeError("boom")
-        text = self.by_ms.get(ms, self.default)
-        words = [Word(100 + 200 * i, 250 + 200 * i, " " + w) for i, w in enumerate(text.split())]
-        return Transcription(text, 0.8, words)
 
 
 def seg(start, end, text, source="system", speaker="SPEAKER_01"):
@@ -56,7 +39,7 @@ def test_retranscribe_keeps_line_identity_and_shifts_word_times():
     segs = [seg(1000, 3000, "old one"), seg(100, 900, "mic old", "mic", "You"), seg(6000, 8000, "old two")]
     words = {("system", 1000): [Word(1000, 3000, " old one")]}
     audio = {"system": np.zeros(SR * 10, np.float32), "mic": np.zeros(SR * 10, np.float32)}
-    tr = Scripted("fresh words here")
+    tr = ScriptedTranscriber("fresh words here")
     seen = []
     out, new_words, stats = retranscribe(segs, words, audio, tr, "This call is about X.", seen.append)
     assert [(s.source, s.start_ms, s.end_ms, s.speaker) for s in out] == [
@@ -80,7 +63,7 @@ def test_retranscribe_keeps_live_text_when_refused_failed_or_without_audio():
             seg(100, 900, "no mic audio kept", "mic", "You")]
     audio = {"system": np.zeros(SR * 30, np.float32)}
     first_ms, second_ms = 2000 + PRE_MS + POST_MS, 4000 + PRE_MS + POST_MS
-    tr = Scripted(by_ms={first_ms: "one"}, fail_on=second_ms)
+    tr = ScriptedTranscriber(by_ms={first_ms: "one"}, fail_on=second_ms)
     live_words = {("system", 1000): [Word(1000, 3000, " one two three four five six")]}
     seen = []
     out, new_words, stats = retranscribe(segs, live_words, audio, tr, progress=seen.append)
@@ -94,21 +77,16 @@ def test_retranscribe_keeps_live_text_when_refused_failed_or_without_audio():
 
 
 def test_new_text_without_word_times_drops_the_live_words():
-    class NoWords:
-        name = "no-words"
-
-        def transcribe(self, audio, prompt=None):
-            return Transcription("fresh words", 0.8, [])
-
     live_words = {("system", 1000): [Word(1000, 3000, " old one")]}
+    tr = ScriptedTranscriber("fresh words", words=False)
     out, new_words, _stats = retranscribe([seg(1000, 3000, "old one")], live_words,
-                                          {"system": np.zeros(SR * 5, np.float32)}, NoWords())
+                                          {"system": np.zeros(SR * 5, np.float32)}, tr)
     assert out[0].text == "fresh words"
     assert ("system", 1000) not in new_words  # the live words would turn the line back into "old one"
 
 
 def test_same_words_with_other_punctuation_do_not_count_as_changed():
-    tr = Scripted("Hello there, friend.")
+    tr = ScriptedTranscriber("Hello there, friend.")
     _out, _w, stats = retranscribe([seg(1000, 3000, "hello there friend")], {}, {"system": np.zeros(SR * 5, np.float32)}, tr)
     assert stats.changed == 0 and stats.kept_live == 0
 
@@ -129,7 +107,7 @@ def _final_texts(folder):
 
 
 def test_finalize_without_a_second_transcriber_is_unchanged(tmp_path):
-    a, b = _make_meeting(tmp_path / "a"), _make_meeting(tmp_path / "b")
+    a, b = make_meeting_to_finalize(tmp_path / "a"), make_meeting_to_finalize(tmp_path / "b")
     finalize_meeting(a, FakeDiarizer, keep_audio=False)
     finalize_meeting(b, FakeDiarizer, keep_audio=False, transcriber_factory=None)
     assert _final_texts(a) == _final_texts(b)
@@ -138,9 +116,9 @@ def test_finalize_without_a_second_transcriber_is_unchanged(tmp_path):
 
 
 def test_finalize_uses_the_second_transcription(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     folder.update_meta(vocabulary=["KoVa"])
-    tr = Scripted(by_ms={})
+    tr = ScriptedTranscriber(by_ms={})
     tr.default = "Better."
     stages = []
     finalize_meeting(folder, FakeDiarizer, keep_audio=False, progress=lambda s, f: stages.append(s),
@@ -160,7 +138,7 @@ def test_finalize_uses_the_second_transcription(tmp_path):
 
 
 def test_finalize_survives_a_failing_second_transcriber(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
 
     def broken():
         raise FileNotFoundError("model folder renamed")

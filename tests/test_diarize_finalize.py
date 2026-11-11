@@ -2,11 +2,12 @@ import json
 
 import numpy as np
 
-from huddle_helper import meeting as mt
 from huddle_helper.diarize import OnlineClusterer, Turn
-from huddle_helper.finalize import append_words, finalize_meeting, load_words, relabel, speaker_at
+from huddle_helper.finalize import finalize_meeting, load_words, relabel, speaker_at
 from huddle_helper.segments import Segment, Word
-from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event, read_events
+from huddle_helper.writer import read_events
+
+from .conftest import FakeDiarizer, make_meeting_to_finalize
 
 
 def unit(i, n=4):
@@ -272,34 +273,8 @@ def test_relabel_undiarized_and_failed_streams():
     assert [s.speaker for s in out] == ["You", "Remote"]
 
 
-class FakeDiarizer:
-    def diarize(self, audio, progress=None):
-        if progress:
-            progress(1.0)
-        return [Turn(0, 2000, 5), Turn(2000, 9000, 2)]
-
-
-def _make_meeting(tmp_path, keep_audio=False):
-    started = mt.now_local()
-    folder = mt.MeetingFolder.create(tmp_path, "Test", started, {
-        "settings": {"diarize_system": True, "diarize_mic": False, "keep_audio": keep_audio}})
-    import soundfile as sf
-    sf.write(str(folder.audio_file("system")), np.zeros(16000 * 3, np.float32), 16000, format="FLAC")
-    segs = [Segment("mic", 100, 900, "Hello.", 0.9, "You"),
-            Segment("system", 500, 1500, "First.", 0.9, "SPEAKER_01", [Word(500, 1500, " First.")]),
-            Segment("system", 2500, 3000, "Second.", 0.9, "SPEAKER_01", [Word(2500, 3000, " Second.")])]
-    with JsonlWriter(folder.live_path) as w:
-        w.write(meeting_start_event(folder.meeting_id, mt.iso(started)))
-        for i, s in enumerate(segs, 1):
-            w.write(s.to_event(i))
-            append_words(folder.words_path, s)
-        w.write(meeting_end_event(mt.iso(started), len(segs)))
-    folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True)
-    return folder
-
-
 def test_finalize_writes_final_then_done_and_removes_audio(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     assert load_words(folder.words_path)[("system", 2500)][0].text == " Second."
     count = finalize_meeting(folder, FakeDiarizer, keep_audio=False)
     assert count == 3
@@ -313,7 +288,7 @@ def test_finalize_writes_final_then_done_and_removes_audio(tmp_path):
 
 
 def test_finalize_keeps_audio_when_asked(tmp_path):
-    folder = _make_meeting(tmp_path, keep_audio=True)
+    folder = make_meeting_to_finalize(tmp_path, keep_audio=True)
     finalize_meeting(folder, FakeDiarizer, keep_audio=True)
     assert folder.audio_file("system").exists() and folder.read_meta()["audio_kept"] is True
 
@@ -322,7 +297,7 @@ def test_finalize_survives_diarizer_failure(tmp_path):
     def broken():
         raise RuntimeError("model missing")
 
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     finalize_meeting(folder, broken, keep_audio=False)
     speakers = [e["speaker"] for e in read_events(folder.final_path) if e["type"] == "segment"]
     assert speakers == ["You", "SPEAKER_01", "SPEAKER_01"]
@@ -330,7 +305,7 @@ def test_finalize_survives_diarizer_failure(tmp_path):
 
 
 def test_speakers_json(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     folder.write_speakers({"SPEAKER_01": " Dana ", "SPEAKER_02": "", "You": "You"})
     data = json.loads(folder.speakers_path.read_text(encoding="utf-8"))
     assert data["speakers"] == {"SPEAKER_01": "Dana"}
@@ -338,7 +313,7 @@ def test_speakers_json(tmp_path):
 
 
 def test_finalize_writes_final_stats(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     finalize_meeting(folder, FakeDiarizer, keep_audio=False)
     stats = folder.read_meta()["final_stats"]
     assert stats["audio_s"] == 3.0 and stats["took_s"] >= 0 and stats["speed"] is not None
@@ -346,7 +321,7 @@ def test_finalize_writes_final_stats(tmp_path):
 
 
 def test_finalize_honours_keep_audio_set_in_meta_late(tmp_path):
-    folder = _make_meeting(tmp_path)  # meta says keep_audio False when the worker read it
+    folder = make_meeting_to_finalize(tmp_path)  # meta says keep_audio False when the worker read it
     seen = {}
 
     class LateDiarizer(FakeDiarizer):
@@ -364,7 +339,7 @@ def test_cmd_finalize_keeps_audio_unless_asked(tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: calls.append(keep_audio))
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path)]) == 0
     assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path), "--delete-audio"]) == 0
     assert calls == [True, False]
@@ -410,7 +385,7 @@ def test_finalize_times_embedding_and_clustering_separately(tmp_path):
         def embed(self, audio):
             return unit(0)
 
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     finalize_meeting(folder, FakeDiarizer, keep_audio=False, embedder_factory=FlatEmbedder)
     stages = folder.read_meta()["final_stats"]["stages"]
     assert {"embed_pieces", "cluster"} <= set(stages) and "voice_labels" not in stages
@@ -492,7 +467,7 @@ def test_finalize_reports_grouping_progress_and_merge_small_stage(tmp_path):
     class TimedDiarizer(FakeDiarizer):
         last_timings = {"merge_small": 1.5}
 
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     seen = []
     finalize_meeting(folder, TimedDiarizer, keep_audio=False, embedder_factory=FlatEmbedder,
                      progress=lambda stage, frac: seen.append((stage, frac)))
@@ -503,7 +478,7 @@ def test_finalize_reports_grouping_progress_and_merge_small_stage(tmp_path):
 
 
 def test_finalize_works_with_a_diarizer_without_last_timings(tmp_path):
-    folder = _make_meeting(tmp_path)
+    folder = make_meeting_to_finalize(tmp_path)
     assert not hasattr(FakeDiarizer(), "last_timings")
     finalize_meeting(folder, FakeDiarizer, keep_audio=False)
     stages = folder.read_meta()["final_stats"]["stages"]
