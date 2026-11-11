@@ -22,7 +22,7 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
    microphone icon appears in the tray.
 2. Click it → **Start recording…**, name the meeting, optionally list who is on the call (names
    become numbered one-click choices: press 1-9 in the Transcript window to name the latest new voice,
-   with Undo; a bar asks "Who is this?" when a new voice appears), and start. The icon turns red with a
+   with Undo; a bar asks "Who is this?" when a new voice appears; without names only the voice's chip asks), and start. The icon turns red with a
    dot while recording. Tell participants you're recording; laws vary by place.
 3. **Stop recording** when done. The icon turns amber while speaker labels are refined
    (a few minutes for a long meeting on a laptop CPU), then you get a notification.

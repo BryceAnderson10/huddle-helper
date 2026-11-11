@@ -69,6 +69,7 @@ LIVE = [("mic", 500, 1500, "You", "first line here."),
         ("system", 10_000, 12_000, "SPEAKER_02", "third one."),
         ("mic", 13_000, 13_500, "You", "mine."),
         ("system", 14_000, 16_000, "SPEAKER_01", "fourth one.")]
+NAMES = ["Ana", "Ben", "Cy"]
 
 
 def model(tmp_path, tag_events=(), lines=LIVE):
@@ -128,26 +129,34 @@ def test_capture_undo_remembers_the_tags_it_will_replace(tmp_path):
 def test_who_prompter_hands_out_new_unnamed_call_voices_one_at_a_time(tmp_path):
     m = model(tmp_path)
     p = al.WhoPrompter()
-    first = p.update(m, True)
+    first = p.update(m, True, NAMES)
     assert first.label == "SPEAKER_01" and first.snippet == "second line, from the call."
-    assert p.update(m, True) is first and [v.label for v in p.queue] == ["SPEAKER_02"]  # one at a time
+    assert p.update(m, True, NAMES) is first and [v.label for v in p.queue] == ["SPEAKER_02"]  # one at a time
     p.dismiss()
-    assert p.update(m, True).label == "SPEAKER_02"
+    assert p.update(m, True, NAMES).label == "SPEAKER_02"
     p.dismiss()
-    assert p.update(m, True) is None
-    assert p.update(m, True) is None  # dismissed voices are not asked again
+    assert p.update(m, True, NAMES) is None
+    assert p.update(m, True, NAMES) is None  # dismissed voices are not asked again
 
 
 def test_who_prompter_skips_voices_named_in_the_meantime_and_ignores_you_and_final(tmp_path):
     m = model(tmp_path)
     p = al.WhoPrompter()
     m.apply_tags([tags.tag_speaker_event("SPEAKER_01", "Ben")])
-    assert p.update(m, True).label == "SPEAKER_02"  # SPEAKER_01 was named before it was asked about
+    assert p.update(m, True, NAMES).label == "SPEAKER_02"  # SPEAKER_01 was named before it was asked about
     m.apply_tags([tags.tag_speaker_event("SPEAKER_02", "Cy")])
-    assert p.update(m, True) is None  # the shown one was named another way: gone
-    assert al.WhoPrompter().update(m, False) is None
+    assert p.update(m, True, NAMES) is None  # the shown one was named another way: gone
+    assert al.WhoPrompter().update(m, False, NAMES) is None
     q = al.WhoPrompter()
-    assert q.update(model(tmp_path / "y", lines=[("mic", 0, 900, "You", "alone.")]), True) is None
+    assert q.update(model(tmp_path / "y", lines=[("mic", 0, 900, "You", "alone.")]), True, NAMES) is None
+
+
+def test_without_attendees_no_voice_is_asked_about_but_its_chip_still_asks(tmp_path):
+    m = model(tmp_path)
+    p = al.WhoPrompter()
+    assert p.update(m, True, []) is None and p.queue == [] and p.current is None
+    assert [c.display for c in logic.speaker_chips(m) if c.unnamed] == ["SPEAKER_01", "SPEAKER_02"]
+    assert p.update(m, True, NAMES).label == "SPEAKER_01"  # with attendees the same meeting is asked about
 
 
 def test_prompt_view_offers_unused_attendees_with_their_numbers(tmp_path):

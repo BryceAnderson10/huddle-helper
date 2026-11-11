@@ -211,8 +211,10 @@ clustering (`cluster_voices`, average linkage) and the small-cluster fold
   other (unnamed lines may join it by voice). The rule moves only the lines the user named;
   the rest of the other speaker stays where the voices put it.
 - **Limit.** The rules only protect people the user named. An unnamed Remote D can still
-  be merged into a named Remote B. The "Who is this?" prompt for every new live voice (L13)
-  is what gets both named; the fixed-threshold problem itself is tracked in TODO (Test #4).
+  be merged into a named Remote B. In a meeting with attendees, the "Who is this?" bar for each
+  new live voice (L13) is what gets both named; without attendees there is no bar (#18), and the
+  highlighted "Who is this?" chip is the only reminder, so more voices can reach the final pass
+  unnamed. The fixed-threshold problem itself is tracked in TODO (Test #4).
 - **Which lines are named.** Line-level tags name that line; speaker-level tags name
   every live line with that label. A speaker-level tag on a live label that mixes two
   people (see Risks) would push wrong lines into a cluster, so speaker-level
@@ -588,7 +590,10 @@ may be dropped too, or kept with clip words in it. That is why layer 1 is the re
   (wheel, scrollbar, navigation keys); a new run follows again. It ends after the last line, on
   `Esc`, on the stop square of the line being heard, when another clip is played, when the
   window leaves the meeting or the app quits, or when the capture re-opens its devices. A
-  run that is still going when recording stops carries on from the kept audio files. While recording every clip of
+  run that is still going when recording stops carries on from the kept audio files (decided in #18). If those files
+  go while it plays (Keep audio off removes them after the final pass, or the audio or meeting is deleted), each clip
+  that can no longer be read is skipped and the run ends quietly as finished: no error, no notice. Only a run that
+  could read nothing at all says "Could not read that audio." While recording every clip of
   a run is a playback window like a single clip (drop rule, `playbacks` counts clips, the
   headphone warning once per meeting), plus a *joined* window over the clips of the last 12 s,
   because clips with under half a second between them come back through the loopback as one
@@ -798,7 +803,9 @@ While muted, an amber bar sits under the header:
     speaker is still unnamed; when every call speaker is named, the speaker of the latest call line (so a wrong
     name can be replaced). The strip's heading names the voice a key will name. The keys do nothing in the final
     view, on the Meetings page, without attendees, with Ctrl or Alt held, or while an entry, spin box or editable
-    text has the focus. A key beyond the list ("7" with three names) says so in the status bar.
+    text has the focus. A key beyond the list ("7" with three names) says so in the status bar. That a key
+    answers the bar's voice rather than the latest line while the bar is showing was confirmed in #18: the number
+    goes to the voice the user is reading about.
   - **Confirmation.** A bar under the notice says "SPEAKER_03 is now Ana · [Undo] [OK]" for 10 s. Undo puts
     the touched labels and lines back to the tag they had (including none).
   - **"Who is this?" for new voices.** The first time a call label (not `You`/`Remote`) appears unnamed in the
@@ -806,7 +813,10 @@ While muted, an amber bar sits under the header:
     buttons for the attendees not yet used (each with its own number), "Other…" (the name picker) and "Not now". It is
     part of the window: no dialog, no focus change, nothing when the window is hidden. One voice at a time, the others
     queue, oldest first; naming a voice any other way, or "Not now", moves on, and a voice is asked about once. Voices
-    already on screen when the window is opened mid-meeting are queued too. It works with or without attendees.
+    already on screen when the window is opened mid-meeting are queued too. It appears **only in a meeting with
+    attendees** (#18): without them every new call voice would raise it, stacked with the headphone warning in the
+    same yellow. Without attendees an unnamed voice is marked only by its highlighted "Who is this?" chip, which names
+    it the same way. With attendees the bar, the strip and the headphone warning can still stack; that is accepted.
   - **Names and speech recognition.** The names are *not* given to Whisper by default (WP3 spike: a wrong
     name is a wrong fact, so L34's automatic add was not built). The Start dialog has an opt-in box, "Also give
     these names to speech recognition", off by default; ticked, they join the meeting's terms (so they appear in
@@ -831,9 +841,10 @@ While muted, an amber bar sits under the header:
   lines add up to **less than 30 s** of speech (the sum of line durations; two labels with the same name count as
   one person, so naming two voices alike can lift them over the limit). The number of lines is not used: one long
   line is not little speech. When *every* speaker is under 30 s (a very short meeting) none is marked, because
-  nobody stands out. A named speaker is marked too ("Dana · short"). It applies to the chip ("You · short") and to the
+  nobody stands out. These three points (30 s of speech, final view only, nobody marked when all are short) were
+  confirmed in #18. A named speaker is marked too ("Dana · short"). It applies to the chip ("You · short") and to the
   speaker column of each of that person's lines ("Ben · short"), whose text and name are drawn in a lighter
-  colour; the Who is this? prompt still appears for an unnamed one. Exports and every output file are
+  colour; an unnamed one's chip still asks "Who is this?". Exports and every output file are
   unchanged.
 - **Past meetings.** The Meetings view (above) opens any meeting read-only with names;
   speaker naming works there too. This replaces the Rename speakers dialog.
@@ -980,7 +991,7 @@ show that the call is active, but who is speaking is only known once the line la
 | Risk / question | Notes |
 | --- | --- |
 | **The final pass merges two people the user named, and one name is lost** | The failure seen in practice (Test #3: B+C; Test #4: Remote D into Remote B). Mapping alone can't fix it. The different-names rule (L14, P0, milestone 5) keeps named people apart; checked on Tests #3 and #4. |
-| The final pass merges an *unnamed* person into a named one | L14 only protects people the user named. "Who is this?" for every new live voice (L13) gets both named; the threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
+| The final pass merges an *unnamed* person into a named one | L14 only protects people the user named. With attendees, the "Who is this?" bar for every new live voice (L13) gets both named; without them only the chip asks (#18); the threshold and fold problem is tracked in TODO (Test #4). Short speakers are shown, not hidden (L40). |
 | Live label is wrong for some lines, so a speaker-level tag names the wrong person on them | Overlap mapping is by majority, so a few wrong lines don't win the name. For the clustering rules, a speaker-level tag only counts for lines whose voice is at least 0.7 like the rest of that name's lines. Per-line tags override. This does *not* cover a whole person being merged; see the first row. |
 | User tags a live label that the final pass splits between two people | Lines of that label that count as named (line-level tags always; speaker-level only when at least 0.7 like the rest of that name, see above) are put in one final speaker (L39), so the name lands on one speaker. Pieces the gate leaves out are not forced: if they are a different voice they stay in another speaker, which stays `SPEAKER_nn` and is shown as untagged. Unnamed lines of the same person that fall outside the cluster by voice can also end up in an unnamed speaker. The mapping after the pass (L12) goes by overlap with the tagged live range, gated-out pieces included, but a name goes only to the final speaker (per stream) that overlaps it most, so those pieces cannot give a second speaker the same name (seen on Test #4 before this rule: 4 s of them named a 570 s speaker). |
 | Downstream app also writes `speakers.json` | Decided: the user's names win for speakers the user named, the downstream app's names are kept for the rest. Writes are atomic; Huddle Helper re-reads and merges just before writing. |

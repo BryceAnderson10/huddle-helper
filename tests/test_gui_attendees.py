@@ -153,6 +153,16 @@ def test_a_new_voice_raises_the_bar_without_a_dialog_or_a_focus_change(root, tmp
     w.destroy()
 
 
+def test_without_attendees_there_is_no_bar_and_the_chip_asks_instead(root, tmp_path):
+    w, _, _ = live_window(root, tmp_path, attendees=None)
+    w._refresh_all()
+    root.update()
+    assert not w.prompt_bar.winfo_ismapped() and w.prompter.current is None and w.prompter.queue == []
+    chips = {c.display: c.unnamed for c in w.speakers._chips}
+    assert chips["SPEAKER_01"] and chips["SPEAKER_02"]
+    w.destroy()
+
+
 def test_a_later_new_voice_is_asked_when_it_first_speaks(root, tmp_path):
     w, _, folder = live_window(root, tmp_path, lines=LIVE[:2])
     w._prompt_action("dismiss")

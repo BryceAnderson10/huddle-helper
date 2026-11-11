@@ -28,8 +28,8 @@ confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
 
 Attendees (WP9a, L13): a meeting started with a list of attendees gets a numbered strip under the speaker
 bar; while the window has the focus (and no text box does) the keys 1-9 name the latest call voice as that
-attendee, with a confirmation and Undo. A new unnamed call voice raises a "Who is this?" bar with the attendees
-as buttons. Both bars are part of the window (no dialog, no focus change); the decisions are in
+attendee, with a confirmation and Undo. In a meeting with attendees, a new unnamed call voice raises a "Who is this?" bar
+with the attendees as buttons. Both bars are part of the window (no dialog, no focus change); the decisions are in
 ``attendee_logic``.
 """
 
@@ -662,7 +662,7 @@ class MainWindow:
 
     def _prompt_view(self) -> al.PromptView | None:
         s = self.session
-        voice = self.prompter.update(s.model, self._live_naming()) if s is not None else None
+        voice = self.prompter.update(s.model, self._live_naming(), self._attendees()) if s is not None else None
         if self._toast is not None and (s is None or time.monotonic() >= self._toast[3] or s.folder.path != self._toast[2]):
             self._toast = None
         if self._toast is not None:
