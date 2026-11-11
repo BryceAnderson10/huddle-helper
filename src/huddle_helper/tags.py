@@ -152,7 +152,10 @@ def piece_names(pieces, idx: list[int], vecs: list[np.ndarray], weights: list[fl
     gets the name of the tagged live range it overlaps most (same stream). A line-level name always
     counts. A speaker-level name counts only if the piece is at least ``gate`` like the weighted centroid
     of all pieces carrying that name (one pass): a live label that mixes two people would otherwise push
-    the wrong lines into a cluster. Pieces with no tagged range, or that fail the gate, are ``None``.
+    the wrong lines into a cluster. It also gives way when the piece is more like another name's line-named
+    pieces (their weighted centroid) than its own name's centroid: the mixed label's centroid is pulled
+    towards the second person, so the gate alone lets their pieces through (Test #7). Pieces with no tagged
+    range, or that fail either check, are ``None``.
     """
     if not ranges or not vecs:
         return [None] * len(vecs)
@@ -175,14 +178,21 @@ def piece_names(pieces, idx: list[int], vecs: list[np.ndarray], weights: list[fl
         if r is not None:
             sums[r.name] = sums.get(r.name, 0.0) + vecs[k].astype(np.float64) * weights[k]
     cents = {n: v / (np.linalg.norm(v) or 1.0) for n, v in sums.items()}
+    line_sums: dict[str, np.ndarray] = {}
+    for k, r in enumerate(cand):
+        if r is not None and r.scope == LINE:
+            line_sums[r.name] = line_sums.get(r.name, 0.0) + vecs[k].astype(np.float64) * weights[k]
+    line_cents = {n: v / (np.linalg.norm(v) or 1.0) for n, v in line_sums.items()}
     out: list[str | None] = []
     for k, r in enumerate(cand):
         if r is None:
             out.append(None)
-        elif r.scope == LINE or float(np.dot(vecs[k], cents[r.name])) >= gate:
+        elif r.scope == LINE:
             out.append(r.name)
         else:
-            out.append(None)
+            own = float(np.dot(vecs[k], cents[r.name]))
+            other = max((float(np.dot(vecs[k], c)) for n, c in line_cents.items() if n != r.name), default=-1.0)
+            out.append(r.name if own >= gate and own >= other else None)
     return out
 
 

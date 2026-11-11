@@ -104,7 +104,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `shell.py` | Recycle Bin delete through `SHFileOperationW` (`recycle`), `has_recycle_bin` |
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
-| `tags.py` | Speaker names: `speaker_tags.jsonl` events, the reducer, `tagged_ranges`, `piece_names` (rules before clustering, the 0.70 gate), `map_final_speakers` (largest overlap, 25% conflict rule) |
+| `tags.py` | Speaker names: `speaker_tags.jsonl` events, the reducer, `tagged_ranges`, `piece_names` (rules before clustering: the tag gate, and a speaker name gives way to a closer line name), `map_final_speakers` (largest overlap, 25% conflict rule) |
 | `marks.py` | Bookmarks: `marks.jsonl` events, the reducer shared with the model, `MarkLog` (ids, the 2 s double-press rule, edits), the `mark_kinds` names |
 | `bookmark_types.py` | User-defined bookmark types (up to four): ids from names, validation (unique, length, hotkey clashes), what Settings stores |
 | `mute_reminder.py` | The "still muted" reminder every 10 minutes of continuous mute (clock injected) |

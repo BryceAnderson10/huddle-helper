@@ -216,8 +216,14 @@ clustering (`cluster_voices`, average linkage) and the small-cluster fold
 - **Which lines are named.** Line-level tags name that line; speaker-level tags name
   every live line with that label. A speaker-level tag on a live label that mixes two
   people (see Risks) would push wrong lines into a cluster, so speaker-level
-  tags count as rules only for lines whose voice is at least 0.7 like the rest of that
-  name's lines; the others are left to the clustering.
+  tags count as rules only for lines whose voice is at least the voice profile's tag gate
+  (`tag_gate`; 0.7 for the old model, 0.40 for ERes2Net) like the rest of that name's
+  lines, and only if the line is not more like another name's **line-named** lines; the
+  others are left to the clustering. The second condition comes from Test #7: a live label
+  named Remote B also held Remote H's update. Remote H's other lines still passed the gate
+  (0.41–0.60), because Remote B's average included them. The user named one of Remote H's
+  lines, and the rest were far more like that line (up to 0.89). Before this condition,
+  the speaker-level name won and pulled them into Remote B.
 
 ## Output contract changes
 

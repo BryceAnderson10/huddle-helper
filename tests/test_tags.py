@@ -222,6 +222,33 @@ def test_piece_names_line_tag_always_counts_and_speaker_tag_needs_0_70():
     assert tags.piece_names(pieces, [0, 1, 2, 3], vecs, w, ranges) == ["Ana", "Ana", "Ana", "Ben"]
 
 
+def two_voices_under_one_label():
+    """Test #7's shape: one live label named Ana holds 3 pieces of Ana and 3 of Ben; one of Ben's is named
+    Ben by line. Ben's other two pass a 0.40 gate against Ana's centroid (about 0.74), which they pull
+    towards themselves, but they are exactly like Ben's named line."""
+    specs = [("system", i * 5000, i * 5000 + 4000) for i in range(6)]
+    pieces = make_pieces(specs)
+    vecs = [vec(0.0), vec(0.0), vec(0.0), vec(1.2), vec(1.2), vec(1.2)]
+    w = [4.0] * 6
+    live = [seg("system", a, b, "SPEAKER_01") for _s, a, b in specs]
+    ranges = tags.tagged_ranges(tags.reduce([sp("SPEAKER_01", "Ana"), ln("system", 25_000, "Ben", 29_000)]), live)
+    return pieces, vecs, w, ranges
+
+
+def test_piece_names_speaker_name_gives_way_to_a_line_name_the_piece_sounds_more_like():
+    pieces, vecs, w, ranges = two_voices_under_one_label()
+    assert tags.piece_names(pieces, list(range(6)), vecs, w, ranges, gate=0.40) == \
+        ["Ana", "Ana", "Ana", None, None, "Ben"]
+
+
+def test_pieces_that_sound_like_a_line_name_cluster_with_it_not_with_the_speaker_name():
+    pieces, vecs, w, ranges = two_voices_under_one_label()
+    names = tags.piece_names(pieces, list(range(6)), vecs, w, ranges, gate=0.40)
+    labels = label_voices(vecs, w, 0.40, names, 0.40)
+    assert labels[3] == labels[4] == labels[5] != labels[0]
+    assert labels[0] == labels[1] == labels[2]
+
+
 def test_piece_names_uses_largest_overlap_same_stream_and_skips_unfingerprinted():
     pieces = make_pieces([("system", 0, 3000), ("mic", 0, 3000), ("system", 8000, 9000)])
     ranges = [tags.TaggedRange("system", 0, 1000, "Ana", "line"), tags.TaggedRange("system", 1000, 3000, "Ben", "line")]
