@@ -353,6 +353,13 @@ Items 1–4 feed WP12 and sharpen every later check; none blocks starting.
 
 - **Fitting to four recordings.** The new model's wide range is the protection; item 5
   above is the test. Re-run `models-score` on every new kept recording.
+- **Shipped below the §4.2 rule (accepted for user testing, 2026-11-11, #1).** ERes2Net's
+  `final_match` keeps the same speakers only from 0.34 to 0.47 (0.13 wide, under 0.15), and
+  the ±0.08 acceptance margin fails at 0.48. Accepted because the old model passed only
+  0.70–0.71 and the new one is better on every measure (live wrong labels 84 s → 8 s, confirmed
+  final speech wrong 1.4 s → 0 s). Watch for: one voice split in two, or two people merged, on
+  new recordings. Widening the top end is #23; the lower end rests on unconfirmed speaker
+  counts (#13); the other cutoffs' ranges are #33.
 - **Three of the four recordings are a video played as the call.** Real call audio with
   packet loss and crosstalk may behave differently; Test #4 is the only real one.
 - **Live cost of the new model.** It runs once per line at 1 thread beside Whisper. Measure
