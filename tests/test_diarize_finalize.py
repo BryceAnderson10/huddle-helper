@@ -371,6 +371,7 @@ def test_cmd_finalize_keeps_audio_unless_asked(tmp_path, monkeypatch):
 
 
 def test_voice_label_steps_match_combined_helper():
+    from huddle_helper.diarize import profile
     from huddle_helper.finalize import _voice_labels, assign_labels, embed_pieces, label_voices
 
     def pieces():
@@ -379,7 +380,7 @@ def test_voice_label_steps_match_combined_helper():
 
     embed = UnitEmbedder({0: unit(0), 5000: unit(1), 10000: unit(0)})
     whole, timings = pieces(), {}
-    _voice_labels(whole, embed, 0.65, timings)
+    _voice_labels(whole, embed, profile(final_match=0.65), timings)
     assert set(timings) == {"embed_pieces", "cluster"}
 
     steps = pieces()
@@ -507,3 +508,64 @@ def test_finalize_works_with_a_diarizer_without_last_timings(tmp_path):
     finalize_meeting(folder, FakeDiarizer, keep_audio=False)
     stages = folder.read_meta()["final_stats"]["stages"]
     assert "diarize_system" in stages and not any(k.startswith("merge_small") for k in stages)
+
+
+def test_voice_profiles_and_overrides():
+    """WP13: every cutoff belongs to a fingerprint model; a number given by hand replaces one value."""
+    from huddle_helper import models
+    from huddle_helper.diarize import PROFILES, SHIPPED_UNTIL_WP13, profile
+
+    shipped = profile()
+    assert shipped.model == models.EMBEDDING_NAME and shipped is PROFILES[models.EMBEDDING_NAME]
+    old = profile(SHIPPED_UNTIL_WP13)
+    assert (old.live_match, old.live_adopt, old.final_match, old.fold_min, old.tag_gate) == (0.75, 0.6, 0.70, 0.70, 0.70)
+    assert shipped.live_adopt < shipped.live_match and shipped.fold_min == shipped.final_match
+    changed = profile(final_match=0.5, live_match=None)
+    assert changed.final_match == 0.5 and changed.live_match == shipped.live_match
+    assert profile(final_match=None) is shipped
+
+
+def test_recorder_live_cutoffs_come_from_the_profile():
+    from huddle_helper.config import Settings
+    from huddle_helper.diarize import profile
+
+    assert Settings().voice_profile() == profile()
+    s = Settings(live_speaker_threshold=0.9, final_cluster_threshold=0.7)
+    assert (s.voice_profile().live_match, s.voice_profile().split_cluster) == (0.9, 0.7)
+    assert s.voice_profile().final_match == profile().final_match
+
+
+def test_cluster_voices_test3_with_the_shipped_model():
+    """Test #3 again with the model shipped since WP13 (A = 6 lines, B = 3, C = 4; confirmed apart).
+
+    Similarities copied from the kept audio. The three speakers must come out at the shipped
+    cutoff and 0.08 either side of it: the old model passed only from 0.70 to 0.71.
+    """
+    from huddle_helper.diarize import cluster_voices, fold_small_clusters, profile
+
+    groups = "AAAAAABBBCCCC"
+    G = np.array([
+        [1.00, 0.59, 0.63, 0.61, 0.42, 0.64, 0.14, 0.06, 0.17, 0.11, 0.19, 0.10, 0.09],
+        [0.59, 1.00, 0.68, 0.63, 0.43, 0.61, 0.13, 0.11, 0.20, 0.09, 0.18, 0.09, 0.08],
+        [0.63, 0.68, 1.00, 0.73, 0.44, 0.57, 0.24, 0.21, 0.24, 0.13, 0.25, 0.12, 0.09],
+        [0.61, 0.63, 0.73, 1.00, 0.37, 0.63, 0.23, 0.24, 0.26, 0.15, 0.21, 0.08, 0.06],
+        [0.42, 0.43, 0.44, 0.37, 1.00, 0.59, 0.16, 0.08, 0.18, 0.09, 0.12, -0.05, 0.04],
+        [0.64, 0.61, 0.57, 0.63, 0.59, 1.00, 0.14, 0.12, 0.22, 0.17, 0.20, 0.09, 0.13],
+        [0.14, 0.13, 0.24, 0.23, 0.16, 0.14, 1.00, 0.70, 0.73, 0.07, 0.13, 0.07, 0.05],
+        [0.06, 0.11, 0.21, 0.24, 0.08, 0.12, 0.70, 1.00, 0.61, 0.06, 0.06, 0.04, 0.10],
+        [0.17, 0.20, 0.24, 0.26, 0.18, 0.22, 0.73, 0.61, 1.00, 0.04, 0.09, -0.01, -0.02],
+        [0.11, 0.09, 0.13, 0.15, 0.09, 0.17, 0.07, 0.06, 0.04, 1.00, 0.75, 0.83, 0.79],
+        [0.19, 0.18, 0.25, 0.21, 0.12, 0.20, 0.13, 0.06, 0.09, 0.75, 1.00, 0.69, 0.66],
+        [0.10, 0.09, 0.12, 0.08, -0.05, 0.09, 0.07, 0.04, -0.01, 0.83, 0.69, 1.00, 0.88],
+        [0.09, 0.08, 0.09, 0.06, 0.04, 0.13, 0.05, 0.10, -0.02, 0.79, 0.66, 0.88, 1.00],
+    ])
+    vals, vecs = np.linalg.eigh(G)
+    X = vecs * np.sqrt(np.clip(vals, 0, None))
+    X = list(X / np.linalg.norm(X, axis=1, keepdims=True))
+    durations = [5.8, 4.0, 2.2, 1.6, 2.2, 3.9, 10.9, 2.6, 3.3, 11.1, 2.8, 10.0, 9.3]
+    centre = profile().final_match
+    for t in (centre - 0.08, centre, centre + 0.08):
+        labels = fold_small_clusters(cluster_voices(X, durations, threshold=t), X, durations, min_similarity=t)
+        by_group = {g: {lab for lab, x in zip(labels, groups) if x == g} for g in "ABC"}
+        assert all(len(v) == 1 for v in by_group.values()), (t, by_group)
+        assert len(set.union(*by_group.values())) == 3, (t, by_group)

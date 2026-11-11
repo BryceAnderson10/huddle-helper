@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 import os
 import shutil
 import time
@@ -31,7 +32,7 @@ import numpy as np
 
 from .audio import SAMPLE_RATE
 from .diarize import (MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OfflineDiarizer, Turn,
-                      cluster_voices, fold_small_clusters, label)
+                      VoiceProfile, cluster_voices, fold_small_clusters, label, profile)
 from .segments import Segment, Word
 from .writer import read_events, write_transcript
 
@@ -191,17 +192,20 @@ def embed_pieces(pieces: Pieces, embed: Embed, progress: Callable[[float], None]
 
 
 def label_voices(vecs: list[np.ndarray], weights: list[float], threshold: float,
-                 names: list[str | None] | None = None) -> list[int]:
+                 names: list[str | None] | None = None, fold_min: float | None = None) -> list[int]:
     """Cluster voice fingerprints over the whole meeting, then fold clusters with very little speech.
 
     ``names`` (one per vector, None for an unnamed piece) are the user's rules: differently named
     pieces never share a cluster, and a cluster holding a name is never folded into one that is unnamed
-    or has another name (it may fold into a larger cluster with the same name)."""
+    or has another name (it may fold into a larger cluster with the same name). ``fold_min`` is how alike
+    a small cluster must be to fold; None means the same as ``threshold``."""
+    fold_min = threshold if fold_min is None else fold_min
     if names is None or not any(names):
-        return fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights)
+        return fold_small_clusters(cluster_voices(vecs, weights, threshold), vecs, weights, min_similarity=fold_min)
     labels = cluster_voices(vecs, weights, threshold, names)
     cluster_names = {labels[k]: n for k, n in enumerate(names) if n}  # at most one name per cluster
-    return fold_small_clusters(labels, vecs, weights, protected=set(cluster_names), cluster_names=cluster_names)
+    return fold_small_clusters(labels, vecs, weights, min_similarity=fold_min, protected=set(cluster_names),
+                               cluster_names=cluster_names)
 
 
 def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
@@ -219,7 +223,7 @@ def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
         seg.speaker = f"#v{assigned[i]}"
 
 
-def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
+def _voice_labels(pieces: Pieces, embed: Embed, voice: VoiceProfile,
                   timings: dict[str, float] | None = None,
                   progress: Callable[[float], None] | None = None,
                   ranges: list[tags_mod.TaggedRange] | None = None) -> None:
@@ -238,8 +242,8 @@ def _voice_labels(pieces: Pieces, embed: Embed, threshold: float,
         return
     t0 = time.perf_counter()
     try:
-        names = tags_mod.piece_names(pieces, idx, vecs, weights, ranges) if ranges else None
-        assign_labels(pieces, idx, label_voices(vecs, weights, threshold, names))
+        names = tags_mod.piece_names(pieces, idx, vecs, weights, ranges, voice.tag_gate) if ranges else None
+        assign_labels(pieces, idx, label_voices(vecs, weights, voice.final_match, names, voice.fold_min))
     finally:
         if timings is not None:
             timings["cluster"] = timings.get("cluster", 0.0) + time.perf_counter() - t0
@@ -298,10 +302,11 @@ def split_pieces(segments: list[Segment], words: dict[tuple[str, int], list[Word
 
 def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
-            embed: Embed | None = None, voice_threshold: float = 0.70,
+            embed: Embed | None = None, voice_threshold: float | None = None,
             timings: dict[str, float] | None = None,
             progress: Callable[[float], None] | None = None,
-            ranges: list[tags_mod.TaggedRange] | None = None) -> list[Segment]:
+            ranges: list[tags_mod.TaggedRange] | None = None,
+            voice: VoiceProfile | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
     With ``embed`` (the buffered audio is available), each line is split where the offline
@@ -310,8 +315,13 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
     speaker ids are used. ``turns_by_source[src] is None`` and no ``embed`` keeps live labels.
     ``timings`` (optional) collects seconds under "embed_pieces" and "cluster"; ``progress``
     (optional) gets the fraction of all pieces fingerprinted. ``ranges`` (optional) are the live lines
-    the user named (``tags.tagged_ranges``); they steer the clustering (L14).
+    the user named (``tags.tagged_ranges``); they steer the clustering (L14). ``voice`` holds the
+    fingerprint model's cutoffs (default: the shipped model's); a ``voice_threshold`` replaces its
+    ``final_match``.
     """
+    voice = voice or profile()
+    if voice_threshold is not None:
+        voice = replace(voice, final_match=voice_threshold)
     out, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, embed is not None)
     total = sum(len(p) for p in pieces_by_source.values()) or 1
     done = 0
@@ -323,7 +333,7 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
 
         done += len(pieces)
         try:
-            _voice_labels(pieces, embed, voice_threshold, timings, part, ranges)
+            _voice_labels(pieces, embed, voice, timings, part, ranges)
         except Exception:  # noqa: BLE001 - fall back to the diarizer's labels
             log.exception("Voice clustering failed for %s; using diarizer labels", source)
         out.extend(_rejoin_lines(pieces, words))
@@ -443,7 +453,7 @@ def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
                      keep_audio: bool, progress: Progress | None = None,
                      embedder_factory: Callable[[], Embedder] | None = None,
-                     voice_threshold: float = 0.70) -> int:
+                     voice_threshold: float | None = None, voice: VoiceProfile | None = None) -> int:
     """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count."""
     progress = progress or (lambda stage, frac: None)
     t_start = time.perf_counter()
@@ -517,7 +527,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     voice_timings: dict[str, float] = {}
     ranges = tags_mod.tagged_ranges(read_tags(folder), segments)  # the user's names as rules; [] without tags
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
-                             voice_timings, lambda f: progress("Grouping voices", f), ranges or None)
+                             voice_timings, lambda f: progress("Grouping voices", f), ranges or None, voice)
     final_segments = join_fragments(final_segments)
     if embed is not None:
         stages.update(voice_timings)

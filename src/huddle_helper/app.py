@@ -625,13 +625,14 @@ class AppController:
                           finalize=FinalizeProgress(folder.meeting_id, SPEAKER_STAGE))
                 keep = folder.read_meta().get("settings", {}).get("keep_audio", self.settings.keep_audio)
                 # Read when the models load, so a meeting started meanwhile gets 1 thread.
+                voice = self.settings.voice_profile()
                 finalize_meeting(
                     folder, lambda: SherpaOfflineDiarizer(
-                        threshold=self.settings.final_cluster_threshold, merge_small=False,
+                        threshold=voice.split_cluster, merge_small=False,
                         num_threads=final_threads(self.is_recording)),
                     keep_audio=keep, progress=progress,
                     embedder_factory=lambda: SherpaEmbedder(num_threads=final_threads(self.is_recording)),
-                    voice_threshold=self.settings.final_voice_threshold)
+                    voice=voice)
                 self._notify(f"Final transcript ready: {folder.meeting_id}")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Finalizing %s failed", folder.meeting_id)

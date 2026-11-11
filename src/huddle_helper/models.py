@@ -6,6 +6,7 @@ Once models are installed, recording and finalizing run fully offline.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -34,9 +35,13 @@ WHISPER_FILES = ("config.json", "tokenizer.json", "vocabulary.txt", "model.bin")
 _SHERPA = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 SEGMENTATION_NAME = "pyannote-segmentation-3-0"
 SEGMENTATION_URL = f"{_SHERPA}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-EMBEDDING_NAME = "wespeaker_en_voxceleb_resnet34_LM"
+SEGMENTATION_SHA256 = "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"  # of the archive
+# 3D-Speaker ERes2Net, English (WP13). Its cutoffs are diarize.PROFILES[EMBEDDING_NAME]. The model
+# shipped before, wespeaker_en_voxceleb_resnet34_LM, is no longer used; its file is left in place.
+EMBEDDING_NAME = "3dspeaker_speech_eres2net_sv_en_voxceleb_16k"
 # The upstream release tag really is spelled "recongition".
-EMBEDDING_URL = f"{_SHERPA}/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx"
+EMBEDDING_URL = f"{_SHERPA}/speaker-recongition-models/{EMBEDDING_NAME}.onnx"
+EMBEDDING_SHA256 = "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"  # the release's checksum.txt
 
 Progress = Callable[[str], None]
 
@@ -81,13 +86,21 @@ def missing_models(whisper_name: str, need_diarization: bool, root: Path | None 
     return missing
 
 
-def _download(url: str, dest: Path, progress: Progress | None) -> None:
+def _download(url: str, dest: Path, progress: Progress | None, sha256: str | None = None) -> None:
+    """Download to ``dest``. With ``sha256`` the file is checked before it gets its name; a wrong
+    file is deleted and raises OSError, so a damaged or swapped download is never used."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if progress:
         progress(f"Downloading {url.rsplit('/', 1)[-1]}")
     tmp = dest.with_suffix(dest.suffix + ".part")
+    digest = hashlib.sha256()
     with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as fh:
-        shutil.copyfileobj(resp, fh, length=1 << 20)
+        while chunk := resp.read(1 << 20):
+            digest.update(chunk)
+            fh.write(chunk)
+    if sha256 is not None and digest.hexdigest() != sha256:
+        tmp.unlink(missing_ok=True)
+        raise OSError(f"{url.rsplit('/', 1)[-1]} did not match its checksum; download it again")
     os.replace(tmp, dest)
 
 
@@ -120,12 +133,12 @@ def install_diarization(root: Path | None = None, progress: Progress | None = No
     if not seg.exists():
         with tempfile.TemporaryDirectory() as tmpdir:
             archive = Path(tmpdir) / "seg.tar.bz2"
-            _download(SEGMENTATION_URL, archive, progress)
+            _download(SEGMENTATION_URL, archive, progress, SEGMENTATION_SHA256)
             with tarfile.open(archive, "r:bz2") as tar:
                 tar.extractall(seg.parent.parent, filter="data")
     emb = embedding_model(root)
     if not emb.exists():
-        _download(EMBEDDING_URL, emb, progress)
+        _download(EMBEDDING_URL, emb, progress, EMBEDDING_SHA256)
 
 
 def install_all(whisper_name: str, need_diarization: bool = True, root: Path | None = None,

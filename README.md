@@ -8,7 +8,7 @@ transcripts as JSONL into a local folder for a separate app to analyze.
   bot, no virtual audio driver, works with any call app.
 * Silero VAD cuts speech into utterances; faster-whisper (English, int8, CPU) transcribes them.
 * Live speaker labels from voice fingerprints; a refined pass after Stop (pyannote
-  segmentation + WeSpeaker embeddings via sherpa-onnx) writes `transcript.final.jsonl`.
+  segmentation + 3D-Speaker ERes2Net voice fingerprints via sherpa-onnx) writes `transcript.final.jsonl`.
 * Lines are flushed as they're final; a single writer merges both streams in time order.
 * Mic lines that echo the call (no headphones) are dropped.
 * After models are installed the app makes no network calls.

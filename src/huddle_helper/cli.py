@@ -76,11 +76,12 @@ def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> Non
         print(f"\r{stage}: {frac:4.0%}   ", end="", flush=True)
 
     threads = final_threads()
+    voice = s.voice_profile()
     count = finalize_meeting(folder, lambda: SherpaOfflineDiarizer(
-                                 threshold=s.final_cluster_threshold, merge_small=False, num_threads=threads),
+                                 threshold=voice.split_cluster, merge_small=False, num_threads=threads),
                              keep_audio=s.keep_audio if keep_audio is None else keep_audio,
                              progress=progress, embedder_factory=lambda: SherpaEmbedder(num_threads=threads),
-                             voice_threshold=s.final_voice_threshold)
+                             voice=voice)
     print(f"\nFinal transcript: {folder.final_path} ({count} segments)")
 
 

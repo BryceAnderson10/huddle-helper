@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -40,16 +40,61 @@ def final_threads(recording: bool = False, cpu_count: int | None = None) -> int:
     return min(4, max(1, (cpu_count or os.cpu_count() or 2) // 2))
 
 
+@dataclass(frozen=True)
+class VoiceProfile:
+    """The similarity cutoffs that belong to one fingerprint model.
+
+    Every model scores "how alike are these two voices" on its own scale, so the cutoffs travel
+    with the model and not with the user's settings. Each value is the centre of the range that
+    passed on the kept recordings (TODO.md, "Speakers: other fingerprint models"); the range is
+    in the comment beside it.
+    """
+    model: str  # file stem, as models.EMBEDDING_NAME
+    live_match: float  # OnlineClusterer: at least this alike is the same live speaker
+    live_adopt: float  # OnlineClusterer: a weakly known speaker adopts a long line this alike
+    final_match: float  # cluster_voices: clusters at least this alike are merged
+    fold_min: float  # fold_small_clusters: a small cluster folds only into one this alike
+    tag_gate: float  # tags.piece_names: a speaker-level name steers a piece only if this alike
+    split_cluster: float  # sherpa's offline clustering, which only decides where lines split
+
+
+SHIPPED_UNTIL_WP13 = "wespeaker_en_voxceleb_resnet34_LM"
+PROFILES: dict[str, VoiceProfile] = {
+    # The model shipped until WP13. final_match passed only from 0.70 to 0.71 (WP1: 0.685-0.71).
+    SHIPPED_UNTIL_WP13: VoiceProfile(SHIPPED_UNTIL_WP13, live_match=0.75, live_adopt=0.6, final_match=0.70,
+                                     fold_min=0.70, tag_gate=0.70, split_cluster=0.6),
+    # 3D-Speaker ERes2Net, English. final_match: on the pieces the final pass really makes, confirmed
+    # speech has 0 s wrong from 0.27 to 0.47 (Tests #3-#5), and every recording keeps the same
+    # speakers from 0.34 to 0.47 (below 0.34 speakers nobody has confirmed start to merge; from 0.48
+    # the two halves of Test #5's 5 s speaker stop joining and are folded away by the under-4 s rule).
+    # 0.40 is the centre of that. On fixed pieces the range ran to 0.60. live_match from 0.35 to 0.55 (replay of Tests #2-#5, tools/live_lab.py), adopt had no effect
+    # from 0.25 to 0.40. split_cluster: 0.6 to 0.9 all give the old model's number of pieces within
+    # 10%; 0.9 gives the fewest invented speakers (sherpa's value is a distance: higher means fewer).
+    "3dspeaker_speech_eres2net_sv_en_voxceleb_16k": VoiceProfile(
+        "3dspeaker_speech_eres2net_sv_en_voxceleb_16k", live_match=0.42, live_adopt=0.30, final_match=0.40,
+        fold_min=0.40, tag_gate=0.40, split_cluster=0.9),
+}
+
+
+def profile(model: str | None = None, **overrides: float | None) -> VoiceProfile:
+    """The cutoffs for ``model`` (default: the model the app ships). ``overrides`` that are not None
+    replace single values, which is how a number saved in Settings or given in the lab wins."""
+    base = PROFILES[model or models.EMBEDDING_NAME]
+    given = {k: v for k, v in overrides.items() if v is not None}
+    return replace(base, **given) if given else base
+
+
 class Embedder(Protocol):
     def embed(self, audio: np.ndarray) -> np.ndarray | None: ...
 
 
 class SherpaEmbedder:
-    def __init__(self, models_root: Path | None = None, num_threads: int = 1):
+    def __init__(self, models_root: Path | None = None, num_threads: int = 1, model_path: Path | None = None):
+        """``model_path`` (the lab) runs another fingerprint model file than the installed one."""
         import sherpa_onnx
 
         cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-            model=str(models.embedding_model(models_root)), num_threads=num_threads)
+            model=str(model_path or models.embedding_model(models_root)), num_threads=num_threads)
         if not cfg.validate():
             raise FileNotFoundError("Speaker embedding model is not installed")
         self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
@@ -352,10 +397,15 @@ def speaker_centroids(audio: np.ndarray, turns: list[Turn], embedder: Embedder) 
 
 
 class SherpaOfflineDiarizer:
-    def __init__(self, models_root: Path | None = None, threshold: float = 0.6, num_threads: int = 2,
-                 merge_small: bool = True):
+    def __init__(self, models_root: Path | None = None, threshold: float | None = None, num_threads: int = 2,
+                 merge_small: bool = True, embedding_path: Path | None = None):
+        """``threshold`` None means the shipped model's ``split_cluster``. ``embedding_path`` (the lab)
+        runs another fingerprint model file than the installed one."""
         import sherpa_onnx
 
+        if threshold is None:
+            threshold = profile().split_cluster
+        self._embedding_path = embedding_path
         self._models_root = models_root
         self._merge_small = merge_small
         self._num_threads = num_threads
@@ -368,7 +418,7 @@ class SherpaOfflineDiarizer:
                 num_threads=num_threads,
             ),
             embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-                model=str(models.embedding_model(models_root)), num_threads=num_threads),
+                model=str(embedding_path or models.embedding_model(models_root)), num_threads=num_threads),
             clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=threshold),
             min_duration_on=0.3,
             min_duration_off=0.5,
@@ -391,7 +441,8 @@ class SherpaOfflineDiarizer:
         turns = [Turn(int(r.start * 1000), int(r.end * 1000), int(r.speaker)) for r in result]
         if self._merge_small and len({t.speaker for t in turns}) > 1:
             t0 = time.perf_counter()
-            centroids = speaker_centroids(audio, turns, SherpaEmbedder(self._models_root, self._num_threads))
+            centroids = speaker_centroids(audio, turns, SherpaEmbedder(self._models_root, self._num_threads,
+                                                                       self._embedding_path))
             turns = merge_small_speakers(turns, centroids)
             self.last_timings["merge_small"] = time.perf_counter() - t0
         return turns

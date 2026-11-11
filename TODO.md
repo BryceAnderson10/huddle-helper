@@ -817,3 +817,45 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   Average over eight sets: Parakeet v2 6.05%, distil-large-v3.5 7.21%, large-v3 7.44%,
   large-v3-turbo 7.83%. A sherpa-onnx int8 build exists (CC-BY-4.0). Not known: its speed on
   our CPUs, and whether a vocabulary can be given to it.
+
+## From the fingerprint model swap (WP12 tools, WP13)
+
+- [x] **The app now ships 3D-Speaker ERes2Net (English)** in place of wespeaker ResNet34-LM
+  (same 26 MB, Apache-2.0, checksum checked on download). Chosen over TitaNet small: equal on
+  final and live labels, better on pieces under 2 s (pair ranking 0.999 against 0.993 on
+  Test #4), and no licence attribution to carry. TitaNet small is 3x faster per line (33 ms
+  against 99 ms at 1 thread) if live speed ever matters; ERes2Net costs the same as the old model.
+- [x] **Cutoffs moved into one profile per model** (`diarize.PROFILES`). The three numbers in
+  Settings now default to "the profile's value"; settings version 5 drops numbers saved for the
+  old model. Values: live match 0.42, live adopt 0.30, final match / fold / tag gate 0.40,
+  split clustering 0.9.
+
+  | Check (real final pass on copies, `lab\wp13`) | Old model | New model |
+  | --- | --- | --- |
+  | Confirmed speech with the wrong speaker, Tests #3-#5 | 1.4 s at 0.70, passes 0.70-0.71 | 0 s from 0.27 to 0.47 |
+  | Same speakers on every recording | - | from 0.34 to 0.47 |
+  | Test #5 remote speakers | 51 s + 19 s (one voice split) | 64 s + 5 s without names |
+  | Test #4 remote speakers | 5 (534 s, 325, 72, 37, 12) | 6 (351, 341, 188, 114, 45, 13) |
+  | Test #2 remote speakers | 2 (107, 84) | 4 (91, 42, 41, 26) |
+  | Test #3, TTS sample (`pytest -m models`) | 3, 2 | 3, 2 |
+  | Live replay: confirmed speech with the wrong live label (`tools/live_lab.py`) | 84 s | 8 s (match 0.38-0.46) |
+  | Live replay: live speakers / final speakers, Tests #2-#5 | 2/2, 3/3, 7/5, 5/2 | 4/4, 3/3, 7/6, 2/2 |
+  | Final pass, Test #4, 4 threads, PC busy with other jobs | 197 s when idle | 250 s |
+
+- [ ] **The range is 0.13 wide where the plan asked for 0.15**, and its upper end is set by an
+  old patch, not by the model: from 0.48 the two halves of Test #5's 5 s speaker stop joining,
+  and `fold_small_clusters` then gives each half away because a cluster under 4 s is always
+  folded. That rule was written for the old model's unreliable short pieces. *Next:* fold a
+  cluster under 4 s only when it is alike enough, and measure; nothing was removed in WP13.
+- [ ] **Test #5 with its names still reads 13 s + 64 s**: the named speaker holds the opening
+  lines plus the other person's 71 s line, exactly the open "speaker tag carried a later live
+  mistake" item above. The model swap does not touch that rule.
+- [ ] **Split points:** pieces per recording are within 10% of before at any split setting from
+  0.6 to 0.9 (Test #2 44 → 43, Test #3 15 → 16, Test #5 31 → 32, Test #4 190 → 184 final
+  lines). Line boundaries that moved were not read one by one.
+- [ ] **Not done:** the final-pass time was not measured on an idle PC or on the laptop; the
+  WP8/WP11 runs with names on Tests #3 and #4 were not repeated; the wespeaker check (why the
+  larger wespeaker models do badly here) was started and stopped by a usage limit; the exe
+  was not rebuilt yet.
+- [ ] **Needs Bryce:** how many people speak in Test #2 (now four), whether six remote speakers
+  is right for Test #4, and whether Test #5's 71 s line is the second person.

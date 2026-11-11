@@ -30,7 +30,8 @@ from huddle_helper import meeting as mt
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.audio.buffer import read_audio
 from huddle_helper.config import Settings
-from huddle_helper.diarize import SherpaEmbedder, SherpaOfflineDiarizer, cluster_voices, fold_small_clusters
+from huddle_helper.diarize import (SherpaEmbedder, SherpaOfflineDiarizer, cluster_voices, fold_small_clusters,
+                                   profile)
 from huddle_helper.finalize import embed_pieces, load_words, split_pieces
 from huddle_helper.segments import Segment
 from huddle_helper.writer import read_events
@@ -38,10 +39,23 @@ from huddle_helper.writer import read_events
 DEFAULT_THRESHOLDS = "0.60,0.65,0.70,0.75,0.80"
 
 
+def voice_for(stem: str | None):
+    """(cutoffs, model file) for ``--embedding STEM``; (the shipped model's cutoffs, None) without it.
+
+    The file is looked for under lab/models (any subfolder). A model with no entry in
+    diarize.PROFILES cannot be run through the final pass: add its cutoffs there first."""
+    if not stem:
+        return profile(), None
+    path = next((Path("lab") / "models").rglob(stem + ".onnx"), None)
+    if path is None:
+        raise SystemExit(f"no {stem}.onnx under lab/models")
+    return profile(stem), path
+
+
 # -- embed ---------------------------------------------------------------
 def cmd_embed(args) -> int:
     folder = mt.MeetingFolder(Path(args.folder))
-    settings = Settings()
+    voice, model_path = voice_for(args.embedding)
     meta = folder.read_meta()
     seg_events = [e for e in read_events(folder.live_path) if e.get("type") == "segment"]
     segments = [Segment.from_event(e) for e in seg_events]
@@ -61,14 +75,14 @@ def cmd_embed(args) -> int:
         audio[src] = read_audio(folder.audio_file(src))
         timings["read_audio"] = timings.get("read_audio", 0.0) + time.perf_counter() - t0
         t0 = time.perf_counter()
-        diarizer = diarizer or SherpaOfflineDiarizer(threshold=settings.final_cluster_threshold)
+        diarizer = diarizer or SherpaOfflineDiarizer(threshold=voice.split_cluster, embedding_path=model_path)
         turns_by_source[src] = diarizer.diarize(audio[src])
         timings[f"diarize_{src}"] = time.perf_counter() - t0
     if not audio:
         print("nothing to embed")
         return 1
 
-    embedder = SherpaEmbedder()
+    embedder = SherpaEmbedder(model_path=model_path)
 
     def embed(source: str, start_ms: int, end_ms: int):
         a = audio.get(source)
@@ -97,7 +111,7 @@ def cmd_embed(args) -> int:
     out.mkdir(parents=True, exist_ok=True)
     stem = out / folder.meeting_id
     np.savez(stem.with_suffix(".npz"), **arrays)
-    meta_out = {"meeting": folder.meeting_id, "cluster_threshold": settings.final_cluster_threshold,
+    meta_out = {"meeting": folder.meeting_id, "cluster_threshold": voice.split_cluster, "model": voice.model,
                 "audio_s": round(max(len(a) for a in audio.values()) / SAMPLE_RATE, 2),
                 "timings_s": {k: round(v, 2) for k, v in timings.items()}, "pieces": info}
     stem.with_suffix(".json").write_text(json.dumps(meta_out, indent=1), encoding="utf-8")
@@ -427,7 +441,7 @@ def cmd_score(args) -> int:
             cells, wrong, total = [], 0.0, 0.0
             for v, w, pieces, truth, starts in ctx.values():
                 raw = anchors_first(v, w, starts, t, anchor_s, -1.0) if anchor_s else cluster_voices(v, w, t)
-                s, m, tot = truth_errors(truth, pieces, fold_small_clusters(raw, v, w), w)
+                s, m, tot = truth_errors(truth, pieces, fold_small_clusters(raw, v, w, min_similarity=t), w)
                 cells.append(f"{s:.1f} / {m:.1f}")
                 wrong, total = wrong + s + m, total + tot
             print(f"| {mode} T={t:.2f} | " + " | ".join(cells) + f" | {wrong:.1f} s of {total:.0f} |")
@@ -527,13 +541,13 @@ def cmd_finalize(args) -> int:
     for name in ("transcript.final.jsonl", "DONE"):
         (dest / name).unlink(missing_ok=True)
     folder = mt.MeetingFolder(dest)
-    s = Settings()
+    voice, model_path = voice_for(args.embedding)
     n = args.threads  # 0: the old defaults (diarizer 2 threads, embedder 1)
     count = finalize_meeting(
-        folder, lambda: SherpaOfflineDiarizer(threshold=s.final_cluster_threshold, num_threads=n or 2,
-                                              merge_small=args.merge_small),
-        keep_audio=True, embedder_factory=lambda: SherpaEmbedder(num_threads=n or 1),
-        voice_threshold=s.final_voice_threshold)
+        folder, lambda: SherpaOfflineDiarizer(threshold=voice.split_cluster, num_threads=n or 2,
+                                              merge_small=args.merge_small, embedding_path=model_path),
+        keep_audio=True, embedder_factory=lambda: SherpaEmbedder(num_threads=n or 1, model_path=model_path),
+        voice=voice)
     print(f"{count} segments -> {folder.final_path}")
     print("final_stats:", json.dumps(folder.read_meta().get("final_stats")))
     totals: dict[str, float] = {}
@@ -550,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("embed", help="cache fingerprints of a meeting folder's pieces")
     p.add_argument("folder")
     p.add_argument("--out", default=str(Path("lab") / "cache"))
+    p.add_argument("--embedding", help="fingerprint model file stem under lab/models (default: the shipped model)")
     p.set_defaults(fn=cmd_embed)
     p = sub.add_parser("sweep", help="cluster the cache at several thresholds and check a truth file")
     p.add_argument("cache", help="the .json or .npz written by embed")
@@ -588,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--merge-small", action=argparse.BooleanOptionalAction, default=True,
                    help="sherpa diarizer's merge_small step (default on)")
     p.add_argument("--threads", type=int, default=0, help="threads for embedder and diarizer; 0 = old defaults")
+    p.add_argument("--embedding", help="fingerprint model file stem under lab/models (default: the shipped model)")
     p.set_defaults(fn=cmd_finalize)
     args = ap.parse_args(argv)
     return args.fn(args)

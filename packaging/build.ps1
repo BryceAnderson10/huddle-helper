@@ -21,6 +21,9 @@ if (-not $NoModels) {
     $dst = Join-Path $root "dist\HuddleHelper\models"
     New-Item -ItemType Directory -Force "$dst\whisper", "$dst\diarization" | Out-Null
     Copy-Item -Recurse -Force "$src\whisper\faster-whisper-$Model" "$dst\whisper\"
-    Copy-Item -Recurse -Force "$src\diarization\*" "$dst\diarization\"
+    # Only the models this build uses: the user folder may still hold an older fingerprint model.
+    $emb = & $py -c "from huddle_helper import models; print(models.EMBEDDING_NAME)"
+    Copy-Item -Recurse -Force "$src\diarization\sherpa-onnx-pyannote-segmentation-3-0" "$dst\diarization\"
+    Copy-Item -Force "$src\diarization\$emb.onnx" "$dst\diarization\"
 }
 Write-Host "Built dist\HuddleHelper\HuddleHelper.exe"

@@ -272,12 +272,13 @@ class Recorder:
             self._workers[src] = _StreamWorker(src, self, scorer_factory(),
                                                FlacBuffer(self.folder.audio_file(src)), s,
                                                RecentAudio(playback.RING_SECONDS))
+        voice = s.voice_profile()
         if s.diarize_system:
-            self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, s.live_speaker_threshold,
-                                                         s.live_min_new_speaker_s)
+            self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, voice.live_match, s.live_min_new_speaker_s,
+                                                         adopt_threshold=voice.live_adopt)
         if s.diarize_mic:
-            self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, s.live_speaker_threshold,
-                                                      s.live_min_new_speaker_s)
+            self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, voice.live_match, s.live_min_new_speaker_s,
+                                                      adopt_threshold=voice.live_adopt)
 
         capture_factory = self.c.capture_factory
         if capture_factory is None:

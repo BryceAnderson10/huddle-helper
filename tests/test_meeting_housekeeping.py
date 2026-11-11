@@ -1,6 +1,7 @@
 import os
 import time
 
+from huddle_helper.diarize import profile
 from huddle_helper import config, housekeeping, meeting as mt
 from huddle_helper.writer import JsonlWriter, meeting_start_event, read_events
 
@@ -70,19 +71,28 @@ def test_settings_migration_resets_old_live_threshold(tmp_path):
     # A v1 file as saved by the Settings dialog before Test #2's tuning.
     path.write_text('{"live_speaker_threshold": 0.6, "keep_audio": true}', encoding="utf-8")
     s = config.load(path)
-    assert s.live_speaker_threshold == 0.75 and s.keep_audio is True
+    assert s.live_speaker_threshold is None and s.keep_audio is True
     # A v2 file saved after the Test #2 fixes carries min-new-speaker 1.5; v3 makes it 2.0.
     path.write_text('{"settings_version": 2, "live_speaker_threshold": 0.75, "live_min_new_speaker_s": 1.5}',
                     encoding="utf-8")
     assert config.load(path).live_min_new_speaker_s == 2.0
     # v4 moves the final voice threshold from 0.65 to 0.70 (gated fold, Test #4).
     path.write_text('{"settings_version": 3, "final_voice_threshold": 0.65}', encoding="utf-8")
-    assert config.load(path).final_voice_threshold == 0.70
+    assert config.load(path).final_voice_threshold is None
     assert s.settings_version == config.SETTINGS_VERSION
+    # v5 (WP13): a new fingerprint model. Numbers saved for the old one are dropped, and the cutoffs
+    # come from the shipped model's profile.
+    path.write_text('{"settings_version": 4, "live_speaker_threshold": 0.75, "final_voice_threshold": 0.70, '
+                    '"final_cluster_threshold": 0.6, "keep_audio": true}', encoding="utf-8")
+    s4 = config.load(path)
+    assert (s4.live_speaker_threshold, s4.final_voice_threshold, s4.final_cluster_threshold) == (None, None, None)
+    assert s4.keep_audio is True and s4.voice_profile() == profile()
     # A value saved on purpose under the current version is respected.
     s.live_speaker_threshold = 0.8
     config.save(s, path)
     assert config.load(path).live_speaker_threshold == 0.8
+    assert config.load(path).voice_profile().live_match == 0.8
+    assert config.load(path).voice_profile().final_match == profile().final_match
 
 
 def test_settings_roundtrip_ignores_unknown_keys(tmp_path):

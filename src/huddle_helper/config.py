@@ -16,11 +16,14 @@ log = logging.getLogger(__name__)
 # Bump when a tuning default changes; ``_MIGRATIONS`` lists the keys whose saved values
 # from older versions are dropped so the new default applies. (Those keys aren't in the
 # Settings dialog; the dialog saves every field, so old defaults would otherwise stick.)
-SETTINGS_VERSION = 4
+SETTINGS_VERSION = 5
 _MIGRATIONS = {
     2: ("live_speaker_threshold",),  # 0.6 -> 0.75, measured on real meeting audio (Test #2)
     3: ("live_min_new_speaker_s",),  # 1.5 -> 2.0, short opening lines (Test #3)
     4: ("final_voice_threshold",),  # 0.65 -> 0.70 with the gated fold, keeps Test #4's 28 s speaker apart
+    # WP13: a new fingerprint model with its own score scale. The cutoffs now come from the model's
+    # profile (diarize.PROFILES); a saved number from the old model would be wrong for the new one.
+    5: ("live_speaker_threshold", "final_voice_threshold", "final_cluster_threshold"),
 }
 
 
@@ -45,10 +48,12 @@ class Settings:
     # Speaker labels (F5).
     diarize_system: bool = True
     diarize_mic: bool = False
-    live_speaker_threshold: float = 0.75
+    # The three cutoffs depend on the fingerprint model. None (the default) means the value in that
+    # model's profile, see voice_profile(); a number here overrides it (the lab and tests do this).
+    live_speaker_threshold: float | None = None
     live_min_new_speaker_s: float = 2.0
-    final_cluster_threshold: float = 0.6  # offline diarizer; now only decides where lines split
-    final_voice_threshold: float = 0.70  # whole-meeting voice clustering for final labels
+    final_cluster_threshold: float | None = None  # offline diarizer; only decides where lines split
+    final_voice_threshold: float | None = None  # whole-meeting voice clustering for final labels
 
     # Echo handling.
     echo_dedupe: bool = True
@@ -83,6 +88,13 @@ class Settings:
     @property
     def needs_diarization(self) -> bool:
         return self.diarize_system or self.diarize_mic
+
+    def voice_profile(self):
+        """The shipped fingerprint model's cutoffs, with any numbers set here in their place."""
+        from .diarize import profile  # here, not at the top: diarize needs numpy, Settings should not
+
+        return profile(live_match=self.live_speaker_threshold, final_match=self.final_voice_threshold,
+                       split_cluster=self.final_cluster_threshold)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
