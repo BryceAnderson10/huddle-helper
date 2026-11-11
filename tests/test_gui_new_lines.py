@@ -78,3 +78,12 @@ def test_the_button_covers_no_transcript_text(root):
     scroll_up_and_add(view, m, 3)
     assert view.new_button.winfo_ismapped()
     assert not overlaps(rect(view.new_button), rect(view.text))
+
+
+def test_a_few_pixels_up_from_the_end_counts_as_scrolled_up(root):
+    view, m = make_view(root)
+    view.text.yview_moveto(view.text.yview()[0] - 0.01)  # less than a row up: the newest line is still in view
+    view.update()
+    assert newest_line_in_view(view) and not view.at_bottom
+    add_lines(view, m, 1)
+    assert view.new_button.cget("text") == "↓ 1 new line"

@@ -38,10 +38,16 @@ class TranscriptView(ttk.Frame):
         self.x_speaker = self.x_time + self.f_small.measure("00:00:00") + pad
         self.spk_w = self.f_bold.measure("n" * 15) + pad
         self.x_text = self.x_speaker + self.spk_w
+        # Rows set their own spacing through tags, so the widget's spacing1 only reaches the blank line after the
+        # newest row. It makes that line as tall as the tallest row line, so it can give up the pixels
+        # _whole_top_line needs at the bottom (#28).
+        self._sp = int(2 * self._scale)
+        fonts = (self.f_base, self.f_bold, self.f_small, self.f_italic)
+        tail = max(f.metrics("linespace") for f in fonts) + 2 * self._sp - self.f_base.metrics("linespace")
 
         self.text = tk.Text(self, wrap="word", state="disabled", font=self.f_base, bg="white", fg=theme.TEXT,
                             relief="flat", borderwidth=0, highlightthickness=0, padx=int(10 * self._scale),
-                            pady=int(6 * self._scale), cursor="arrow", takefocus=True, undo=False,
+                            pady=int(6 * self._scale), spacing1=tail, cursor="arrow", takefocus=True, undo=False,
                             tabs=(self.x_time, self.x_speaker, self.x_text), selectbackground=theme.SELECTED_BG,
                             selectforeground=theme.TEXT, inactiveselectbackground=theme.SELECTED_BG)
         self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.text.yview)
@@ -97,6 +103,7 @@ class TranscriptView(ttk.Frame):
         self._next_id = 0
         self._colors: dict[str, int] = {}
         self._follow = True
+        self._end_top: float | None = None  # the view's top fraction where _whole_top_line left it at the end
         self._new_lines = 0
         self._model: TranscriptModel | None = None
         self._short: frozenset[str] = frozenset()  # people shown dimmed and marked "short" (L40)
@@ -104,7 +111,7 @@ class TranscriptView(ttk.Frame):
     # -- setup ----------------------------------------------------------------
     def _configure_tags(self) -> None:
         t = self.text
-        sp = int(2 * self._scale)
+        sp = self._sp
         t.tag_configure("line", lmargin1=0, lmargin2=self.x_text, spacing1=sp, spacing3=sp)
         t.tag_configure("gaprow", lmargin1=self.x_speaker, lmargin2=self.x_speaker, spacing1=sp, spacing3=sp,
                         foreground=theme.GAP_FG, font=self.f_italic)
@@ -134,9 +141,52 @@ class TranscriptView(ttk.Frame):
     # -- scrolling ---------------------------------------------------------------
     def _on_yscroll(self, first, last) -> None:
         self.scroll.set(first, last)
-        self._follow = float(last) >= 0.999
+        at_end_top = self._end_top is not None and abs(float(first) - self._end_top) < 1e-9
+        self._follow = float(last) >= 0.999 or at_end_top
         if self._follow and self._new_lines:
             self._hide_new_bar()
+
+    def _inset(self) -> int:
+        """Pixels between the widget's edge and its first or last text line."""
+        t = self.text
+        return int(t.cget("pady")) + int(t.cget("borderwidth")) + int(t.cget("highlightthickness"))
+
+    def _top_row(self) -> Row | None:
+        """The row at the top of the view (even if partly above it), or None when there are no rows."""
+        if not self._rows:
+            return None
+        at = self.text.index(f"@0,{self._inset()}")
+        lo, hi = 0, len(self._rows) - 1  # the last row starting at or before ``at``
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.text.compare(self._start(mid), "<=", at):
+                lo = mid
+            else:
+                hi = mid - 1
+        return self._rows[lo]
+
+    def _nearest_row(self, anchor: Row) -> int:
+        """After a redraw (a Reset, such as the final swap), the index of the row that best stands in for
+        ``anchor``: the same row if it is still there (a line by its key: its text and speaker may have
+        changed), else the row nearest it in time."""
+        for i, row in enumerate(self._rows):
+            if row == anchor or (isinstance(row, LineRow) and isinstance(anchor, LineRow) and row.key == anchor.key):
+                return i
+        return min(range(len(self._rows)), key=lambda i: abs(self._rows[i].start_ms - anchor.start_ms))
+
+    def _whole_top_line(self) -> None:
+        """Tk scrolls by pixels, so the line at the top can sit partly above the view: bring it down into
+        view (#28). At the bottom the blank line after the newest row gives up those pixels, and that position
+        still counts as the bottom (``_end_top``)."""
+        self.text.update_idletasks()
+        first = self.text.index("@0,0")
+        info = self.text.dlineinfo(first)
+        if info is None or info[1] >= self._inset():
+            return
+        at_end = self.text.yview()[1] >= 0.999
+        self.text.yview(first)
+        if at_end:
+            self._end_top = self.text.yview()[0]
 
     def _user_scrolled(self, event=None) -> None:
         self._run_follow = False
@@ -350,6 +400,7 @@ class TranscriptView(ttk.Frame):
         self.text.configure(state="disabled")
         self._rows, self._ids = [], []
         self._colors.clear()
+        self._end_top = None
         self._hide_new_bar()
         self._model = None
 
@@ -369,6 +420,7 @@ class TranscriptView(ttk.Frame):
         top = self.text.yview()[0]
         new_lines = 0
         norm = logic.normalize_ops(ops)
+        anchor = self._top_row() if norm is None and not follow else None
         self.text.configure(state="normal")
         try:
             if norm is None:
@@ -392,6 +444,10 @@ class TranscriptView(ttk.Frame):
         if norm is None:
             if follow:
                 self.jump_to_end()
+                self._whole_top_line()
+            elif anchor is not None and self._rows:
+                self.text.yview(self._start(self._nearest_row(anchor)))  # that row's top at the view's top
+                self._whole_top_line()  # Tk stops at the end, by pixels, when the row is in the last screenful
             else:
                 self.text.yview_moveto(top)
             return
