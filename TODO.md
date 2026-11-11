@@ -506,7 +506,7 @@ What went well:
   check (rename the model folder, see the error, Retry) cannot pass as written. Decide
   whether a missing model should be a visible error. Retry itself was tested with a
   different forced failure.
-- [ ] (#17) **Hearing audio older than 10 minutes while recording** (WP7 spike, nothing built).
+- [x] (#17, won't build: .out-of-scope/hear-old-audio-while-recording.md) **Hearing audio older than 10 minutes while recording** (WP7 spike, nothing built).
   A second read-only handle on the live `audio\*.flac` works on Windows while the writer
   holds it: opens in 5–8 ms, reads are sample-exact up to about 3 s behind the writer, no
   `flush()` needed, and a killed process loses nothing either way. The reader must take
