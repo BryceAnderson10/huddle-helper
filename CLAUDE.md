@@ -11,3 +11,7 @@ Default five-role vocabulary: needs-triage, needs-info, ready-for-agent, ready-f
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Real-call tests and private terms
+
+A meeting folder from a real call → follow `docs/agents/real-call-tests.md`. Names, titles and team terms from real calls stay out of git and GitHub; `tools/check_private.py` blocks them (list in the gitignored `lab/private_terms.txt`) from `.githooks/` (per clone: `git config core.hooksPath .githooks`) and a PreToolUse hook on `gh` commands.
