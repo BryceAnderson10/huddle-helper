@@ -926,3 +926,82 @@ or titles from this call go into the repo or the issues.
   1 s. 28 live lines have confidence under 0.4.
 - [ ] (#21) The app log is on the laptop and was not checked.
 - [ ] Next meeting: check that the vocabulary term added after Stop is used.
+
+## From Test #7: a real work call on the target laptop with the second transcription on (2026-11-11)
+
+Setup: the packaged app on the target laptop, same devices as Test #6, base.en live, Keep audio
+on, and the second transcription after Stop **on** (small.en). 56 min 38 s; 702 live lines, 594
+final lines. Nine remote people plus the laptop's user; here they are Remote A–I by final talk
+time. Bryce entered attendees before the call, named speakers and lines during it, added a
+vocabulary term from a line during the call, and placed two bookmarks. Copy in `lab\src\` (the
+2026-11-11 09:33 folder; `lab\` is not in git). No names, titles, terms or bookmark labels from
+this call go into the repo or the issues.
+
+### Worked
+
+- [x] Clean Stop, `DONE`. Two mutes (13 min 40 s and 1.4 s) in `meta.json`; no mic line inside
+  either. Live delay median 1.1 s, p90 1.7 s, max 10.6 s; backlog never above 3, max lag 4.4 s.
+- [x] (#11) **Two bookmarks, both made from a line**: built-in "action" type, each with a label,
+  at the line's start (`via: line`, `seq` set). `mark_kinds` is `{}`, correct for a built-in type.
+- [x] (#9) **Naming before and during the call:** 8 attendees, 10 live labels named (three of them
+  the same person, joined into one final speaker of 351 s), 20 lines named one by one. All 20
+  named lines are under that name in the final file, including two 0.4 s lines (compare #26).
+  Nine final remote speakers, all named from tags, no conflicts; the ninth was not an attendee
+  and was named from lines only.
+- [x] **Line names fixed a live label that held two people.** The live label named Remote E also
+  held 37 s of Remote D (14 lines). Bryce named 11 of them Remote D; the final pass put all 14
+  under Remote D, so 3 unnamed lines followed the voice, not the speaker tag. This is the
+  outcome the #20 decision ("fix with a line-level name") relied on.
+- [x] **A term added during the call reached earlier lines.** Two vocabulary changes (confirmed
+  by Bryce): a person's name at 4:11 (live uses it from 4:44 on) and a team-tool acronym at
+  16:50, added from the line at 16:36 (live uses it from 35:15 on). The final file has the name
+  in 14 lines (live 11; three of the new ones are before 4:11) and the acronym in 9 (live 6).
+  The acronym's three final-only lines, 14:49, 16:36 and 28:15, **were all really said**
+  (Bryce), so none of them is invented; the live pass missed the one at 28:15 although the term
+  was already in use. Attendee names also rose: the 8 names are in 56 final lines against 43.
+- [x] (#13) **The speaker count is right:** nine remote people (Bryce). Remote I, named from a
+  live label 21 s in, has three final lines (8 s), and all three are Remote I's.
+
+### Open
+
+- [ ] (#14, #32) **The final pass took 34 min on the laptop for 57 min of audio (0.61×).** The
+  second transcription is 1528 s (0.45×), diarization 507 s (0.15×; Test #6 0.18×),
+  fingerprinting 22 s. Stop was at 10:29; the final file was written at 11:03. A 1-hour
+  meeting with the stage on means about 36 minutes of waiting. The stage changed 372 lines and
+  kept the live text on 21.
+- [x] (#20, #25) **Remote H's update is split: 21.6 s (5 lines, 16:46–17:33) is under Remote B.**
+  Bryce confirmed they are Remote H's. Only Remote H's first line (16:08, 8 s) is under Remote H,
+  and only because Bryce named that line. Live, all six lines had the label Bryce had named
+  Remote B at 12:35.
+
+  **Cause (diagnosed on the copy, `lab\cache_t7`, clustering replayed from cached fingerprints):
+  both.** Without names, the clustering puts Remote B (142 s) and Remote H in one cluster, so
+  Remote H would disappear. With line names only, Remote H's named line keeps all of Remote H's
+  pieces apart from Remote B: right. Adding the speaker-level name is what moves them. Each of
+  Remote H's pieces overlaps a line under the live label named Remote B, and it passes the 0.40
+  tag gate against Remote B's centroid (0.60, 0.54, 0.41, 0.41). It is far more like Remote H's
+  named line (0.89, 0.84, 0.57, 0.68). The centroid includes those pieces, and Remote B's own
+  pieces score a median of 0.59 against it, so no gate value separates them. Differently named
+  pieces never share a cluster, so the speaker name wins and the line name protects only its
+  own line.
+  **Fixed in `tags.piece_names`:** a speaker-level name does not apply to a piece that is more
+  like another name's line-named pieces than like its own name's centroid. Two tests in
+  `tests/test_tags.py`; the clustering one was red on the old code. Replayed from cached
+  fingerprints, old rule against new:
+  - **Test #7:** 5 pieces change (28 s). Remote H's 4 go back to Remote H. One 7 s line at 21:45
+    moves from Remote E to Remote D; it is in the middle of Remote D's answer, so it is probably
+    right too (not confirmed).
+  - **Tests #5 and #6 with their real names:** nothing changes. Test #6 has 36 named lines.
+  - **The WP11 named runs on Tests #3 and #4:** nothing changes. None of them pairs a
+    speaker-level name with a line name for another person.
+
+  So #20's "fix with a line-level name" now holds when the line-named person shares a live
+  label with someone else's speaker-level name. Not run: a full final pass with the stage on.
+- [ ] (#32) Word error is unknown; no reference transcript. Both lines that read oddly with the
+  acronym in them still have wrong words around it.
+- [ ] One vocabulary term never appears in either file, though a related word does (10:43).
+  Not known whether it was said.
+- [ ] (#6, #36) Echo dedupe dropped 1 mic line (headphones on); not written anywhere.
+- [ ] Short lines: 195 of 702 live lines and 125 of 594 final lines are under 1 s; 35 live lines
+  have confidence under 0.4 (18 final).
+- [ ] (#21) The app log is on the laptop and was not checked.
