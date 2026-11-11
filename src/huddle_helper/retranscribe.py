@@ -111,32 +111,43 @@ def retranscribe(segments: list[Segment], words: dict[tuple[str, int], list[Word
             seg = segments[i]
             stats.lines += 1
             done += 1
-            if audio is None:
-                stats.no_audio += 1
-                continue
             prev_end = segments[idxs[k - 1]].end_ms if k else None
             next_start = segments[idxs[k + 1]].start_ms if k + 1 < len(idxs) else None
-            a, b = span(seg, prev_end, next_start, len(audio) * 1000 // SAMPLE_RATE)
-            if b - a < MIN_SPAN_MS:
-                stats.no_audio += 1
-                continue
-            try:
-                result = transcriber.transcribe(audio[a * SAMPLE_RATE // 1000:b * SAMPLE_RATE // 1000], prompt)
-            except Exception:  # noqa: BLE001 - one bad line must not cost the pass
-                log.exception("Second transcription failed for the %s line at %d ms", source, seg.start_ms)
-                stats.kept_live += 1
-                continue
-            why = suspect(seg.text, result.text)
-            if why is not None:
-                log.info("Kept the live text of the %s line at %d ms: new text %s", source, seg.start_ms, why)
-                stats.kept_live += 1
-                continue
-            if _norm(result.text) != _norm(seg.text):
-                stats.changed += 1
-            out[i] = replace(seg, text=result.text, confidence=result.confidence)
-            if result.words:
-                new_words[(source, seg.start_ms)] = [Word(a + w.start_ms, a + w.end_ms, w.text) for w in result.words]
+            _redo_line(seg, i, prev_end, next_start, audio, transcriber, prompt, out, new_words, stats)
             if progress:
-                progress(done / total)
+                progress(done / total)  # every line moves the bar, kept ones too
     stats.seconds = time.perf_counter() - t0
     return out, new_words, stats
+
+
+def _redo_line(seg: Segment, i: int, prev_end: int | None, next_start: int | None,
+               audio: np.ndarray | None, transcriber: FinalTranscriber, prompt: str | None,
+               out: list[Segment], new_words: dict[tuple[str, int], list[Word]], stats: RetxStats) -> None:
+    """Transcribe one line again and, unless the new text is refused, put it in ``out[i]``."""
+    if audio is None:
+        stats.no_audio += 1
+        return
+    a, b = span(seg, prev_end, next_start, len(audio) * 1000 // SAMPLE_RATE)
+    if b - a < MIN_SPAN_MS:
+        stats.no_audio += 1
+        return
+    try:
+        result = transcriber.transcribe(audio[a * SAMPLE_RATE // 1000:b * SAMPLE_RATE // 1000], prompt)
+    except Exception:  # noqa: BLE001 - one bad line must not cost the pass
+        log.exception("Second transcription failed for the %s line at %d ms", seg.source, seg.start_ms)
+        stats.kept_live += 1
+        return
+    why = suspect(seg.text, result.text)
+    if why is not None:
+        log.info("Kept the live text of the %s line at %d ms: new text %s", seg.source, seg.start_ms, why)
+        stats.kept_live += 1
+        return
+    if _norm(result.text) != _norm(seg.text):
+        stats.changed += 1
+    out[i] = replace(seg, text=result.text, confidence=result.confidence)
+    key = (seg.source, seg.start_ms)
+    if result.words:
+        new_words[key] = [Word(a + w.start_ms, a + w.end_ms, w.text) for w in result.words]
+    else:
+        # The live words spell the live text; the final pass would rebuild the line from them.
+        new_words.pop(key, None)

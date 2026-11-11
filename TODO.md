@@ -872,9 +872,9 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
 - [ ] **Paused before acceptance (Bryce, 2026-11-11):** wait for the public meeting audio and
   transcript as the test baseline. Not run yet: the real final pass with the stage on (Tests
   #2-#5), word error against a reference, time on the dev PC and the laptop, the Settings
-  dialog by eye, the exe rebuild. Unit tests only so far (10, scripted transcriber).
+  dialog by eye, the exe rebuild. Unit tests only so far (11, scripted transcriber).
 - [ ] **WP14 (Parakeet against small.en) stopped part-way** on a usage limit. `tools/retx_lab.py`,
-  `tools/wer.py` and `tests/test_wer.py` are that subagent's unfinished, uncommitted work; no
+  `tools/wer.py` and `tests/test_wer.py` are committed (58cf2e9) but unfinished; no
   results were reported. Until it is done the stage ships Whisper only.
 - [ ] Departures from the plan: no check on `drop_hallucinated` (the transcriber does not report
   it); a final line's start and end follow the new word times, within 200 ms of the live line's.

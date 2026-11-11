@@ -82,13 +82,29 @@ def test_retranscribe_keeps_live_text_when_refused_failed_or_without_audio():
     first_ms, second_ms = 2000 + PRE_MS + POST_MS, 4000 + PRE_MS + POST_MS
     tr = Scripted(by_ms={first_ms: "one"}, fail_on=second_ms)
     live_words = {("system", 1000): [Word(1000, 3000, " one two three four five six")]}
-    out, new_words, stats = retranscribe(segs, live_words, audio, tr)
+    seen = []
+    out, new_words, stats = retranscribe(segs, live_words, audio, tr, progress=seen.append)
     assert [s.text for s in out] == ["one two three four five six", "this call fails", "new text", "tick",
                                      "new text", "no mic audio kept"]
     assert set(new_words) == {("system", 1000), ("system", 20000), ("system", 20150)}
     assert new_words[("system", 1000)] == live_words[("system", 1000)]  # refused: its live words stay
     assert 50 + POST_MS >= MIN_SPAN_MS > 50  # "tick" would have had enough audio but for its neighbours
     assert (stats.lines, stats.changed, stats.kept_live, stats.no_audio) == (6, 2, 2, 2)  # no audio: tick, mic
+    assert seen == [k / 6 for k in range(1, 7)]  # every line moves the bar, kept ones too
+
+
+def test_new_text_without_word_times_drops_the_live_words():
+    class NoWords:
+        name = "no-words"
+
+        def transcribe(self, audio, prompt=None):
+            return Transcription("fresh words", 0.8, [])
+
+    live_words = {("system", 1000): [Word(1000, 3000, " old one")]}
+    out, new_words, _stats = retranscribe([seg(1000, 3000, "old one")], live_words,
+                                          {"system": np.zeros(SR * 5, np.float32)}, NoWords())
+    assert out[0].text == "fresh words"
+    assert ("system", 1000) not in new_words  # the live words would turn the line back into "old one"
 
 
 def test_same_words_with_other_punctuation_do_not_count_as_changed():
