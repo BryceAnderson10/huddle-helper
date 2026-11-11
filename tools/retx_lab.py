@@ -90,6 +90,8 @@ class Variant:
 
 VARIANTS = {
     "b1": Variant("whisper", "base.en", 1),  # the control: the live model on the same spans
+    "b2": Variant("whisper", "base.en", 2),
+    "b3": Variant("whisper", "base.en", 3),
     "b5": Variant("whisper", "base.en", 5),
     "s1": Variant("whisper", "small.en", 1),
     "s5": Variant("whisper", "small.en", 5),
