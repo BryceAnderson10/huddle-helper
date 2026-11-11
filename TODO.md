@@ -884,3 +884,45 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   results were reported. Until it is done the stage ships Whisper only.
 - [ ] (#2) Departures from the plan: no check on `drop_hallucinated` (the transcriber does not report
   it); a final line's start and end follow the new word times, within 200 ms of the live line's.
+
+## From Test #6: a real work call on the target laptop (2026-11-11)
+
+Setup: the packaged app on the target user's laptop, the same devices as Test #4 (webcam mic,
+Realtek headphones), base.en, Keep audio on. 26 min 17 s; 329 live lines, 234 final lines.
+Three remote people plus the laptop's user (confirmed by Bryce); here they are Remote A, B
+and C. Bryce named speakers while recording, placed one bookmark, muted three times, and
+added a vocabulary term from the final transcript after Stop (it applies from the next
+meeting). Copy in `lab\src\` (the 2026-11-11 08:33 folder; `lab\` is not in git). No names
+or titles from this call go into the repo or the issues.
+
+### Worked
+
+- [x] Clean Stop, `DONE`, no gaps except the three mutes (2 min 20 s, 4 min 7 s, 3 s), all in
+  `meta.json`. One bookmark (button, no type) in `marks.jsonl`.
+- [x] Live delay median 1.1 s, p90 1.6 s (Test #4 on this laptop: 1.3 s / 2.4 s), backlog
+  never above 2, max lag 3.0 s. One line took 11.3 s; which one is not recorded.
+- [x] (#14) **Final pass on the laptop: 301 s for 1577 s of audio (0.19×)**, against 0.6× for
+  Test #4 before WP2 and WP13. Diarization is still 280 s of the 301 s; fingerprinting 19 s.
+  A 1-hour meeting would now take about 11.5 minutes. The 0.1× target is still not met.
+- [x] **Live labels kept the three remote people apart.** Each big live label is one person
+  in the final file: 182 of 187 s, 131 of 141 s and 275 of 275 s. Three more labels hold
+  13 s between them. Compare Test #1, where every remote line had one label.
+- [x] **The final file has the right number of remote speakers (3)**, each named from tags
+  (`speakers.json`, `from_tags: true`, no conflicts).
+- [x] **Naming on a real call (#9):** two live labels were named in the first 75 s; Bryce then
+  named 36 lines one by one, on purpose, to test line naming (most of them Remote C, whose
+  live label was already clean). Two lines were named, then renamed; the last name won.
+  35 of 36 named lines are under that name in the final file.
+
+### Open
+
+- [ ] (#26) **A named line under 0.5 s went to another speaker.** A 0.3 s line named Remote A
+  is under Remote C in the final file. The picker does not say this can happen.
+- [ ] (#6, #36) **Echo dedupe dropped 2 mic lines although headphones were on** (Test #4, same
+  laptop and headphones: none). Either sound leaked into the webcam mic or the laptop's user
+  repeated a remote line. Not checked: the dropped lines are not written anywhere. While
+  recording, a drop makes "Play" ask about headphones first.
+- [ ] Short lines are still common: 106 of 329 live lines and 59 of 234 final lines are under
+  1 s. 28 live lines have confidence under 0.4.
+- [ ] (#21) The app log is on the laptop and was not checked.
+- [ ] Next meeting: check that the vocabulary term added after Stop is used.
