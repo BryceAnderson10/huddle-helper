@@ -673,3 +673,147 @@ Nothing in the product changed. Finding and numbers: `docs/WP10_SPIKE.md`; tool:
   clip played; switching the default output mid-capture (expected to carry on without a
   re-open; untested); a Bluetooth headset; the packaged exe; a Windows build below
   20348 for the fallback; the engine's 16 kHz conversion against soxr.
+
+## From Test #5: `2026-11-10_1448_test-meeting-4` (first run of the packaged app with the live view)
+
+Titled "Test Meeting 4" by the user; called Test #5 here because Test #4 is the laptop
+recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
+
+### Worked
+
+- [x] Clean Stop, `DONE`, no gaps. Live delay median 0.9 s, p90 1.3 s, max 2.4 s (33
+  lines). Final pass 10.3 s for 124 s of audio (0.08×).
+- [x] Attendee, a meeting vocabulary term (it appears, correctly cased, in one line), a
+  labelled bookmark, one clip played while recording (no line dropped, none added), and
+  Keep audio all left the expected files and `meta.json` fields.
+- [x] Naming: two live labels were given the same name; the final pass put all their lines
+  in one final speaker and named it (`speakers.json`, `from_tags: true`, no conflicts).
+
+### Open
+
+- [ ] **The app wrote no log for this run.** `%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`
+  ends at 03:19 that day; the app was started from Explorer at 14:45 with no arguments
+  and was still running at the time of the check. A bare start of the same exe with
+  `HUDDLE_HELPER_DATA_DIR` set did log. Cause not found.
+- [ ] **The main remote voice is split in two in the final file** (45 s and 18 s), and the
+  two alternate inside sentences, which reads like one person. The live pass had it as one
+  label (56 s). Without names the clustering gives the same split (51 s / 19 s at 0.70);
+  the two halves only join at 0.60. Bryce: two people speak in the played recording, so
+  three remote speakers is one too many. The smaller half is mostly pieces under 1.5 s
+  plus two of about 4 s; the long pieces (3 s and up, 46 s to the end) agree with each
+  other at 0.74 to 0.88. So the split is short pieces clustering apart from long ones,
+  not two people.
+- [ ] **A speaker tag carried a later live mistake into the final file.** The only piece
+  that is clearly another voice is the 6.5 s line at 71 s (0.51 to 0.58 against the long
+  pieces). The live pass gave it the label the user had named at 33 s, so the tag covered
+  it, and the same-name rule (L39) then forced it into the named speaker. *Decision:*
+  should a speaker tag bind only the lines that existed when it was made, and be a soft
+  hint for later ones? Bryce: the named person is the main voice. So the final file
+  credits him with 13 s (the opening lines plus the other person's 71 s line) and leaves
+  about 60 s of his speech unnamed across two speakers.
+- [ ] **The live pass made four remote labels in the first 40 s**, two of them from lines
+  under 1 s ("Uh...", one word). The user named two of them the same person.
+- [ ] Short fillers ("Um.", "Like...", "So...") are still lines of their own, live and
+  final, and are the lines whose speaker flips.
+- [ ] Two junk system lines at 24 s (confidence 0.30 and 0.50, under 0.5 s each) as the
+  played recording started. One mic line misheard "four" as "for".
+
+## From the quality experiments (2026-11-10, nothing in the product changed)
+
+Scored with `tools/final_lab.py score` (new): seconds of confirmed speech given to the wrong
+speaker, from `tests/data/truth/` (Tests #3, #4 and the new `test-5.json`; 542 s). Test #5's
+truth is partly inferred: the 71 s line as the second person rests on voice evidence.
+
+### Speakers: the fingerprint model is the limit, not the clustering
+
+- [x] **Per-meeting normalisation: rejected.** Subtracting the meeting's mean fingerprint (plain,
+  long pieces only, or one vote per first-pass speaker) ranks pairs better inside a meeting
+  (AUC 0.95 → 0.99 on Test #4) but the best cutoff then differs by 0.3–0.5 between meetings;
+  no value works on all four. The plain mean also wipes out a dominant speaker (Test #5).
+- [x] **Long pieces first: small gain, not robust.** With 4 s anchors and every shorter piece
+  given to the nearest speaker: 0 s wrong at 0.70–0.72 (today: 1.4 s at 0.70) and the working
+  range goes from 0.70–0.71 to 0.70–0.73. With 3 s anchors Test #5 still splits 8.1 s. A
+  bonus for the neighbour in time made it worse. Not built.
+- [x] **Centroid linkage and joining neighbours into turns: rejected** (no setting passes all four).
+- [ ] **Next: compare fingerprint models** on the kept audio with the same score. The lower
+  bound of every working range is Test #4's Remote D/Remote B pair (must be 0.70 or more to split)
+  and the upper is one voice's own 3–4 s pieces (0.73), so only a model that separates
+  those can widen it. Pieces of 3 s or more already pool at 5% error against 11% for all.
+
+### Transcript: re-transcribing after Stop with small.en works
+
+Each live line's audio span (200 ms before, 300 ms after) re-transcribed on the dev PC;
+`lab\retx\`. The base.en control on the same spans is the first row.
+
+| Test #4 (252 lines) | Time | × speech | Expected terms | Known mishears |
+| --- | --- | --- | --- | --- |
+| base.en, beam 1 | 163 s | 0.16 | 49 | 8 |
+| small.en, beam 5 | 414 s | 0.41 | 53 | 2 |
+| small.en, beam 5, vocabulary | 428 s | 0.43 | 65 | 0 |
+
+- No line came back empty on any of the four recordings; about half the lines change.
+  Seen fixes: "binder" → "vendor", "a couple of engines" → "a couple of decisions",
+  "error if I" → "a verify". Seen losses: "Huddle Helper" → "Lidle Helper", one invented
+  "See ya." on a line end. No reference transcript exists, so there is no word error rate.
+- [ ] Not built. Open: time on the laptop (about 3× the dev PC), whether to keep the live
+  text when the new line scores lower, and larger models (need a download).
+
+### Speakers: other fingerprint models (2026-11-10, nothing in the product changed)
+
+Nine models from the sherpa-onnx "speaker-recongition-models" release (checksums verified,
+in `lab\models\speaker`), each fingerprinting the same pieces of the four kept recordings
+(`tools/speaker_models_embed.py`, then `tools/speaker_models_score.py`). Pair error is the
+share of confirmed same/different pairs on the wrong side of the best single cutoff; range
+is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
+
+| Model | Size | Pair error | Wrong seconds at best | Working range |
+| --- | --- | --- | --- | --- |
+| wespeaker ResNet34-LM (shipped) | 26 MB | 11.4% | 1.4 | 0.70–0.71 |
+| 3D-Speaker ERes2Net, English | 26 MB | 0.2% | 0 | 0.26–0.60 |
+| 3D-Speaker CAM++, zh+en "advanced" | 28 MB | 0.2% | 0 | 0.35–0.62 |
+| NeMo TitaNet small | 40 MB | 0.5% | 0 | 0.25–0.58 |
+| NeMo TitaNet large | 101 MB | 0.3% | 0 | 0.24–0.57 |
+| wespeaker ResNet152 / 221 / 293-LM | 79–114 MB | 13–31% | 8–113 | none |
+| wespeaker CAM++-LM, 3D-Speaker CAM++ English | 29 MB | 37–47% | 176–180 | none |
+
+- The four good models give the same speakers as each other on every recording (99.7–100% of
+  pairs of pieces of 2 s or more, unlabelled pieces included) and the same result across a
+  0.2-wide span of cutoffs. They agree with the shipped model on Test #3 only.
+- **Test #5:** 64 s + 7 s, which is what Bryce described (one main voice plus the 71 s line).
+  The shipped model gives 51 s + 19 s.
+- **Test #4:** six remote speakers (326, 320, 177, 103, 41, 12 s) against five; the shipped
+  model's 534 s speaker becomes 320 + 177 + part of another. That is the "may be several
+  people" item above. *Needs someone who was on the call.*
+- **Test #2:** four speakers (84, 42, 41, 24 s) against two. Nobody has confirmed how many
+  people speak in that clip. *Needs Bryce.*
+- Speed at 4 threads on Test #4's 980 s of speech: 6 s (TitaNet small, CAM++), 13–14 s
+  (ERes2Net, TitaNet large); the shipped model takes about 17 s.
+- [ ] **Not built.** A swap means re-fitting every cutoff on the new scale (live 0.75 and
+  0.6, final 0.70, both folds, the offline diarizer's 0.6), a settings migration, the model
+  download and the bundle, and a live replay. Check each model's licence first. Why the
+  larger wespeaker models and both English CAM++ models do so badly here was not looked into.
+
+### What public benchmarks say (2026-11-10, read before more testing)
+
+- **Fingerprint models: public rankings do not match ours.** VoxCeleb1-O error: wespeaker
+  ResNet293-LM 0.45%, ResNet221-LM 0.51%, CAM++ 0.65%, TitaNet-L 0.66–0.68%, ResNet34-LM 0.72%,
+  ERes2Net-base 0.84%, TitaNet-S 1.15%. On our pieces the order is reversed. wespeaker's own
+  page says its LM models "perform better on long audios, e.g. >3s"; the plain ResNet34
+  (same size, same release) is untested. TitaNet is the only candidate with published
+  diarization results on meetings and telephone audio (AMI 1.7–2.2% and CH109 1.1–1.2%
+  with given speech regions; small about equal to large). sherpa-onnx's own diarization
+  examples use TitaNet small and 3D-Speaker ERes2Net, not wespeaker.
+- [ ] Unexplained: the large wespeaker models and both English CAM++ models score far below
+  what is published, here. Rule out a problem in how they are run before trusting the
+  shipped model's numbers (it is the same family).
+- **Whole diarization systems: little to gain for this app.** pyannote community-1 beats
+  3.1 by 2–3 points on meetings (AMI 18.8 → 17.0 and 22.7 → 19.9) through better speaker
+  assignment and counting; it needs PyTorch and is not in sherpa-onnx. DiariZen is the best
+  open system (English 7.0 against 11.5 for pyannote 3.1) but is a large GPU-measured model.
+  Sortformer falls to 22–24% with five or more speakers. Reverb's segmentation model in
+  sherpa-onnx is under a non-commercial licence.
+- **Speech-to-text: Parakeet is the larger step.** Meeting audio (AMI) word error: base.en
+  21.1%, small.en 17.9%, Parakeet TDT 0.6B v2 11.2% (12.0% through a telephone codec).
+  Average over eight sets: Parakeet v2 6.05%, distil-large-v3.5 7.21%, large-v3 7.44%,
+  large-v3-turbo 7.83%. A sherpa-onnx int8 build exists (CC-BY-4.0). Not known: its speed on
+  our CPUs, and whether a vocabulary can be given to it.

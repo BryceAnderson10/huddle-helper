@@ -82,3 +82,15 @@ def test_anchors_first_places_short_pieces():
     assert labels[0] != labels[1]
     strict = final_lab.anchors_first(vecs, weights, starts, 0.70, 3.0, 0.65)
     assert strict[4] == strict[2]  # not alike enough, so the neighbour rule gives the same answer here
+
+
+def test_truth_errors_counts_split_and_merged_seconds():
+    pieces = [{"piece": i, "source": "system", "start_ms": i * 1000, "end_ms": i * 1000 + 900, "vec": i}
+              for i in range(5)]
+    truth = {"groups": {"A": [["system", 0], ["system", 1000], ["system", 2000]], "B": [["system", 3000]],
+                        "X": [["system", 4000]]},
+             "together": ["A", "B"], "apart": [["A", "B"]], "unchecked": ["X"]}
+    weights = [5.0, 3.0, 1.0, 2.0, 9.0]
+    assert final_lab.truth_errors(truth, pieces, [0, 0, 0, 1, 0], weights) == (0.0, 0.0, 11.0)
+    assert final_lab.truth_errors(truth, pieces, [0, 0, 2, 1, 0], weights) == (1.0, 0.0, 11.0)  # 1 s split off A
+    assert final_lab.truth_errors(truth, pieces, [0, 0, 0, 0, 0], weights) == (0.0, 2.0, 11.0)  # B merged into A

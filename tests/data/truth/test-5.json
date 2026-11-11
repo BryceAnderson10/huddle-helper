@@ -1,0 +1,10 @@
+{
+  "meeting": "test-5",
+  "note": "Bryce: two people speak in the played recording and the named person (P) is the main voice. P = the pieces of 3 s or more from 46 s on, plus the two opening pieces he named. Q = the 71 s line, the other person by voice evidence (0.51-0.58 to P); not confirmed by ear.",
+  "groups": {
+    "P": [["system", 26520], ["system", 29496], ["system", 46456], ["system", 57336], ["system", 62904], ["system", 82232], ["system", 92312], ["system", 108984], ["system", 114168], ["system", 121080]],
+    "Q": [["system", 70584]]
+  },
+  "apart": [["P", "Q"]],
+  "together": ["P"]
+}

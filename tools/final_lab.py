@@ -3,6 +3,7 @@
     python tools/final_lab.py embed lab/src/<meeting> [--out lab/cache]
     python tools/final_lab.py sweep lab/cache/<meeting>.json --truth tests/data/truth/test-3.json
     python tools/final_lab.py matrix --cache lab/cache --truth tests/data/truth --baseline lab/baseline
+    python tools/final_lab.py score [--thresholds 0.68,0.70,0.72] [--anchors 3,4]
     python tools/final_lab.py diff lab/baseline/a/transcript.final.jsonl other/transcript.final.jsonl
     python tools/final_lab.py finalize lab/src/<meeting> --out lab/baseline/<name>
 
@@ -372,6 +373,67 @@ def cmd_matrix(args) -> int:
     return 0
 
 
+# -- score ---------------------------------------------------------------
+SCORED = {**RECORDINGS, "test-5": "*test-meeting-4"}
+
+
+def truth_errors(truth: dict, pieces: list[dict], labels: list[int], weights) -> tuple[float, float, float]:
+    """Seconds of confirmed speech with the wrong speaker: (split, merged, total).
+
+    Split: a group's seconds outside the cluster that holds most of it. Merged: for two groups
+    that must be apart but share that main cluster, the smaller group's seconds. Groups under
+    "unchecked" are left out.
+    """
+    skip = set(truth.get("unchecked", []))
+    groups = {g: [p["vec"] for p in resolve_group(items, pieces)[0] if p["vec"] >= 0]
+              for g, items in truth.get("groups", {}).items() if g not in skip}
+    checked = set(truth.get("together", [])) | {g for pair in truth.get("apart", []) for g in pair}
+    main: dict[str, int] = {}
+    size: dict[str, float] = {}
+    split = 0.0
+    for g, idx in groups.items():
+        if g not in checked or not idx:
+            continue
+        dist: dict[int, float] = {}
+        for i in idx:
+            dist[labels[i]] = dist.get(labels[i], 0.0) + float(weights[i])
+        main[g] = max(dist, key=dist.get)
+        size[g] = sum(dist.values())
+        if g in truth.get("together", []):
+            split += size[g] - dist[main[g]]
+    merged = sum(min(size[a], size[b]) for a, b in truth.get("apart", [])
+                 if a in main and b in main and main[a] == main[b])
+    return split, merged, sum(size.values())
+
+
+def cmd_score(args) -> int:
+    """Wrong-speaker seconds for every recording that has a truth file, plain and anchors-first."""
+    cache_dir, truth_dir = Path(args.cache), Path(args.truth)
+    ctx = {}
+    for name, pattern in SCORED.items():
+        tpath = truth_dir / f"{name}.json"
+        path = next(cache_dir.glob(pattern + ".json"), None)
+        if path is None or not tpath.exists():
+            continue
+        info, arrays = load_cache(path)
+        pieces = info["pieces"]["system"]
+        v, w = list(arrays["system_vecs"]), [float(x) for x in arrays["system_weights"]]
+        ctx[name] = (v, w, pieces, json.loads(tpath.read_text(encoding="utf-8")), vec_starts(pieces, len(v)))
+    modes = [("plain", 0.0)] + [(f"anchors {a:g} s", a) for a in (float(x) for x in args.anchors.split(",") if x)]
+    print("| setting | " + " | ".join(f"{n} split/merged" for n in ctx) + " | wrong |")
+    print("| --- | " + " | ".join("---" for _ in ctx) + " | --- |")
+    for mode, anchor_s in modes:
+        for t in [float(x) for x in args.thresholds.split(",")]:
+            cells, wrong, total = [], 0.0, 0.0
+            for v, w, pieces, truth, starts in ctx.values():
+                raw = anchors_first(v, w, starts, t, anchor_s, -1.0) if anchor_s else cluster_voices(v, w, t)
+                s, m, tot = truth_errors(truth, pieces, fold_small_clusters(raw, v, w), w)
+                cells.append(f"{s:.1f} / {m:.1f}")
+                wrong, total = wrong + s + m, total + tot
+            print(f"| {mode} T={t:.2f} | " + " | ".join(cells) + f" | {wrong:.1f} s of {total:.0f} |")
+    return 0
+
+
 # -- diff ----------------------------------------------------------------
 def read_segments(path: str | Path) -> list[dict]:
     return [e for e in read_events(Path(path)) if e.get("type") == "segment"]
@@ -509,6 +571,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--assign", default="0.55,0.60,0.65")
     p.add_argument("--detail", action="store_true", help="cluster seconds and every row per recording")
     p.set_defaults(fn=cmd_matrix)
+    p = sub.add_parser("score", help="wrong-speaker seconds against every truth file (Tests #3-#5)")
+    p.add_argument("--cache", default=str(Path("lab") / "cache"))
+    p.add_argument("--truth", default=str(Path("tests") / "data" / "truth"))
+    p.add_argument("--thresholds", default="0.64,0.66,0.68,0.70,0.72,0.74,0.76")
+    p.add_argument("--anchors", default="3,4", help="anchors-first piece lengths in seconds; empty for none")
+    p.set_defaults(fn=cmd_score)
     p = sub.add_parser("diff", help="compare two transcript.final.jsonl files")
     p.add_argument("a")
     p.add_argument("b")
