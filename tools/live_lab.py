@@ -32,7 +32,7 @@ from huddle_helper.finalize import load_words  # noqa: E402
 from huddle_helper.writer import read_events  # noqa: E402
 
 SRC, OUT, MODELS = ROOT / "lab" / "src", ROOT / "lab" / "cache_lines", ROOT / "lab" / "models" / "speaker"
-RECS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*work*", "test-5": "*test-meeting-4"}
+RECS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*_1605_*", "test-5": "*test-meeting-4"}
 
 
 def model_files() -> dict[str, Path]:

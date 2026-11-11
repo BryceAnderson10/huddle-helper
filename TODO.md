@@ -253,15 +253,19 @@ What went well:
 Setup: a real work call recorded on the target user's laptop. Mic: Razer Kiyo Pro (webcam
 mic); system: Realtek headphones; base.en; Keep audio on. 22 min 41 s; 252 live lines,
 203 final lines. The laptop's user spoke only 3–4 times; the rest is remote speech. From names
-used on the call, there were at least 5 remote people: Remote A and Remote B (the QDM team), Remote C,
-Remote D and probably Remote E. A copy of the folder is in `Downloads\testmeeting`.
+used on the call, there were at least 5 remote people, called Remote A–E here. A copy of the
+folder is in `Downloads\testmeeting` (its real name differs: `2026-11-09_1605_*`).
+
+Privacy: names, the company and the team's domain terms from this call are kept out of the
+repo. Call speech is paraphrased, and the domain terms are made-up stand-ins (KoVa, QDM,
+FMS, Zentrix, zone code); their real mishears are described, not quoted.
 
 What went well:
 - **No gaps, errors or crashes**, and a clean exit. Echo dedupe correctly dropped nothing
   (headphones).
 - **Live speed held up on the laptop over 22 minutes:** line delay median 1.3 s, **p90
   2.4 s** (PRD target 5 s), max 6.8 s; backlog never above 2; max lag 6.6 s.
-- **Remote C is labelled correctly throughout:** every line of his has `SPEAKER_02` in the final
+- **Remote C is labelled correctly throughout:** every line of theirs has `SPEAKER_02` in the final
   file, and nobody else's does.
 - The mic question split over two live lines is joined in the final file (601d147 working).
 
@@ -270,8 +274,8 @@ What went well:
 - [x] **Remote D is merged into Remote B (`SPEAKER_03`).** Final result: 3 speakers —
   `SPEAKER_01` 591 s (Remote A plus others), `SPEAKER_02` 74 s (Remote C), `SPEAKER_03` 377 s
   (Remote B + Remote D). Remote D's lines form a clean, separate voice cluster: 6 lines, 28 s,
-  lines 102 ("Yeah, so I can provide that." → "Thank you, Remote D"), 119, 127, 167, 196
-  ("…Colleague G and I for now") and 198. They're only 0.64–0.75 similar to Remote B's centroid, the
+  lines 102 (an offer to send something, then thanks to Remote D by name), 119, 127, 167,
+  196 and 198. They're only 0.64–0.75 similar to Remote B's centroid, the
   same range as clearly different speakers in Test #2. Two things merge them, and both need
   fixing:
   1. **The threshold.** At `final_voice_threshold` 0.65, average linkage already merges
@@ -280,7 +284,7 @@ What went well:
   2. **The fold has no similarity check.** Even at 0.70, Remote D's 28 s is under the fold
      limit (3% of 1035 s of speech = 31 s). `fold_small_clusters` would then give it to the
      most similar large cluster however unlike it is. A second small cluster (lines 170, 172
-     and 176, 13 s, "But Remote C and Colleague F's can keep you updated…") is folded the same way. The
+     and 176, 13 s, a promise that two named colleagues will keep the others updated) is folded the same way. The
      live pass also gave it its own label (`SPEAKER_06`), so it may be another person.
 
   → Re-measured with `tools/final_lab.py sweep` on cached fingerprints (WP0). Two details
@@ -316,19 +320,19 @@ What went well:
   steadier, then assign short lines to the nearest centroid. Test #3's A pieces were short
   lines. Code: `diarize.py` `cluster_voices`, `fold_small_clusters`; `finalize.py`
   `_voice_labels`.
-- [ ] (#13) **`SPEAKER_01` may still be several people.** Remote A, the person who opens the call ("I'm
-  just trying to capture the business need…") and the lines that sound like Remote E ("…Remote D,
-  feel free to correct me", "So Remote A, Remote B, early Q1, does that work for you guys?") are all
-  0.82–0.92 alike, as similar as Remote A is to himself, and they stay together even at 0.8. So
+- [ ] (#13) **`SPEAKER_01` may still be several people.** Remote A, the person who opens the call (setting out
+  the business need) and the lines that sound like Remote E (inviting Remote D to correct them;
+  asking Remote A and B whether a date works) are all
+  0.82–0.92 alike, as similar as Remote A is to themself, and they stay together even at 0.8. So
   either they're the same person, or this embedding model can't tell these voices apart over call
   audio. *Needs:* someone who was on the call to say who spoke lines 1–17, 117 and 121.
 
 ### Final pass: fragments and mixed lines
 
-- [x] **A sentence end cut off onto another speaker.** "Can we get a copy of that or is it just
-  a dump of the" (`SPEAKER_03`) / "GCP table." (`SPEAKER_01`); "I'm kind of just getting…"
-  (`01`) / "validation from the FMX people here." (`02`); "…we can always get the address from
-  joining you." (`02`) / "Another table." (`01`). The short second piece is too short to
+- [x] **A sentence end cut off onto another speaker.** A question ending "…a
+  dump of the" (`SPEAKER_03`) / "GCP table." (`SPEAKER_01`), and two more pairs where a short
+  closing piece (2–6 words) took a different label from the line it finishes (`01` / `02`,
+  `02` / `01`). The short second piece is too short to
   fingerprint reliably, so it takes a neighbour's label, which can be the wrong neighbour.
   `join_fragments` only joins the same speaker. *Idea:* when the previous line has no closing
   punctuation, the gap is under ~1 s and the next line is very short (≤ 3 words), attach it
@@ -337,14 +341,14 @@ What went well:
   examples aren't covered: their first line ends with a full stop or "…". A line that
   trails off with "…" doesn't count, because the short line after it is usually someone
   else's reply.
-- [x] **Same-speaker fragments not joined:** "…all we would have to do is build out the…" /
-  "Quodium side in the ETO process." Whisper's trailing "…" counts as closing punctuation.
+- [x] **Same-speaker fragments not joined:** "…build out the…" / a short
+  line naming two domain terms (both misheard). Whisper's trailing "…" counts as closing punctuation.
   *Idea:* don't treat "…" as a sentence end in `join_fragments`. (Also "default to the" / "The
   zone code address" was not joined because its gap is 2.6 s; leave that as is.)
   Fixed in WP1: 14 such pairs are joined in Test #4 (203 lines → 190), 2 in Test #2, 1 in
   Test #3. The "…" stays in the joined text.
-- [x] (#24, closed: fixed by the WP13 model or by design) **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
-  Yes. Yes.", "I think that is CSV. Yeah. Okay. Okay.", "…you're all good." Interjections under
+- [x] (#24, closed: fixed by the WP13 model or by design) **Quick back-and-forth stays inside one line** (low priority, by design): a question
+  answered "Yes. Yes." inside the same line, and two more like it Interjections under
   1 s / 3 words are folded into the surrounding line on purpose (Test #1 fix), so a short reply
   from someone else is attributed to the main speaker. Revisit only if the downstream app needs it.
 
@@ -387,10 +391,10 @@ What went well:
 
 ### Transcription quality
 
-- [ ] (#32) **Domain jargon is misheard throughout** (base.en): KoVa → "cover" / "co-va" /
-  "Co-ver", QDM → "Quodium" / "odium", ETL → "ETO", FMS → "FMX" / "famous" (fleet),
-  vendor → "bender", code freeze → "co-trees", prod → "abroad", spreadsheet → "spray cheat",
-  zone codes → "zonkers". The meaning of whole sentences is lost for a downstream summary.
+- [ ] (#32) **Domain jargon is misheard throughout** (base.en): KoVa (an internal acronym) → three
+  different everyday phrases, QDM → two made-up words, ETL → "ETO", FMS → a similar acronym
+  or an everyday word, vendor → "bender", code freeze → "co-trees", prod → "abroad",
+  spreadsheet → "spray cheat", zone codes → an everyday word. The meaning of whole sentences is lost for a downstream summary.
   *Ideas:* (1) a **custom vocabulary** setting passed to faster-whisper as `hotwords` or
   `initial_prompt` (e.g. "KoVa, QDM, ETL, FMS, GCP, zone code, Zentrix"); test on this
   meeting's kept audio. (2) small.en (see the Test #1 item). The laptop's p90 of 2.4 s
@@ -409,9 +413,9 @@ What went well:
   | Lines with 4+ extra words on the end | – | 13 | 7 | not counted |
   | Transcription time | 164 s | 537 s | 302 s | 904 s |
 
-  **What works:** "cover" → "KoVa", "ETO" → "ETL", "FMX" → "FMS", "bender" → "vendor",
-  "co-trees" → "code freeze", "spray cheat" → "spreadsheet", "Zendrix" → "Zentrix".
-  "Quodium" is not fixed. Tests #2 and #3 gained no new lines.
+  **What works:** KoVa's mishear → "KoVa", "ETO" → "ETL", FMS's mishear → "FMS",
+  "bender" → "vendor", "co-trees" → "code freeze", "spray cheat" → "spreadsheet", Zentrix's
+  mishear → "Zentrix". QDM's mishear is not fixed. Tests #2 and #3 gained no new lines.
   **What doesn't (not yet releasable under L36):**
   - *Junk on the end of correct lines*, e.g. "…SOT", "Mm. Mm.", "Make sure to subscribe to
     our channel." Also seen in Test #3. The plan's checks (new lines, vocabulary-only
@@ -420,8 +424,8 @@ What went well:
     1–6 s. The times were taken while other jobs ran on the PC, so re-measure on an idle
     machine before trusting the exact figures. Likely cause: the junk lowers the score and
     triggers the temperature retries; not confirmed.
-  - *Names are not safe:* with names in the prompt, "Well," became "Remote A," three times and
-    two lines gained an invented name on the end ("and Remote D.", "Remote B."). Attendee
+  - *Names are not safe:* with names in the prompt, "Well," became Remote A's name three times
+    and two lines gained an invented attendee name on the end. Attendee
     names stay out of the prompt by default (L34's automatic add becomes opt-in).
   → **Follow-up (`tools/vocab_spike.py run|diag|table`, one job at a time on the PC).**
   Clean timing confirms the slowdown: no prompt 162 s (median 0.56 s, p90 0.68 s per
@@ -485,8 +489,8 @@ What went well:
   **Confirmed by Bryce:** the quiet-mic notification appeared, so the 079d8c9 warning works on
   the target laptop. Every
   spoken mic passage was transcribed. Short sounds with no line at 03:29, 06:47 and 10:35 come
-  out of Whisper as "Okay." or "I'm so sorry.", most likely noises or backchannel. "Zendrix."
-  is probably "Zentrix" (a data-management product) said at the end of the question, so it's
+  out of Whisper as "Okay." or "I'm so sorry.", most likely noises or backchannel. One short
+  line is probably Zentrix (a data-management product) said at the end of the question, so it's
   not a hallucination.
   *Action:* raise the mic's input level in Windows Sound settings on that laptop.
 

@@ -31,21 +31,18 @@ from huddle_helper.transcribe import _HALLUCINATIONS, _clean, drop_hallucinated,
 from huddle_helper.segments import Word
 from huddle_helper.vad import UtteranceSegmenter
 
-BASE = "KoVa, QDM, ETL, FMS, GCP, vendor, code freeze, prod, spreadsheet, zone code, Zentrix"
-VARIANTS = {
-    1: None,
-    2: BASE,
-    3: "Glossary: KoVa, QDM, ETL, FMS, GCP, vendor, code freeze, prod, spreadsheet, zone code, Zentrix.",
-    4: BASE + ", Remote A, Remote B, Remote C, Remote D",
-}
-EXPECTED = ["KoVa", "QDM", "ETL", "FMS", "GCP", "vendor", "code freeze", "prod", "spreadsheet",
-            "zone codes?", "Zentrix"]
-MISHEARS = ["cover", "co-va", "co-ver", "quodium", "odium", "ETO", "FMX", "bender",
-            "co-trees", "spray cheat", "zonkers", "zendrix"]
-NAMES = ["Remote A", "Remote B", "Remote C", "Remote D"]
+# The real call's domain terms stay out of the repo: they are read from lab/vocab/terms.json
+# (gitignored) when it exists, with keys "base", "expected", "mishears", "vocab_phrases" and
+# "sent". The defaults below are made-up stand-ins with the same shape.
+TERMS_FILE = Path("lab/vocab/terms.json")
+_TERMS = json.loads(TERMS_FILE.read_text(encoding="utf-8")) if TERMS_FILE.exists() else {}
+BASE = _TERMS.get("base", "KoVa, QDM, ETL, FMS, GCP, vendor, code freeze, prod, spreadsheet, zone code, Zentrix")
+EXPECTED = _TERMS.get("expected", ["KoVa", "QDM", "ETL", "FMS", "GCP", "vendor", "code freeze", "prod",
+                                   "spreadsheet", "zone codes?", "Zentrix"])
+MISHEARS = _TERMS.get("mishears", ["ETO", "bender", "co-trees", "spray cheat"])
 # vocabulary phrases for the vocabulary-only-line check (plural s tolerated)
-VOCAB_PHRASES = ["KoVa", "QDM", "ETL", "FMS", "GCP", "vendors?", "code freeze", "prod",
-                 "spreadsheets?", "zone codes?", "Zentrix"]
+VOCAB_PHRASES = _TERMS.get("vocab_phrases", ["KoVa", "QDM", "ETL", "FMS", "GCP", "vendors?", "code freeze",
+                                             "prod", "spreadsheets?", "zone codes?", "Zentrix"])
 
 
 def rx(term: str) -> re.Pattern:
@@ -65,8 +62,8 @@ def vocab_only(text: str) -> bool:
     return s == "" and re.search(r"\w", text) is not None
 
 
-SENT = ("This call is about KoVa, QDM, ETL, FMS, GCP, vendors, the code freeze, prod, "
-        "the spreadsheet, zone codes and Zentrix.")
+SENT = _TERMS.get("sent", "This call is about KoVa, QDM, ETL, FMS, GCP, vendors, the code freeze, prod, "
+                          "the spreadsheet, zone codes and Zentrix.")
 # Decode variants (each needs a pass over the audio). Post-decode trims are applied offline.
 DECODES: dict[str, dict] = {
     "v1": {},

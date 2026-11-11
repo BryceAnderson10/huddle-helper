@@ -269,7 +269,7 @@ def cmd_sweep(args) -> int:
 
 
 # -- acceptance matrix ---------------------------------------------------
-RECORDINGS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*work*"}
+RECORDINGS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*_1605_*"}
 S_MIN_SIMILARITY = 0.70
 
 

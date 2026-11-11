@@ -25,7 +25,7 @@ commit as any contract change.
    | Test #1 | No (deleted) | `%USERPROFILE%\MeetingCompanion\meetings\2026-11-09_1324_test-meeting-1` |
    | Test #2 | Yes | `%USERPROFILE%\MeetingCompanion\meetings\2026-11-09_1334_test-2-2` |
    | Test #3 | Yes | `%USERPROFILE%\MeetingCompanion\meetings\2026-11-09_1441_test-3` |
-   | Test #4 | Yes | `%USERPROFILE%\Downloads\testmeeting\2026-11-09_1605_work-recording-2` |
+   | Test #4 | Yes | `%USERPROFILE%\Downloads\testmeeting\2026-11-09_1605_*` (one folder) |
    | TTS sample | Generated | `python tools\make_sample_meeting.py --out sample --echo` |
 
 2. **`huddle-helper finalize` can delete kept audio today.** `cli._finalize` passes
@@ -557,10 +557,10 @@ explained, and the item is left open with "confirm on the target laptop".
 Test #4's `system.flac` and `mic.flac`, and Tests #2–#3, with (1) no prompt, (2)
 `hotwords="KoVa, QDM, ETL, FMS, GCP, vendor, code freeze, prod, spreadsheet, zone code,
 Zentrix"`, (3) the same as a sentence ("Glossary: KoVa, QDM, …"), (4) variant 2 plus the
-names Remote A, Remote B, Remote C, Remote D. For each run report:
+four attendee names. For each run report:
 
-- hits of each expected term, and of each known mishear from TODO ("cover",
-  "Quodium", "ETO", "FMX", "bender", "co-trees", "spray cheat", "zonkers");
+- hits of each expected term, and of each known mishear from TODO ("ETO",
+  "bender", "co-trees", "spray cheat", and those of the internal terms);
 - lines that exist only in the prompted run, and lines made only of vocabulary terms;
 - names that appear where run 1 had none, with timestamps (for a human to listen to);
 - total transcription time and the slowest utterance.

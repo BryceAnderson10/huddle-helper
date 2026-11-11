@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import final_lab as fl  # noqa: E402
 from huddle_helper.diarize import cluster_voices, fold_small_clusters  # noqa: E402
 
-RECS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*work*", "test-5": "*test-meeting-4"}
+RECS = {"test-2": "*test-2-2", "test-3": "*test-3", "test-4": "*_1605_*", "test-5": "*test-meeting-4"}
 GRID = np.round(np.arange(0.20, 0.901, 0.01), 2)
 
 

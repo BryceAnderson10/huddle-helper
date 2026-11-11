@@ -547,27 +547,27 @@ def test_the_view_dims_and_marks_short_speakers_and_the_chip_bar_follows(root):
 
     lines = [seg(1, "system", 0, 120_000, "SPEAKER_00", "long talker."), seg(2, "system", 130_000, 140_000, "SPEAKER_01",
                                                                            "brief remark.")]
-    m = final_model(lines, {"SPEAKER_01": "Remote D"})
+    m = final_model(lines, {"SPEAKER_01": "Ben"})
     view = TranscriptView(root)
     view.set_short(logic.short_speakers(m))
     from huddle_helper.transcript_model import Reset
 
     view.apply([Reset()], m)
     text = view.plain_text().splitlines()
-    assert "\tRemote D · short\t" in text[1] and "· short" not in text[0]
+    assert "\tBen · short\t" in text[1] and "· short" not in text[0]
     t = view.text
-    assert t.tag_cget("spk:Remote D", "foreground") == theme.dim(view.color_of(view._rows[1]))
+    assert t.tag_cget("spk:Ben", "foreground") == theme.dim(view.color_of(view._rows[1]))
     assert t.tag_cget("spk:SPEAKER_00", "foreground") == view.color_of(view._rows[0])
     ranges = t.tag_ranges("short-body")
     assert len(ranges) == 2 and t.get(ranges[0], ranges[1]).strip() == "brief remark."
     assert view.row_count == 2  # shown, never hidden
-    # naming the long talker "Remote D" too merges the two: nobody is short any more, and the rows are redrawn
-    m2 = final_model(lines, {"SPEAKER_00": "Remote D", "SPEAKER_01": "Remote D"})
+    # naming the long talker "Ben" too merges the two: nobody is short any more, and the rows are redrawn
+    m2 = final_model(lines, {"SPEAKER_00": "Ben", "SPEAKER_01": "Ben"})
     view.set_short(logic.short_speakers(m2))
     assert "· short" not in view.plain_text() and t.tag_ranges("short-body") == ()
     bar = SpeakerBar(root)
     bar.set_chips(logic.speaker_chips(m), lambda key: "#123456")
-    assert "Remote D · short" in bar.get("1.0", "end") and "SPEAKER_00 · Who is this?" in bar.get("1.0", "end")
+    assert "Ben · short" in bar.get("1.0", "end") and "SPEAKER_00 · Who is this?" in bar.get("1.0", "end")
     bar.set_chips(logic.speaker_chips(m2), lambda key: "#123456")
     assert "short" not in bar.get("1.0", "end")  # the signature includes the mark, so the bar redraws
 

@@ -24,8 +24,8 @@ the transcript is to open `transcript.jsonl`, and names can only be added afterw
 - Once recording starts, everything the mic hears is transcribed. The user can't take
   a side conversation or a private aside off the record without stopping the meeting.
 - Whisper doesn't know the team's own words. In Test #4 (a real work call) base.en heard
-  "KoVa" as "cover", "QDM" as "Quodium", "ETL" as "ETO" and "spreadsheet" as "spray
-  cheat", so whole sentences lost their meaning for the downstream app. The user has no
+  internal acronyms as everyday phrases or made-up words, "ETL" as "ETO" and "spreadsheet"
+  as "spray cheat", so whole sentences lost their meaning for the downstream app. The user has no
   way to tell it which acronyms, product names and people's names to expect.
 - Sharing a transcript means handing someone raw JSONL.
 - Managing past meetings means Explorer. A meeting whose final pass failed stays
@@ -192,8 +192,8 @@ gets the name whose tagged speech overlaps it most.
 **Why mapping alone isn't enough: the final pass merges people.** Both real failures so
 far were two different people put into one final speaker, not one person split in two:
 Test #3 merged B and C, and Test #4 merged Remote D (6 lines, 28 s) into Remote B (377 s).
-With mapping alone, if the user names both Remote D and Remote B, the merged speaker is
-called "Remote B" (more overlap), Remote D's name is lost, and re-tagging can't help because
+With mapping alone, if the user names both, the merged speaker gets Remote B's name
+(more overlap), Remote D's name is lost, and re-tagging can't help because
 the merge happens before names are applied. So names must also steer the clustering.
 
 **Names as rules in the final pass (L14, P0; L39, P1).** The final pass's line
@@ -675,9 +675,9 @@ small panel (`gui/storage_dialog.py`; the numbers and the wording are in `storag
 ## Custom vocabulary
 
 **Why.** Test #4 was a real call about a data platform. base.en got the general speech
-right but misheard nearly every domain word: KoVa → "cover" / "co-va", QDM →
-"Quodium" / "odium", ETL → "ETO", FMS → "FMX" / "famous", vendor → "bender", code
-freeze → "co-trees", spreadsheet → "spray cheat", zone codes → "zonkers". A summary
+right but misheard nearly every domain word: internal acronyms became everyday phrases
+or made-up words, ETL → "ETO", vendor → "bender", code freeze → "co-trees",
+spreadsheet → "spray cheat". A summary
 built on that transcript would be wrong in exactly the places that matter. A larger
 model (small.en) helps with ordinary words but still can't know a team's acronyms, and
 it may not keep up live on the target laptop.
@@ -740,9 +740,9 @@ real audio (Tests #2–#4) with and without vocabulary:
 - **Speed:** live line delay p90 stays under the PRD's 5 s on the target laptop (it was
   2.4 s in Test #4 without vocabulary).
 - **Names:** people's names are the riskiest terms, because a wrongly inserted name is
-  a wrong fact ("Thank you, Remote D" when nobody said Remote D), and attendee names are
-  added automatically (L34). Test #4 has known names on the call (Remote A, Remote B, Remote C,
-  Remote D), so count names that appear where the run without vocabulary had none, and
+  a wrong fact ("Thank you, Dana" when nobody said Dana), and attendee names are
+  added automatically (L34). Test #4 has four known names on the call (Remote A–D),
+  so count names that appear where the run without vocabulary had none, and
   check each against the audio. If names misfire, keep attendee names out of the prompt
   by default.
 
@@ -822,7 +822,7 @@ While muted, an amber bar sits under the header:
   one person, so naming two voices alike can lift them over the limit). The number of lines is not used: one long
   line is not little speech. When *every* speaker is under 30 s (a very short meeting) none is marked, because
   nobody stands out. A named speaker is marked too ("Dana · short"). It applies to the chip ("You · short") and to the
-  speaker column of each of that person's lines ("Remote D · short"), whose text and name are drawn in a lighter
+  speaker column of each of that person's lines ("Ben · short"), whose text and name are drawn in a lighter
   colour; the Who is this? prompt still appears for an unnamed one. Exports and every output file are
   unchanged.
 - **Past meetings.** The Meetings view (above) opens any meeting read-only with names;
