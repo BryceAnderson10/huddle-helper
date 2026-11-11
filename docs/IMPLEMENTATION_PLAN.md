@@ -278,9 +278,9 @@ and size remembered in Settings. Two views swapped in place: Transcript and Meet
 - **Speaker bar:** a second, 1–2 line read-only `tk.Text` holding chips as tagged ranges.
   It wraps by itself, so no custom flow layout is needed.
 - **Auto-scroll:** if the view was at the bottom before an insert, `see("end")` after it.
-  Otherwise leave the scroll position and show the floating "↓ N new lines" button
-  (`place` over the bottom-right of the transcript); clicking it or scrolling to the end
-  hides it.
+  Otherwise leave the scroll position and show the "↓ N new lines" button, right-aligned in a
+  strip packed under the transcript only while it shows, so it never covers a row (#27);
+  clicking it or scrolling to the end hides it.
 - **Meetings view:** `ttk.Treeview` with columns Date, Title, Length, Status, Speakers,
   Marks, Audio; a filter box and status filter above; action buttons below.
 - **Symbols:** only characters in the Basic Multilingual Plane (▶ ■ ⚑ ✔ ☐ ? ● ▮ ▯ ↓). No

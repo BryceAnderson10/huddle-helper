@@ -84,7 +84,11 @@ class TranscriptView(ttk.Frame):
         self._tip: tk.Toplevel | None = None
         self._tip_for: str | None = None
 
-        self.new_button = ttk.Button(self, command=self.jump_to_end)
+        # The "↓ N new lines" button sits in a strip under the text (left of the scrollbar), packed only while it
+        # shows: the text gives up that height, so the button never covers the last row (#27).
+        self._new_bar = tk.Frame(self, bg="white")
+        self.new_button = ttk.Button(self._new_bar, command=self.jump_to_end)
+        self.new_button.pack(side="right", padx=int(12 * self._scale), pady=(0, int(6 * self._scale)))
         self.placeholder = ttk.Label(self, text="", foreground=theme.MUTED, font=self.f_base, anchor="center",
                                      justify="center", wraplength=int(420 * self._scale))
 
@@ -132,7 +136,7 @@ class TranscriptView(ttk.Frame):
         self.scroll.set(first, last)
         self._follow = float(last) >= 0.999
         if self._follow and self._new_lines:
-            self._hide_new_button()
+            self._hide_new_bar()
 
     def _user_scrolled(self, event=None) -> None:
         self._run_follow = False
@@ -145,22 +149,22 @@ class TranscriptView(ttk.Frame):
         self.text.see("end")
         self.text.yview_moveto(1.0)
         self._follow = True
-        self._hide_new_button()
+        self._hide_new_bar()
 
     def scroll_to_top(self) -> None:
         self.text.yview_moveto(0.0)
 
-    def _hide_new_button(self) -> None:
+    def _hide_new_bar(self) -> None:
         self._new_lines = 0
-        self.new_button.place_forget()
+        self._new_bar.pack_forget()
 
     def _note_new_lines(self, n: int) -> None:
         if n <= 0:
             return
         self._new_lines += n
         self.new_button.configure(text=f"↓ {self._new_lines} new line{'' if self._new_lines == 1 else 's'}")
-        self.new_button.place(relx=1.0, rely=1.0, x=-int(24 * self._scale), y=-int(12 * self._scale),
-                              anchor="se")
+        if not self._new_bar.winfo_manager():
+            self._new_bar.pack(side="bottom", fill="x", before=self.text)
 
     def set_placeholder(self, text: str | None) -> None:
         if text:
@@ -346,7 +350,7 @@ class TranscriptView(ttk.Frame):
         self.text.configure(state="disabled")
         self._rows, self._ids = [], []
         self._colors.clear()
-        self._hide_new_button()
+        self._hide_new_bar()
         self._model = None
 
     def _clear(self) -> None:
