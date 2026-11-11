@@ -45,6 +45,13 @@ class Settings:
     beam_size: int = 1
     cpu_threads: int = 0  # 0 lets CTranslate2 decide
 
+    # Second transcription after Stop (WP15): the kept audio is transcribed again with a stronger
+    # model for the final transcript. Off by default: it adds about 0.4x the speech length on a
+    # desktop CPU (TODO.md). Additive keys, so no SETTINGS_VERSION bump.
+    final_transcribe: bool = False
+    final_model: str = "small.en"
+    final_beam_size: int = 5
+
     # Speaker labels (F5).
     diarize_system: bool = True
     diarize_mic: bool = False

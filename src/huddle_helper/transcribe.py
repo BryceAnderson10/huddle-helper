@@ -12,7 +12,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 import numpy as np
 
@@ -44,7 +44,9 @@ class Transcriber(Protocol):
 
 class WhisperTranscriber:
     def __init__(self, model_name: str = "base.en", beam_size: int = 1, cpu_threads: int = 0,
-                 models_root: Path | None = None):
+                 models_root: Path | None = None, trim_always: bool = False):
+        """``trim_always`` (the second pass after Stop, WP15) drops invented later segments on every
+        call, not only prompted ones; see ``read_segments``."""
         from faster_whisper import WhisperModel
 
         model_path = models.whisper_dir(model_name, models_root)
@@ -52,6 +54,7 @@ class WhisperTranscriber:
             raise FileNotFoundError(f"Whisper model {model_name} is not installed at {model_path}")
         self.name = model_name
         self._beam = max(1, beam_size)
+        self._trim_always = trim_always
         self._model = WhisperModel(str(model_path), device="cpu", compute_type="int8",
                                    cpu_threads=cpu_threads, local_files_only=True)
 
@@ -72,6 +75,8 @@ class WhisperTranscriber:
         )
         if prompt:
             segments = read_segments(segments, len(audio) / SAMPLE_RATE)
+        elif getattr(self, "_trim_always", False):
+            segments = read_segments(segments, len(audio) / SAMPLE_RATE, stop=False)
         texts: list[str] = []
         words: list[Word] = []
         logprob_sum = 0.0
@@ -99,6 +104,19 @@ class WhisperTranscriber:
         return Transcription(text, max(0.0, min(1.0, confidence)), words)
 
 
+def final_transcriber_factory(settings, threads: Callable[[], int]) -> Callable[[], "WhisperTranscriber"] | None:
+    """The second-pass transcriber for the final transcript (WP15), or None when it is off or its
+    model is not installed (the final pass then keeps the live text). ``threads`` is read when the
+    model loads, so a recording started meanwhile gets the smaller number."""
+    if not getattr(settings, "final_transcribe", False):
+        return None
+    name = settings.final_model
+    if not models.whisper_installed(name):
+        log.warning("Final-transcript model %s is not installed; keeping the live text", name)
+        return None
+    return lambda: WhisperTranscriber(name, settings.final_beam_size, threads(), trim_always=True)
+
+
 # With a prompt, Whisper decodes one more window over the 0.2 s of padding after the last
 # word and invents text there ("Mm.", "SOT", echoes of the list), and the low score triggers
 # temperature retries, 3.6x slower overall. So stop reading segments once one ends this close
@@ -119,11 +137,12 @@ def is_skipped(seg) -> bool:
     return (seg.no_speech_prob > 0.6 and seg.avg_logprob < -1.0) or not seg.text.strip()
 
 
-def read_segments(segments: Iterable, audio_s: float) -> list:
+def read_segments(segments: Iterable, audio_s: float, stop: bool = True) -> list:
     """Read Whisper's (lazy) segments for a prompted call: stop after a segment that ends
     within PROMPT_STOP_S of the end of the audio, so the leftover window is never decoded, and
     drop later segments that look like invented text. Pure; works on any objects with
-    start/end/text/avg_logprob/compression_ratio/no_speech_prob."""
+    start/end/text/avg_logprob/compression_ratio/no_speech_prob. ``stop=False`` keeps reading to
+    the end and only drops (an unprompted call: stopping could cut a real last word)."""
     kept: list = []
     seen = False  # a real segment has been kept
     for seg in segments:
@@ -136,7 +155,7 @@ def read_segments(segments: Iterable, audio_s: float) -> list:
         else:
             seen = True
             kept.append(seg)
-        if audio_s - seg.end < PROMPT_STOP_S:
+        if stop and audio_s - seg.end < PROMPT_STOP_S:
             break
     return kept
 

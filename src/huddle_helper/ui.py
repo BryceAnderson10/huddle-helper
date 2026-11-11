@@ -362,6 +362,19 @@ class SettingsDialog:
             row=r, column=1, sticky="w")
         r += 1
 
+        final_frame = ttk.Frame(frm)
+        self.final_on = tk.BooleanVar(value=settings.final_transcribe)
+        self.final_model = tk.StringVar(value=settings.final_model)
+        ttk.Checkbutton(final_frame, text="Improve the transcript after the meeting (slower), with",
+                        variable=self.final_on).pack(side="left")
+        ttk.Combobox(final_frame, textvariable=self.final_model, state="readonly", width=10,
+                     values=[m for m in models.WHISPER_MODELS if m != "tiny.en"]).pack(side="left", padx=(6, 0))
+        row("", final_frame)
+        ttk.Label(frm, text="After Stop, the kept audio is transcribed a second time with this model. "
+                            "The final transcript takes longer to arrive.", wraplength=360,
+                  foreground="#555").grid(row=r, column=1, sticky="w")
+        r += 1
+
         self.diar_sys = tk.BooleanVar(value=settings.diarize_system)
         self.diar_mic = tk.BooleanVar(value=settings.diarize_mic)
         self.echo = tk.BooleanVar(value=settings.echo_dedupe)
@@ -461,6 +474,8 @@ class SettingsDialog:
         folder = self.folder.get().strip()
         s.meetings_dir = "" if Path(folder) == config.paths.default_meetings_dir() else folder
         s.whisper_model = self.model.get()
+        s.final_transcribe = self.final_on.get()
+        s.final_model = self.final_model.get()
         s.diarize_system = self.diar_sys.get()
         s.diarize_mic = self.diar_mic.get()
         s.echo_dedupe = self.echo.get()

@@ -71,6 +71,7 @@ def _ensure_models(s: config.Settings) -> None:
 def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> None:
     from .diarize import SherpaEmbedder, SherpaOfflineDiarizer, final_threads
     from .finalize import finalize_meeting
+    from .transcribe import final_transcriber_factory
 
     def progress(stage, frac):
         print(f"\r{stage}: {frac:4.0%}   ", end="", flush=True)
@@ -81,7 +82,7 @@ def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> Non
                                  threshold=voice.split_cluster, merge_small=False, num_threads=threads),
                              keep_audio=s.keep_audio if keep_audio is None else keep_audio,
                              progress=progress, embedder_factory=lambda: SherpaEmbedder(num_threads=threads),
-                             voice=voice)
+                             voice=voice, transcriber_factory=final_transcriber_factory(s, lambda: threads))
     print(f"\nFinal transcript: {folder.final_path} ({count} segments)")
 
 
@@ -234,6 +235,13 @@ def cmd_finalize(args) -> int:
     from .meeting import MeetingFolder
 
     s = _settings(args)
+    if getattr(args, "no_final_transcribe", False):
+        s.final_transcribe = False
+    elif getattr(args, "final_model", None):
+        from . import models
+
+        s.final_transcribe, s.final_model = True, args.final_model
+        models.install_whisper(s.final_model, progress=print)  # before go_offline: may download once
     go_offline()
     folder = MeetingFolder(Path(args.folder))
     if folder.done_path.exists():
@@ -376,6 +384,9 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("folder")
     sp.add_argument("--delete-audio", action="store_true",
                     help="remove the buffered audio afterwards (default: keep it)")
+    sp.add_argument("--final-model", help="transcribe the kept audio again with this model (e.g. small.en)")
+    sp.add_argument("--no-final-transcribe", action="store_true",
+                    help="keep the live text even if Settings turns the second transcription on")
     common(sp)
     sp.set_defaults(func=cmd_finalize)
 

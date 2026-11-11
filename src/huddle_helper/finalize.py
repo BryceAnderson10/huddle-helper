@@ -26,13 +26,14 @@ import shutil
 import time
 from typing import Callable
 
-from . import meeting as mt, tags as tags_mod
+from . import meeting as mt, tags as tags_mod, vocab as vocab_mod
 from .audio.buffer import read_audio
 import numpy as np
 
 from .audio import SAMPLE_RATE
 from .diarize import (MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OfflineDiarizer, Turn,
                       VoiceProfile, cluster_voices, fold_small_clusters, label, profile)
+from .retranscribe import FinalTranscriber, retranscribe
 from .segments import Segment, Word
 from .writer import read_events, write_transcript
 
@@ -453,8 +454,12 @@ def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
                      keep_audio: bool, progress: Progress | None = None,
                      embedder_factory: Callable[[], Embedder] | None = None,
-                     voice_threshold: float | None = None, voice: VoiceProfile | None = None) -> int:
-    """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count."""
+                     voice_threshold: float | None = None, voice: VoiceProfile | None = None,
+                     transcriber_factory: Callable[[], FinalTranscriber] | None = None) -> int:
+    """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count.
+
+    With ``transcriber_factory`` the kept audio of both sources is transcribed a second time first
+    (``retranscribe``); if that fails for any reason the pass carries on with the live text."""
     progress = progress or (lambda stage, frac: None)
     t_start = time.perf_counter()
     stages: dict[str, float] = {}
@@ -473,6 +478,29 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
                                     ("mic", rec.get("diarize_mic", False))) if on}
     words = load_words(folder.words_path)
 
+    preloaded: dict[str, np.ndarray] = {}
+    retx: dict = {}
+    if transcriber_factory is not None and segments:
+        t0 = time.perf_counter()
+        try:
+            progress("Improving the transcript", 0.0)
+            for src in sorted({s.source for s in segments}):
+                if folder.audio_file(src).exists():
+                    preloaded[src] = read_audio(folder.audio_file(src))
+            if preloaded:
+                transcriber = transcriber_factory()
+                terms = [t for t in meta.get("vocabulary") or [] if isinstance(t, str)]
+                segments, words, rstats = retranscribe(
+                    segments, words, preloaded, transcriber, vocab_mod.build_prompt(terms),
+                    lambda f: progress("Improving the transcript", f))
+                retx = {"final_transcriber": getattr(transcriber, "name", "unknown"),
+                        "retx_lines_changed": rstats.changed, "retx_lines_kept_live": rstats.kept_live}
+                del transcriber
+        except Exception:  # noqa: BLE001 - the live text is a complete transcript; never lose the meeting
+            log.exception("Second transcription failed for %s; keeping the live text", folder.meeting_id)
+            retx = {"final_transcriber": None, "retx_failed": True}
+        stages["retranscribe"] = time.perf_counter() - t0
+
     turns_by_source: dict[str, list[Turn] | None] = {}
     audio_by_source: dict[str, np.ndarray] = {}
     diarizer = None
@@ -484,7 +512,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             continue
         try:
             t0 = time.perf_counter()
-            audio_by_source[src] = read_audio(audio_path)
+            audio_by_source[src] = preloaded[src] if src in preloaded else read_audio(audio_path)
             stages["read_audio"] = stages.get("read_audio", 0.0) + time.perf_counter() - t0
         except Exception:  # noqa: BLE001
             log.exception("Could not read buffered %s audio; keeping live labels", src)
@@ -508,6 +536,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             stages[f"merge_small_{src}"] = merge_s
         stages[f"diarize_{src}"] = max(took_src - merge_s, 0.0)  # excludes merge_small_<src>
 
+    preloaded.clear()
     audio_s = max((len(a) / SAMPLE_RATE for a in audio_by_source.values()), default=None)
     embed = None
     if embedder_factory is not None and audio_by_source:
@@ -549,10 +578,12 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     took = time.perf_counter() - t_start
     final_stats = {"took_s": round(took, 2), "audio_s": round(audio_s, 2) if audio_s is not None else None,
                    "speed": round(took / audio_s, 2) if audio_s else None,
-                   "stages": {k: round(v, 2) for k, v in stages.items()}}
+                   "stages": {k: round(v, 2) for k, v in stages.items()},
+                   **{k: v for k, v in retx.items() if k != "final_transcriber"}}
+    extra = {"final_transcriber": retx["final_transcriber"]} if retx.get("final_transcriber") else {}
 
     folder.update_meta(status=mt.STATUS_COMPLETE, final_written_at=mt.iso(mt.now_local()),
                        final_segments=count, audio_kept=folder.audio_dir.exists(),
-                       refined_streams=refined, final_stats=final_stats)
+                       refined_streams=refined, final_stats=final_stats, **extra)
     folder.mark_done()
     return count

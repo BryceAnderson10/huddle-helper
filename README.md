@@ -98,6 +98,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
 | `recorder.py` | Threads and lifecycle of one recording |
 | `finalize.py` | After-Stop pass: refined labels (the user's names steer the clustering), final file, `speakers.json` from the names, cleanup, DONE |
+| `retranscribe.py` | Optional second transcription of the kept audio after Stop with a stronger model (off by default); each line keeps its place |
 | `housekeeping.py` | Crash recovery, audio auto-purge |
 | `library.py` | Meetings list: `MeetingInfo`, cached `scan` (sizes measured on a worker thread), status mapping, filter and search, `delete_meeting` / `delete_audio` (never while busy; only real folders inside the meetings folder) |
 | `shell.py` | Recycle Bin delete through `SHFileOperationW` (`recycle`), `has_recycle_bin` |

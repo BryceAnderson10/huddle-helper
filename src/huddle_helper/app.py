@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .recorder import Components, Recorder, Status, load_components
+from .transcribe import final_transcriber_factory
 
 log = logging.getLogger(__name__)
 
@@ -208,6 +209,15 @@ class AppController:
             models.install_all(s.whisper_model, s.needs_diarization,
                                progress=lambda m: self._set(message=m))
             self._notify("Models installed. Huddle Helper is ready.")
+        if s.final_transcribe and not models.whisper_installed(s.final_model):
+            # The model for the second transcription after Stop. A failure here must not stop
+            # recording: the final pass then keeps the live text.
+            try:
+                self._set(phase="downloading", message=f"Downloading the {s.final_model} model for final transcripts")
+                models.install_whisper(s.final_model, progress=lambda m: self._set(message=m))
+            except Exception:  # noqa: BLE001
+                log.exception("Could not install the final-transcript model %s", s.final_model)
+                self._notify(f"Could not download the {s.final_model} model. Final transcripts will use the live text.")
 
     def _get_components(self) -> Components:
         s = self.settings
@@ -632,7 +642,9 @@ class AppController:
                         num_threads=final_threads(self.is_recording)),
                     keep_audio=keep, progress=progress,
                     embedder_factory=lambda: SherpaEmbedder(num_threads=final_threads(self.is_recording)),
-                    voice=voice)
+                    voice=voice,
+                    transcriber_factory=final_transcriber_factory(
+                        self.settings, lambda: final_threads(self.is_recording)))
                 self._notify(f"Final transcript ready: {folder.meeting_id}")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Finalizing %s failed", folder.meeting_id)
@@ -772,7 +784,8 @@ class AppController:
             else:
                 self._notify("Settings saved. They apply from the next recording"
                              + (" (the vocabulary applies from the next line)." if vocab_changed else "."))
-        model_changed = (old.whisper_model, old.needs_diarization) != (new.whisper_model, new.needs_diarization)
+        model_changed = ((old.whisper_model, old.needs_diarization, old.final_transcribe and old.final_model)
+                         != (new.whisper_model, new.needs_diarization, new.final_transcribe and new.final_model))
         if model_changed and not self.is_recording:
             self._set(phase="starting", message="Loading models…")
             self.boot()

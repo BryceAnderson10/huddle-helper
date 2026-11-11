@@ -859,3 +859,22 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   was not rebuilt yet.
 - [ ] **Needs Bryce:** how many people speak in Test #2 (now four), whether six remote speakers
   is right for Test #4, and whether Test #5's 71 s line is the second person.
+
+## From the second transcription after Stop (WP15, built, off by default, not yet accepted)
+
+- [x] **Built:** `retranscribe.py` and a stage in `finalize_meeting` ("Improving the transcript").
+  Settings: "Improve the transcript after the meeting (slower), with <model>" (`final_transcribe`,
+  `final_model` small.en, `final_beam_size` 5); `huddle-helper finalize --final-model` /
+  `--no-final-transcribe`. Each line keeps its place; the live text is kept when the new text
+  is empty, under half or over twice the words, when a call fails, or when the whole stage
+  fails. Later invented segments are dropped on every second-pass call. The meeting's whole
+  vocabulary is used for every line (a term added late now helps the early lines too).
+- [ ] **Paused before acceptance (Bryce, 2026-11-11):** wait for the public meeting audio and
+  transcript as the test baseline. Not run yet: the real final pass with the stage on (Tests
+  #2-#5), word error against a reference, time on the dev PC and the laptop, the Settings
+  dialog by eye, the exe rebuild. Unit tests only so far (10, scripted transcriber).
+- [ ] **WP14 (Parakeet against small.en) stopped part-way** on a usage limit. `tools/retx_lab.py`,
+  `tools/wer.py` and `tests/test_wer.py` are that subagent's unfinished, uncommitted work; no
+  results were reported. Until it is done the stage ships Whisper only.
+- [ ] Departures from the plan: no check on `drop_hallucinated` (the transcriber does not report
+  it); a final line's start and end follow the new word times, within 200 ms of the live line's.

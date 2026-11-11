@@ -111,6 +111,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `audio_deleted_at` | Optional, additive. ISO 8601 time at which the user deleted the kept `audio\` from the Meetings list (to the Recycle Bin or permanently); `audio_kept` is then `false`. Absent if that never happened. The transcripts, `speakers.json` and `marks.jsonl` are not touched. |
 | `audio_purged_at` | Optional, additive. The same for the automatic purge of kept audio after N days (Settings). |
 | `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+| `final_transcriber` | Present only when the kept audio was transcribed a second time after Stop (WP15, off by default): the model's name. The text of a final line may then differ from the live line at the same time; `transcript.jsonl` and `audio\words.jsonl` are never rewritten. `final_stats` then also has `stages.retranscribe` (seconds), `retx_lines_changed` and `retx_lines_kept_live` (lines whose new text was refused as empty, under half or over twice the live line's words); `retx_failed: true` instead when the second transcription failed and the live text was kept. |
 
 ## `marks.jsonl` (bookmarks)
 
