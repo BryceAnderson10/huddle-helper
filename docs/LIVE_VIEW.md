@@ -168,7 +168,7 @@ P0 items define this feature's first release; P1 items follow.
 
 Live labels come from `OnlineClusterer` (`diarize.py`). The final file is labelled
 by clustering every line's voice fingerprint over the whole meeting
-(`finalize.py` `_voice_labels`, since 601d147) and **numbers speakers independently**.
+(`finalize.py` `_voice_labels`, since 416de3a) and **numbers speakers independently**.
 The final pass can also split a line in two or join fragments. So "`SPEAKER_04` = Eric"
 from the live file cannot be copied into `speakers.json`, whose keys are final labels
 (OUTPUT_SPEC).
