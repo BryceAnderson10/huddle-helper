@@ -31,7 +31,7 @@ A real call is **private**: people's names, the meeting title, the team's terms,
    - **Features used**: bookmarks (`marks.jsonl`), vocabulary (`vocabulary`, `vocabulary_changed_at_ms`), clips played (`playbacks`).
    - **Transcript**: the share of lines under 1 s, and of lines with low confidence.
 
-   Done when every feature Bryce used has a result, or a reason it could not be checked (the app log stays on the laptop, for example).
+   Done when every feature Bryce used has a result, or a reason it could not be checked (the app log stays on the laptop, for example). On this machine, read the log as described in [Reading the app log](#reading-the-app-log).
 
 6. **Record it in `TODO.md`** as `## From Test #N: <setup in a few words> (<date>)`:
    - A setup paragraph: machine, devices, model, Keep audio, length, line counts, how many remote people, what Bryce did.
@@ -47,3 +47,16 @@ A real call is **private**: people's names, the meeting title, the team's terms,
    Done when every `### Open` item names an issue.
 
 8. **Commit** `TODO.md`. The hooks check the diff and the commit message, and the Claude Code hook checks each `gh` body. If one blocks, put a placeholder in place of the term, and add the term to `lab/private_terms.txt` if it was missing.
+
+## Reading the app log
+
+A Claude session sees the wrong log. The Claude desktop app is an MSIX package, and Windows redirects `%LOCALAPPDATA%` for every process it starts: shells, source runs, `pytest`. For those processes, `%LOCALAPPDATA%\HuddleHelper\` is really `%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Local\HuddleHelper\`. The packaged app, started from Explorer or the Start menu, writes the real `%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`. So a log read from a session shows only runs started from Claude, and an Explorer run looks as if it wrote nothing (#21).
+
+To read the real log, start the reader outside the package, through WMI, and write to a folder that isn't redirected:
+
+```powershell
+$out = "$PWD\lab\real-log.txt"
+Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{CommandLine = "cmd /c type `"%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`" > `"$out`""}
+```
+
+The copy is private (it has meeting titles), so keep it in `lab/` and delete it when done. Or ask Bryce to open the log in Notepad. A log under `HUDDLE_HELPER_DATA_DIR` outside `AppData` isn't redirected.
