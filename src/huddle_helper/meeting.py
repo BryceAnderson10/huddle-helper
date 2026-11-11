@@ -9,6 +9,7 @@ Layout (see docs/OUTPUT_SPEC.md):
         speakers.json           optional speaker id -> display name
         marks.jsonl             bookmarks (first bookmark creates it)
         speaker_tags.jsonl      the user's speaker names (first name creates it)
+        echo_dropped.jsonl      mic lines dropped as echo (first drop creates it)
         DONE                    empty marker, created last
         audio/                  buffered audio, deleted unless Keep audio is on
 """
@@ -31,6 +32,7 @@ FINAL_TMP = "transcript.final.jsonl.tmp"
 SPEAKERS = "speakers.json"
 MARKS = "marks.jsonl"
 TAGS = "speaker_tags.jsonl"
+ECHO_DROPPED = "echo_dropped.jsonl"
 DONE = "DONE"
 AUDIO = "audio"
 
@@ -181,6 +183,10 @@ class MeetingFolder:
     @property
     def marks_path(self) -> Path:
         return self.path / MARKS
+
+    @property
+    def echo_dropped_path(self) -> Path:
+        return self.path / ECHO_DROPPED
 
     @property
     def tags_path(self) -> Path:

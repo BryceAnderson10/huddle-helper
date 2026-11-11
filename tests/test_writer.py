@@ -47,6 +47,37 @@ def test_merger_drops_mic_echo_of_system_speech():
     assert m.dropped_echo == 1
 
 
+def test_merger_reports_each_echo_drop_with_the_system_lines_it_matched():
+    out, drops = [], []
+    m = SegmentMerger(["mic", "system"], out.append, echo_dedupe=True,
+                      on_echo=lambda mic, match: drops.append((mic, match)))
+    m.add(seg("system", 0, 3000, "can you send the report by friday"))
+    m.add(seg("system", 3500, 5000, "and the slides"))
+    m.add(seg("system", 9000, 10000, "much later"))
+    m.add(seg("mic", 500, 3200, "send the report by friday"))
+    m.add(seg("mic", 6000, 7000, "Okay, thanks."))
+    m.flush_all()
+
+    assert [s.text for s in out if s.source == "mic"] == ["Okay, thanks."]
+    assert len(drops) == 1 and m.dropped_echo == 1
+    mic, match = drops[0]
+    assert (mic.start_ms, mic.end_ms, mic.text) == (500, 3200, "send the report by friday")
+    # Both system lines inside the 1 s window, in time order; the far one is not compared.
+    assert [(s.start_ms, s.text) for s in match.matched] == [
+        (0, "can you send the report by friday"), (3500, "and the slides")]
+    assert match.overlap == 1.0
+
+
+def test_merger_reports_nothing_when_no_mic_line_is_echo():
+    drops = []
+    m = SegmentMerger(["mic", "system"], lambda s: None, echo_dedupe=True,
+                      on_echo=lambda mic, match: drops.append(mic))
+    m.add(seg("system", 0, 3000, "we ship on Friday"))
+    m.add(seg("mic", 500, 2500, "completely different words"))
+    m.flush_all()
+    assert drops == [] and m.dropped_echo == 0
+
+
 def test_mic_segment_waits_for_system_to_pass_its_end_before_echo_check():
     out = []
     m = SegmentMerger(["mic", "system"], out.append, echo_dedupe=True, echo_window_ms=1000)

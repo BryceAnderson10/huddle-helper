@@ -1,6 +1,8 @@
 """End-to-end recorder runs with fake ASR/embeddings and file-fed audio."""
 
+import logging
 import os
+import time
 
 import numpy as np
 
@@ -15,7 +17,7 @@ from huddle_helper.writer import read_events
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
 
 
-def run(tmp_path, mic, system, errors=None, transcriber=None, **settings):
+def run(tmp_path, mic, system, errors=None, transcriber=None, before_stop=None, **settings):
     s = config.Settings(meetings_dir=str(tmp_path / "meetings"), **settings)
     holder = {}
 
@@ -28,6 +30,8 @@ def run(tmp_path, mic, system, errors=None, transcriber=None, **settings):
     rec = Recorder(s, comps, on_error=(errors.append if errors is not None else None))
     folder = rec.start("Unit Test")
     holder["cap"].finished.wait()
+    if before_stop is not None:
+        before_stop(folder)
     rec.stop()
     return folder, read_events(folder.live_path)
 
@@ -99,6 +103,47 @@ def test_echo_dedupe_drops_mic_copy(tmp_path):
 
     _folder, events = run(tmp_path / "b", mic, system, echo_dedupe=False)
     assert sorted(e["source"] for e in events if e["type"] == "segment") == ["mic", "system"]
+
+
+def test_each_echo_drop_is_recorded_in_echo_dropped_jsonl_and_logged(tmp_path, caplog):
+    system = np.concatenate([silence(1), tone(700, 2), silence(2)])
+    mic = system * 0.4  # speakers leaking into the mic
+    seen_before_stop = []
+
+    def wait_for_drop(folder):  # the line is on disk while still recording, not only at Stop
+        deadline = time.monotonic() + 10
+        while not folder.echo_dropped_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        seen_before_stop.extend(read_events(folder.echo_dropped_path) if folder.echo_dropped_path.exists() else [])
+
+    with caplog.at_level(logging.INFO, logger="huddle_helper"):
+        folder, events = run(tmp_path, mic, system, before_stop=wait_for_drop)
+
+    system_line = next(e for e in events if e["type"] == "segment")
+    drops = read_events(folder.echo_dropped_path)
+    assert seen_before_stop == drops
+    assert len(drops) == folder.read_meta()["echo_segments_dropped"] == 1
+    drop = drops[0]
+    assert drop["type"] == "echo_drop" and drop["text"] == "Tone700."
+    assert 750 <= drop["start_ms"] < drop["end_ms"]
+    assert drop["overlap"] == 1.0
+    assert drop["matched"] == [{"start_ms": system_line["start_ms"], "end_ms": system_line["end_ms"],
+                                "text": "Tone700."}]
+    logged = [r.getMessage() for r in caplog.records if "dropped mic line" in r.getMessage().lower()]
+    assert len(logged) == 1 and "Tone700." in logged[0]
+
+
+def test_no_echo_dropped_file_without_drops(tmp_path):
+    mic = np.concatenate([silence(0.5), tone(300, 1.5), silence(2)])
+    system = np.concatenate([silence(2.5), tone(1100, 2.0), silence(1)])
+    folder, _events = run(tmp_path, mic, system)
+    assert folder.read_meta()["echo_segments_dropped"] == 0
+    assert not folder.echo_dropped_path.exists()
+
+    system = np.concatenate([silence(1), tone(700, 2), silence(2)])
+    folder, _events = run(tmp_path / "off", system * 0.4, system, echo_dedupe=False)
+    assert folder.read_meta()["echo_segments_dropped"] == 0
+    assert not folder.echo_dropped_path.exists()
 
 
 def test_diarize_mic_and_no_system_diarization(tmp_path):

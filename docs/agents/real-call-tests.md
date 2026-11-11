@@ -59,4 +59,4 @@ $out = "$PWD\lab\real-log.txt"
 Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{CommandLine = "cmd /c type `"%LOCALAPPDATA%\HuddleHelper\logs\huddle-helper.log`" > `"$out`""}
 ```
 
-The copy is private (it has meeting titles), so keep it in `lab/` and delete it when done. Or ask Bryce to open the log in Notepad. A log under `HUDDLE_HELPER_DATA_DIR` outside `AppData` isn't redirected.
+The copy is private (it has meeting titles, and the mic lines dropped as echo), so keep it in `lab/` and delete it when done. Or ask Bryce to open the log in Notepad. A log under `HUDDLE_HELPER_DATA_DIR` outside `AppData` isn't redirected.

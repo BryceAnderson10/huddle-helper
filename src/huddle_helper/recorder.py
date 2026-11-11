@@ -37,6 +37,7 @@ from .audio.gate import MicGate
 from .audio.ring import RecentAudio
 from .config import Settings
 from .diarize import MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OnlineClusterer
+from .echo import EchoMatch, drop_event
 from .finalize import append_words
 from .segments import Segment, Word
 from .transcribe import Transcriber
@@ -263,7 +264,8 @@ class Recorder:
         self._pending_gaps, self._written_since = [], 0 if start_muted else None
         self._writer.write(meeting_start_event(self.folder.meeting_id, mt.iso(started)))
 
-        self._merger = SegmentMerger(SOURCES, self._write_segment, echo_dedupe=s.echo_dedupe)
+        self._merger = SegmentMerger(SOURCES, self._write_segment, echo_dedupe=s.echo_dedupe,
+                                     on_echo=self._record_echo_drop)
         scorer_factory = self.c.scorer_factory
         if scorer_factory is None:
             from .vad import SileroScorer
@@ -550,6 +552,13 @@ class Recorder:
             wall = self._utt_end_wall.pop((seg.source, seg.start_ms), None)
             if wall is not None and getattr(self._capture, "realtime", True):
                 self.latencies_ms.append(int((time.perf_counter() - wall) * 1000))
+
+    def _record_echo_drop(self, seg: Segment, match: EchoMatch) -> None:
+        """Keep a mic line the echo dedupe dropped, so a false drop can be checked after the meeting."""
+        try:
+            mt.append_jsonl(self.folder.echo_dropped_path, drop_event(seg, match))
+        except OSError:  # a diagnostic: never stop the transcript or Stop over it
+            log.exception("Could not record the dropped mic line at %d ms", seg.start_ms)
 
     # -- workers --------------------------------------------------------
     def _speaker(self, utt: Utterance, words: list[Word] | None = None) -> str:

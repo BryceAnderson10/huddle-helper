@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from . import SCHEMA_VERSION
-from .echo import is_echo
+from .echo import EchoMatch, match_echo
 from .segments import Segment
 
 log = logging.getLogger(__name__)
@@ -96,12 +96,14 @@ class SegmentMerger:
 
     def __init__(self, sources: Iterable[str], sink: Callable[[Segment], None],
                  echo_dedupe: bool = True, echo_window_ms: int = 1000,
-                 history_ms: int = 60_000):
+                 history_ms: int = 60_000,
+                 on_echo: Callable[[Segment, EchoMatch], None] | None = None):
         self._sources = list(sources)
         self._watermarks = {s: 0 for s in self._sources}
         self._pending: list[Segment] = []
         self._recent_system: list[Segment] = []
         self._sink = sink
+        self._on_echo = on_echo  # told of every mic segment dropped as echo, with what it matched
         self._echo = echo_dedupe and "mic" in self._sources and "system" in self._sources
         self._echo_window = echo_window_ms
         self._history_ms = history_ms
@@ -149,9 +151,14 @@ class SegmentMerger:
         self._pending.sort(key=lambda s: (s.start_ms, s.source))
         while self._pending and self._eligible(self._pending[0], final):
             seg = self._pending.pop(0)
-            if self._echo and seg.source == "mic" and is_echo(seg, self._recent_system, self._echo_window):
+            match = (match_echo(seg, self._recent_system, self._echo_window)
+                     if self._echo and seg.source == "mic" else None)
+            if match is not None:
                 self.dropped_echo += 1
-                log.debug("Dropped echo mic segment at %d ms: %r", seg.start_ms, seg.text)
+                log.info("Dropped mic line as echo at %d-%d ms (overlap %.2f): %r",
+                         seg.start_ms, seg.end_ms, match.overlap, seg.text)
+                if self._on_echo is not None:
+                    self._on_echo(seg, match)
                 continue
             self._sink(seg)
         if self._recent_system:

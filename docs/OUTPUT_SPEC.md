@@ -15,6 +15,7 @@ to them (except optionally `speakers.json`, see below).
     speakers.json           # optional: speaker id -> display name
     speaker_tags.jsonl      # the user's speaker names, append-only; exists only if they named anyone
     marks.jsonl             # bookmarks, append-only; exists only if there was a bookmark
+    echo_dropped.jsonl      # mic lines dropped as echo, append-only; exists only if any were dropped
     DONE                    # empty marker, created last
     audio\                  # buffered while recording; kept only if Keep audio is on
 ```
@@ -77,7 +78,7 @@ source of truth once `DONE` exists.
 
 **Echo.** Without headphones the mic hears the call. Mic segments that repeat
 system-stream speech at the same time are dropped (setting: on by default), so remote
-speech isn't attributed to `You`.
+speech isn't attributed to `You`. Every dropped mic line is kept in `echo_dropped.jsonl` (below).
 
 **Interrupted meetings.** If the app or PC dies mid-meeting, `transcript.jsonl` is valid
 up to the last complete line. On the next start the recorder removes any half-written
@@ -106,7 +107,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `vocabulary` | Optional. The custom vocabulary terms actually given to speech recognition for this meeting (meeting terms first, then the user's list, cut at a token budget); `[]` if none. Absent in older meetings. |
 | `attendees` | Optional, additive. The names typed in the Start dialog's "Who's on the call" box, in order (the number keys 1-9 in the Transcript window mean the first nine), at most 30 names of at most 40 characters, repeats and `You`/`Remote` removed. **Absent when none were entered** (unlike `vocabulary`, which is `[]`), so a meeting without attendees has the same `meta.json` as before. The names are not added to `vocabulary` unless the user ticked "Also give these names to speech recognition". Nothing else in the folder changes; names given to speakers are still in `speaker_tags.jsonl` and `speakers.json`. |
 | `vocabulary_changed_at_ms` | Optional. Meeting times (ms) at which the terms in use changed during the recording; `[]` if never. Lines written before a change used the earlier terms. |
-| `audio_kept`, `refined_streams`, `echo_segments_dropped`, `duration_s` | Diagnostics. |
+| `audio_kept`, `refined_streams`, `echo_segments_dropped`, `duration_s` | Diagnostics. `echo_segments_dropped` is the number of lines in `echo_dropped.jsonl` (0 when there is no file); a line the app could not write is missing from the file and reported in the app log. |
 | `playbacks`, `playback_segments_dropped` | Optional, additive (set at Stop; absent in older meetings). `playbacks`: how many clips the user played from the Transcript window while the meeting was recording (every line of a Play from here run counts as one clip). `playback_segments_dropped`: utterances that overlapped such a clip in time and repeated its words, so they were left out of the transcript (the clip came back through the system audio or the microphone) and never reached the live speaker labels. Kept as a diagnostic; both are 0 when nothing was played. |
 | `audio_deleted_at` | Optional, additive. ISO 8601 time at which the user deleted the kept `audio\` from the Meetings list (to the Recycle Bin or permanently); `audio_kept` is then `false`. Absent if that never happened. The transcripts, `speakers.json` and `marks.jsonl` are not touched. |
 | `audio_purged_at` | Optional, additive. The same for the automatic purge of kept audio after N days (Settings). |
@@ -164,6 +165,26 @@ is replaced by digital silence before anything is stored or analysed, and the pe
 * A meeting started with "Start with my mic muted" is muted from the first sample: `mic_muted_since_ms` is `0` while it lasts and the `muted` gap starts at `0`. Nothing from the mic is stored or transcribed before the user unmutes, exactly as for a later mute.
 * The mute does not touch the call app: the other people still hear the user. The `system` stream keeps
   recording.
+
+## `echo_dropped.jsonl` (mic lines dropped as echo)
+
+A diagnostic: the mic lines the echo dedupe left out of the transcript, so a false drop (a line the user
+really said) can be checked after the meeting. Append-only, one JSON object per line, flushed per line as
+each line is dropped, so it survives a crash. Created on the first drop: a meeting with no drops (or with
+echo dedupe off) has no file. It is never deleted by the after-Stop pass. Nothing in it is in
+`transcript.jsonl` or `transcript.final.jsonl`.
+
+```json
+{"type":"echo_drop","start_ms":512000,"end_ms":513100,"text":"Yeah.","overlap":1.0,"matched":[{"start_ms":511800,"end_ms":514000,"text":"Yeah, that works for me."}]}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `start_ms`, `end_ms`, `text` | The dropped mic line, on the meeting clock (same as `start_ms` in the transcripts). |
+| `matched` | The `system` lines it was compared with (those within 1 s of it), in time order, with their times and text. |
+| `overlap` | The share of the mic line's words found, in order, in the matched lines' words. A line is dropped at 0.6 or more, or at 1.0 when it has two words or fewer. |
+
+Each drop is also written to the app log at INFO level.
 
 ## `speaker_tags.jsonl` (the user's speaker names)
 
