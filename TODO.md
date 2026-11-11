@@ -150,7 +150,7 @@ in the correct time order. No echo lines were dropped, which is correct with a h
 
 ### Housekeeping
 
-- [ ] (#21) A 21-second false start ("Test #2", 13:34:09–13:34:30, 4 lines) appears in the log, but its
+- [x] (dropped in #21: no folder or other record to investigate) A 21-second false start ("Test #2", 13:34:09–13:34:30, 4 lines) appears in the log, but its
   folder is gone. If it was deleted by hand, nothing to do. Otherwise, find out why.
 
 ## From Test #3: `2026-11-09_1441_test-3`
