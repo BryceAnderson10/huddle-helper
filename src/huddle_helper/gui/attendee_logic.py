@@ -12,8 +12,10 @@ Behaviour fixed here, and in docs/LIVE_VIEW.md:
   only with attendees, and never while a text box has the focus.
 * **Undo.** Each naming made from the keys or the prompt can be undone from the confirmation: the labels
   and lines it touched go back to the tag they had.
-* **Who is this?** A call label seen for the first time (and not named) is queued; one prompt shows at a
-  time; naming the voice any other way, or dismissing the prompt, moves to the next.
+* **Who is this?** Only in a meeting with attendees (#18): without them nothing is queued, and an unnamed
+  voice is marked only by its "Who is this?" chip in the speaker bar. A call label seen for the first time
+  (and not named) is queued; one prompt shows at a time; naming the voice any other way, or dismissing the
+  prompt, moves to the next.
 """
 
 from __future__ import annotations
@@ -170,10 +172,10 @@ class WhoPrompter:
     def reset(self) -> None:
         self.seen, self.queue, self.current = set(), [], None
 
-    def update(self, model: TranscriptModel, active: bool) -> NewVoice | None:
+    def update(self, model: TranscriptModel, active: bool, attendees: list[str]) -> NewVoice | None:
         """``active``: the live view of a meeting being recorded or processed. Returns the voice to ask
-        about (None: no prompt)."""
-        if not active:
+        about (None: no prompt). With no ``attendees`` nothing is asked, as when not active."""
+        if not active or not attendees:
             self.queue, self.current = [], None
             return None
         for r in model.lines:

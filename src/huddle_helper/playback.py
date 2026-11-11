@@ -78,6 +78,8 @@ def read_file_span(path: Path, start_ms: int, end_ms: int) -> np.ndarray | None:
     """
     import soundfile as sf
 
+    if not Path(path).is_file():
+        return None  # gone (Keep audio off, a delete) is expected, not an error worth a traceback
     try:
         with sf.SoundFile(str(path)) as f:
             rate = f.samplerate

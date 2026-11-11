@@ -579,10 +579,10 @@ What went well:
 - [x] **Attendee names are not given to Whisper unless a box is ticked** (off by default),
   following the WP3 decision. LIVE_VIEW L34 still says "added automatically" in two
   places; the new Attendees paragraph is the one that is right.
-- [ ] (#18) **Decide:** the "Who is this?" bar also appears when no attendees were entered, so
-  every meeting shows it for every new call voice. Keep, or show it only with attendees?
-- [ ] (#18) **Decide:** while the bar is showing, a number key answers the voice the bar asks
-  about (oldest unanswered), not the latest line. Otherwise it names the latest unnamed
+- [x] (#18) **Decided:** the "Who is this?" bar appears only when attendees were entered;
+  without them the unnamed voice's chip asks instead (`WhoPrompter.update` takes the list).
+- [x] (#18) **Decided, kept:** while the bar is showing, a number key answers the voice the bar
+  asks about (oldest unanswered), not the latest line. Otherwise it names the latest unnamed
   call voice.
 - [ ] (#9) *Needs a person:* the keys on a real keyboard (numpad, non-US layout) during a real
   call; that the bar never takes focus from another app.
@@ -597,9 +597,12 @@ What went well:
   a replay without playback; `playbacks` 16, dropped 0.
 - [ ] (#10) **Not proven on real loopback:** the replay feeds files, so no played sound comes
   back. That a run's clips are dropped (the joined 12 s window) rests on unit tests.
-- [ ] (#18) **Decide:** a run still playing at Stop carries on from the kept files.
-- [ ] (#18) With no attendees the "Who is this?" bar and the headphone warning stack in the
-  same yellow and take three rows (`lab\wp9b\shots\02`); see the WP9a decision.
+- [x] (#18) **Decided, kept:** a run still playing at Stop carries on from the kept files. If
+  they go mid-run (Keep audio off, a delete), the clips it cannot read are skipped and it ends
+  quietly as finished (tested).
+- [x] (#18) With no attendees the "Who is this?" bar and the headphone warning stacked in the
+  same yellow and took three rows (`lab\wp9b\shots\02`). Gone with the WP9a decision; with
+  attendees the bar, strip and warning can still stack, which is accepted.
 - [ ] (#27) The "↓ N new lines" button overlaps the last row's text (older behaviour).
 - [ ] (#10) *Needs a person:* listen to levelled clips and to line changes in a run (nothing
   was played audibly); a real non-default "Play clips on" device and unplugging it;
@@ -631,8 +634,8 @@ What went well:
   removed exactly the 4 previewed `audio\` folders (12 files) and nothing else.
 - [x] **`You` is never marked short** (changed in review: Test #4's `You`, 8.8 s, was).
   With that, no speaker of the Test #4 copy is marked.
-- [ ] (#18) **Decide:** short is under 30 s of speech only (the line count is not used), and
-  when every speaker is under 30 s nobody is marked.
+- [x] (#18) **Decided, kept:** short is under 30 s of speech only (the line count is not used),
+  in the final view only, and when every speaker is under 30 s nobody is marked.
 - [ ] (#29) Adding a term from a line while the Settings dialog is open: the dialog's Save
   overwrites it. The Storage panel does not follow a meetings-folder change made while
   it is open.

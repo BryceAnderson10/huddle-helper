@@ -1,6 +1,7 @@
 """AppController side of click to hear (WP7): play_clip, the headphone rules, stop, Keep this meeting's audio."""
 
 import queue
+import shutil
 import threading
 import time
 from types import SimpleNamespace
@@ -311,6 +312,26 @@ def test_a_run_over_unreadable_audio_says_so_and_does_not_stay_busy(run_ctl, tmp
     wait_idle(run_ctl)
     assert run_ctl.notes == ["Could not read that audio."] and run_ctl.outs == []
     assert run_ctl.play_from(folder, []).status == "unavailable"
+
+
+def test_a_run_whose_audio_is_removed_part_way_ends_quietly_as_finished(run_ctl, tmp_path):
+    # #18: a run going on after Stop reads the kept files; Keep audio off (or a delete) removes them mid-run
+    folder = kept(tmp_path)
+    clips = run_clips((1000, 2000), (3000, 4000), (6000, 7000))
+    started, finished, reasons = run_ctl._run_clip_started, run_ctl._run_finished, []
+
+    def remove_after_first_clip(f, c, samples, token):
+        started(f, c, samples, token)
+        if folder.audio_dir.exists():
+            shutil.rmtree(folder.audio_dir)  # the first clip has been read; the next ones find nothing
+
+    run_ctl._run_clip_started = remove_after_first_clip
+    run_ctl._run_finished = lambda token, reason: (reasons.append(reason), finished(token, reason))
+    run_ctl.play_from(folder, clips)
+    wait_idle(run_ctl)
+    assert not folder.audio_dir.exists() and reasons == ["finished"]
+    assert {k for k in run_ctl.keys if k} == {clips[0].key}  # only the clip read before the removal played
+    assert not run_ctl.playing_run and run_ctl.notes == [] and run_ctl.outs[0].closed
 
 
 def test_while_recording_every_clip_of_a_run_opens_its_window_and_comes_from_the_ring(run_ctl, tmp_path):
