@@ -1,0 +1,5 @@
+#!/bin/sh
+root=$(git rev-parse --show-toplevel)
+py="$root/.venv/Scripts/python.exe"; [ -x "$py" ] || py="$root/.venv/bin/python"; [ -x "$py" ] || py=python
+"$py" "$root/tools/check_private.py" --commit-msg "$1" || {
+  echo "commit-msg: private terms in the commit message (see above)." >&2; exit 1; }

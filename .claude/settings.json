@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/check_private.py\" --claude-hook",
+            "timeout": 20,
+            "statusMessage": "Checking for private terms"
+          }
+        ]
+      }
+    ]
+  }
+}
