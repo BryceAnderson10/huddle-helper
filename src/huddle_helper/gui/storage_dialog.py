@@ -102,15 +102,13 @@ class StorageDialog:
         sb.pack(side="left", fill="y")
         self.pbody = ttk.Frame(self.pbox)
         self.pbody.pack(anchor="w", fill="x", pady=(6, 0))
-        self.has_bin = shell.has_recycle_bin(meetings_dir())
         self.permanent = tk.BooleanVar(value=False)
-        self.check = None
-        if self.has_bin:
-            self.check = ttk.Checkbutton(self.pbox, text="Delete permanently (skip the Recycle Bin)",
-                                         variable=self.permanent, command=self._rebuild_preview)
-            self.check.pack(anchor="w", pady=(8, 0))
-        pbtns = ttk.Frame(self.pbox)
+        self.check = ttk.Checkbutton(self.pbox, text="Delete permanently (skip the Recycle Bin)",
+                                     variable=self.permanent, command=self._rebuild_preview)
+        self._pbtns = pbtns = ttk.Frame(self.pbox)
         pbtns.pack(anchor="e", pady=(8, 0))
+        self._dir_shown = None
+        self._follow_folder()
         ttk.Button(pbtns, text="Cancel", command=self._invalidate).pack(side="left", padx=(0, 8))
         self.run_btn = ttk.Button(pbtns, text="Delete", command=self.run)
         self.run_btn.pack(side="left")
@@ -152,10 +150,11 @@ class StorageDialog:
             return False
 
     def refresh(self) -> storage.Usage:
-        """Redraw the disk use from the Meetings view's last scan (no disk access; the preview is not touched)."""
+        """Redraw the disk use from the Meetings view's last scan of the current meetings folder (the scan runs on a
+        worker thread). A preview is kept unless the folder changed."""
+        self._follow_folder()
         infos = self._infos()
         u = storage.usage(infos)
-        self.folder_lbl.configure(text=str(self._meetings_dir()))
         head, split = storage.usage_lines(u)
         self.headline.configure(text=head)
         self.split.configure(text=split)
@@ -168,6 +167,24 @@ class StorageDialog:
         days = self.app.settings.auto_purge_days
         self.auto_note.configure(text=storage.setting_text(days))
         return u
+
+    def _follow_folder(self) -> None:
+        """The meetings folder changed (Settings): show the new one, drop a preview of the old one's meetings (its
+        ids are not in the new folder), and offer "permanently" only where there is a Recycle Bin."""
+        folder = self._meetings_dir()
+        if folder == self._dir_shown:
+            return
+        first = self._dir_shown is None
+        self._dir_shown = folder
+        self.folder_lbl.configure(text=str(folder))
+        self.has_bin = shell.has_recycle_bin(folder)
+        if self.has_bin:
+            self.check.pack(anchor="w", pady=(8, 0), before=self._pbtns)
+        else:
+            self.check.pack_forget()
+            self.permanent.set(False)
+        if not first:
+            self._invalidate()
 
     def save_auto(self) -> str:
         """Save the automatic deletion setting (the same ``auto_purge_days`` as Settings). Returns the message shown."""
@@ -229,8 +246,7 @@ class StorageDialog:
             child.destroy()
         if plan.empty:
             self.run_btn.configure(text="Delete", state="disabled")
-            if self.check is not None:
-                self.check.configure(state="disabled")
+            self.check.configure(state="disabled")
             return
         view = confirm.delete_view(storage.confirm_items(plan), audio_only=True, has_bin=self.has_bin,
                                    permanent=self.permanent.get())
@@ -245,11 +261,11 @@ class StorageDialog:
                      justify="left", anchor="w", bg=theme.MUTE_BAR_BG, fg=theme.MUTE_BAR_FG, padx=8, pady=4
                      ).pack(anchor="w", fill="x", pady=(2, 3))
         self.run_btn.configure(text=view.confirm, state="normal" if plan.complete and not self._working else "disabled")
-        if self.check is not None:
-            self.check.configure(state="normal")
+        self.check.configure(state="normal")
 
     def run(self) -> None:
         """Delete exactly the previewed set (the Recycle Bin unless "permanently" is ticked)."""
+        self._follow_folder()  # the folder may have changed since the last refresh: then the preview is dropped
         plan = self.plan
         if plan is None or plan.empty or not plan.complete or self._working:
             return

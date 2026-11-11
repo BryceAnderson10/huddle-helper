@@ -146,6 +146,17 @@ class MeetingsView(ttk.Frame):
 
     def tick(self) -> None:
         """Every 500 ms while visible: start a scan when due, redraw from the last one."""
+        self._keep_scanning()
+        self.back_btn.configure(state="normal" if self._has_session() else "disabled")
+        self._render()
+
+    def current_infos(self) -> list[MeetingInfo]:
+        """The last scan of the meetings folder as it is now, for the Storage panel: it keeps scanning (and follows a
+        folder change in Settings) while the panel is open, even when this list is not shown and so not ticking."""
+        self._keep_scanning()
+        return self.infos
+
+    def _keep_scanning(self) -> None:
         meetings_dir = self.app.settings.resolved_meetings_dir()
         if meetings_dir != self._dir:  # another folder (Settings): start over
             self._dir = meetings_dir
@@ -154,8 +165,6 @@ class MeetingsView(ttk.Frame):
             self._last_scan = 0.0
         if not self._scanning and time.monotonic() - self._last_scan >= SCAN_EVERY_S:
             self._kick_scan()
-        self.back_btn.configure(state="normal" if self._has_session() else "disabled")
-        self._render()
 
     def _kick_scan(self) -> None:
         self._scanning = True
@@ -359,7 +368,7 @@ class MeetingsView(ttk.Frame):
         if dlg is not None and dlg.alive():
             dlg.win.lift()
             return dlg
-        self._storage = StorageDialog(self, self.app, infos=lambda: self.infos, delete_ids=self.delete_ids,
+        self._storage = StorageDialog(self, self.app, infos=self.current_infos, delete_ids=self.delete_ids,
                                       meetings_dir=self.app.settings.resolved_meetings_dir)
         return self._storage
 

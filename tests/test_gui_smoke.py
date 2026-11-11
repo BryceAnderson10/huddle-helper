@@ -482,3 +482,43 @@ def test_window_switches_between_the_transcript_and_the_meetings_list(root, tmp_
     w._meetings_deleted([done.meeting_id])  # the open meeting was deleted from the list
     assert w.session is None and w.view.plain_text().strip() == ""
     w.destroy()
+
+
+def test_storage_panel_follows_a_meetings_folder_change_while_the_list_is_not_shown(root, tmp_path):
+    """#29: the Meetings list only scans while it is shown; the Storage panel must follow a folder change anyway."""
+    import os
+    import time
+    from huddle_helper import library
+    from huddle_helper.gui.meetings_view import MeetingsView
+
+    lines = [("mic", 0, 1000, "You", "hello.")]
+    old, new = tmp_path / "old", tmp_path / "new"
+    gone = make_meeting(old, lines, final=lines, title="Old one")
+    (gone.audio_dir / "mic.flac").write_bytes(b"x" * 2048)
+    aged = time.time() - 100 * 86400
+    os.utime(gone.done_path, (aged, aged))  # old enough for "Delete kept audio older than 30 days"
+    make_meeting(new, lines, final=lines, title="New one")
+    folder = [old]
+    ctl = SimpleNamespace(state=AppState(phase="ready"),
+                          settings=SimpleNamespace(resolved_meetings_dir=lambda: folder[0], auto_purge_days=0),
+                          current_folder=lambda: None, live_state=lambda: library.LiveState(), **play_stub())
+    posted = []
+    view = MeetingsView(tk.Toplevel(root), ctl, post=posted.append, on_open=lambda f: None, on_back=lambda: None,
+                        has_session=lambda: False, on_deleted=lambda ids: None)
+    view.activate()  # the list was shown, the panel opened from it...
+    dlg = view.open_storage()
+
+    def listed():
+        dlg.refresh()
+        return [dlg.largest.set(i, "Meeting") for i in dlg.largest.get_children()]
+
+    assert pump(root, posted, lambda: listed() == ["Old one"])
+    assert pump(root, posted, lambda: (p := dlg.preview()) is not None and p.complete and not p.empty)
+    folder[0] = new  # ...then the window went back to the transcript (no more ticks) and Settings changed the folder
+    dlg.run()  # Delete pressed before the panel's next refresh: the old folder's ids must not go to the new folder
+    assert not dlg._working and gone.audio_dir.exists()
+    assert pump(root, posted, lambda: listed() == ["New one"])
+    assert dlg.folder_lbl.cget("text") == str(new)
+    assert dlg.plan is None and dlg.pbox.winfo_manager() == ""  # the preview was of the old folder's meetings
+    dlg.close()
+    view.winfo_toplevel().destroy()
