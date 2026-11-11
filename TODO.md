@@ -667,7 +667,7 @@ Nothing in the product changed. Finding and numbers: `docs/WP10_SPIKE.md`; tool:
   A tone this process played was at -34 dBFS in device loopback and exact zero in process
   loopback; tones from other processes were at -34 in both. A 20-minute capture gave
   1200.14 s of audio for 1200.13 s of wall clock with no flags or timeouts.
-- [ ] (#19) **Decide: build it** (recommended, with device loopback kept as the fallback when
+- [x] (#19, won't build: .out-of-scope/process-loopback-capture.md) **Decide: build it** (recommended, with device loopback kept as the fallback when
   activation fails). About 300–400 lines: a new `audio\procloop.py`, edits in
   `capture.py`, a `meta.json` field for the capture method.
 - [ ] (#19) **Tree exclusion reached only direct children on this build:** a grandchild's tone
