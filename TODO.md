@@ -1005,3 +1005,54 @@ this call go into the repo or the issues.
 - [ ] Short lines: 195 of 702 live lines and 125 of 594 final lines are under 1 s; 35 live lines
   have confidence under 0.4 (18 final).
 - [ ] (#21) The app log is on the laptop and was not checked.
+
+## From Test #8: a real work call on the laptop's speakers, with a headset plugged in mid-call (2026-11-11)
+
+Setup: the packaged app on the target laptop, base.en live, Keep audio on, second transcription
+after Stop on (small.en). It started on the laptop's built-in mic array and speakers, with no
+headset. 16:52 into the call Bryce plugged in a headset: Windows made it the default mic and
+output, and the call app followed. 26 min 51 s; 181 live lines (7 mic), 160 final lines (6 mic).
+Six remote people plus the laptop's user, Remote A–F by final talk time (confirmed by Bryce).
+Bryce named the six live labels during the call, and muted the app three times, all on purpose.
+Three vocabulary terms were entered before the call and not changed. Bryce's name is in 4 lines
+in both files; the other two terms are in neither, and whether they were said is not known.
+No bookmarks, no clips played. Copy in `lab\src\` (the 2026-11-11 11:35 folder; `lab\` is not in
+git). No names, titles or terms from this call go into the repo or the issues.
+
+### Worked
+
+- [x] Clean Stop, `DONE`. `gaps` holds the three mutes (6 min 34 s, 3 min 15 s, 7 min 16 s) and
+  one 0.4 s `default audio device changed` gap on each stream at the switch.
+- [x] (#6) **Plugging in a headset mid-call:** the capture re-opened both streams within 0.4 s
+  and followed the new default. The headset's connect sound is in the call audio 5 s later, the
+  call's audio returns on the same stream at 19:09, and the next mic line (19:20) was recorded
+  through the headset. The call audio is silent from 16:53 to 19:09. Boosted and transcribed, it
+  holds no speech: the laptop's user was talking then, muted in both the call and the app (Bryce).
+- [x] (#6, #36) **Speakers with no headset: no echo.** With the app's mic open from 6:34 to 16:04,
+  the remote people talked for 485 s through the laptop's speakers. The mic array stays at its
+  noise floor (±1 LSB) all through it; only the laptop's user's own speech is above it. Echo
+  dedupe dropped nothing, and no remote speech is under "You". This holds for the laptop's mic
+  array, which seems to cancel speaker sound itself; a plain USB mic or webcam mic may not.
+- [x] (#13) **The speaker count is right:** 6 remote speakers in the final file, plus the laptop's
+  user, 7 in all (Bryce).
+- [x] **Live labels kept every person apart.** Each live label is one final speaker for at least
+  99% of its time: A 417.6 of 420.0 s, B 304.8 of 306.3, C 291.2 of 292.8, D 52.0 of 52.0,
+  E 44.6 of 44.9, F 24.1 of 24.1. There was no extra label to fold.
+- [x] (#9) Naming: the six live labels were named between 0:26 and 14:30; the final file names all
+  six from tags, no conflicts. No line names.
+- [x] Short lines are far fewer than in earlier tests: 11 of 181 live lines (6%) and 8 of 160 final
+  lines (5%) are under 1 s, against 28% and 21% in Test #7. One line in each file has confidence
+  under 0.4.
+- [x] (#14, #32) **Final pass: 695 s for 1611 s of audio (0.43×)**, against 0.61× in Test #7. The
+  second transcription took 422 s (0.26×; Test #7 0.45×) and changed 120 lines, keeping the live
+  text on 16. Diarization took 247 s (0.15×, the same as Test #7) and fingerprinting 25 s. Stop
+  was at 12:01:53 and the final file was written at 12:13:28, 11.6 minutes later.
+
+### Open
+
+- [ ] (#8) **The live view was slower than in Tests #6 and #7:** delay median 1.5 s, p90 3.6 s,
+  max 8.3 s, max lag 6.8 s (Tests #6 and #7: median 1.1 s, p90 1.6–1.7 s). The backlog never went
+  above 2. The cause is not known.
+- [ ] (#37) `meta.json` `devices` still names the starting mic array and speakers after the
+  switch, so the folder doesn't say the last 10 minutes came from the headset.
+- [ ] (#21) The app log is on the laptop and was not checked.
