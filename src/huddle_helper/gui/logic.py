@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from .. import export as export_mod, meeting as mt
+from .. import diarize, export as export_mod, meeting as mt
 from ..mute_reminder import duration_text
 from .. import marks as marks_mod, playback, playsequence
 from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
@@ -606,18 +606,29 @@ def name_choices(model: TranscriptModel, exclude: str | None = None) -> list[str
 @dataclass(frozen=True)
 class LineNameMenu:
     """The "This line is…" submenu of a line: names used in this meeting (not the line's current one),
-    whether the line has a name of its own to clear. ``enabled`` is False in the final view (plan decision 4)."""
+    whether the line has a name of its own to clear. ``enabled`` is False in the final view (plan decision 4)
+    and ``note`` says why. ``hint`` is ``short_line_note`` for the line."""
     enabled: bool
     choices: tuple[str, ...] = ()
     can_clear: bool = False
     note: str = ""
+    hint: str = ""
+
+
+SHORT_LINE_NOTE = "Too short to recognise the voice: the name applies to this line only."
+
+
+def short_line_note(row: LineRow) -> str:
+    """SHORT_LINE_NOTE for a line shorter than the fingerprint minimum (#26): its name still counts for the
+    name mapping but cannot steer the final pass's clustering. "" for longer lines."""
+    return SHORT_LINE_NOTE if row.end_ms - row.start_ms < diarize.MIN_FINGERPRINT_S * 1000 else ""
 
 
 def line_name_menu(model: TranscriptModel, row: LineRow) -> LineNameMenu:
     if model.final:
         return LineNameMenu(False, note="Live view only: name the speaker instead")
     return LineNameMenu(True, tuple(name_choices(model, exclude=row.name)),
-                        model.has_line_tag(row.source, row.start_ms))
+                        model.has_line_tag(row.source, row.start_ms), hint=short_line_note(row))
 
 
 @dataclass(frozen=True)

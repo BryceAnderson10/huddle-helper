@@ -27,6 +27,8 @@ SYSTEM_PREFIX = "SPEAKER_"
 MIC_PREFIX = "MIC_SPEAKER_"
 YOU = "You"
 REMOTE = "Remote"
+# Audio shorter than this gets no voice fingerprint, so it cannot steer clustering.
+MIN_FINGERPRINT_S = 0.5
 
 
 def label(prefix: str, n: int) -> str:
@@ -100,7 +102,7 @@ class SherpaEmbedder:
         self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
 
     def embed(self, audio: np.ndarray) -> np.ndarray | None:
-        if len(audio) < SAMPLE_RATE // 2:
+        if len(audio) < MIN_FINGERPRINT_S * SAMPLE_RATE:
             return None
         stream = self._extractor.create_stream()
         stream.accept_waveform(SAMPLE_RATE, audio.astype(np.float32))

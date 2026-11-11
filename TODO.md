@@ -560,8 +560,8 @@ What went well:
 - [ ] (#25) **Only named people are protected.** At threshold 0.60 on Test #4 a named speaker
   took in 74 s of an unnamed one. Not a problem at the shipped 0.70; a reason not to
   lower it.
-- [ ] (#26) A line under 0.5 s has no fingerprint, so naming it cannot steer clustering (it
-  still counts for the mapping). Consider saying so in the picker.
+- [x] (#26, closed: the picker says so) A line under 0.5 s has no fingerprint, so naming it
+  cannot steer clustering (it still counts for the mapping).
 - [ ] (#28) After the swap to the final view the top row can sit partly hidden (seen in
   `lab\wp8\shots\10`). Likely WP4 scroll behaviour.
 - [ ] (#9) *Needs a person:* name people during a real call; the "This line is…" submenu (it
@@ -916,8 +916,9 @@ or titles from this call go into the repo or the issues.
 
 ### Open
 
-- [ ] (#26) **A named line under 0.5 s went to another speaker.** A 0.3 s line named Remote A
-  is under Remote C in the final file. The picker does not say this can happen.
+- [x] (#26, closed: the picker says so) **A named line under 0.5 s went to another speaker.**
+  A 0.3 s line named Remote A is under Remote C in the final file. The picker did not say this
+  can happen.
 - [ ] (#6, #36) **Echo dedupe dropped 2 mic lines although headphones were on** (Test #4, same
   laptop and headphones: none). Either sound leaked into the webcam mic or the laptop's user
   repeated a remote line. Not checked: the dropped lines are not written anywhere. While

@@ -787,7 +787,11 @@ While muted, an amber bar sits under the header:
   name per line, or separated by commas or semicolons; an invite's `Name <email>` works). The list is
   saved in `meta.json` as `attendees` (only when not empty) and shown as a numbered strip under the speaker
   bar while the meeting is recording or being processed: "Keys 1-4 name SPEAKER_02: 1 Ana  2 Ben ✓  3 Cy". The name
-  picker and "This line is…" offer attendees not yet used first, then the names already in use.
+  picker and "This line is…" offer attendees not yet used first, then the names already in use. On a line
+  shorter than the fingerprint minimum (0.5 s, `diarize.MIN_FINGERPRINT_S`) both say "Too short to recognise
+  the voice: the name applies to this line only." (#26): such a line cannot steer clustering, though its name
+  still counts for the name mapping. The check uses the line's length; a line just over 0.5 s whose words
+  span less still gets no fingerprint and no note.
   - **Number keys.** With the window focused and no text box focused, keys 1-9 name a voice as attendee N,
     exactly as the chip's Name… does (a speaker-level tag, past and future lines). The voice is the one the
     "Who is this?" bar is asking about, when it is showing; otherwise the speaker of the latest call line whose

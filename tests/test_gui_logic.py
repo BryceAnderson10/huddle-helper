@@ -329,3 +329,28 @@ def test_tray_icons_for_muted_and_flag_differ_from_the_recording_icon():
     assert len({rec, muted, flag}) == 3
     # the muted icon is the recording icon plus a slash, so its background colour is the same red
     assert imgs["muted"].getpixel((5, 32)) == imgs["recording"].getpixel((5, 32)) == (220, 38, 38, 255)
+
+
+# -- "This line is…" on a line too short to fingerprint (#26) ---------------------------
+SHORT_NOTE = "Too short to recognise the voice: the name applies to this line only."
+
+
+def lines_of(tmp_path, *lengths_ms):
+    rows = [("system", 10_000 * i, 10_000 * i + n, "SPEAKER_00", f"line {i}.") for i, n in enumerate(lengths_ms)]
+    return TranscriptModel.load(make_meeting(tmp_path, rows))
+
+
+def test_a_line_under_half_a_second_says_its_name_cannot_steer_the_voices(tmp_path):
+    m = lines_of(tmp_path, 300, 499, 500, 2000)
+    assert [logic.short_line_note(r) for r in m.lines] == [SHORT_NOTE, SHORT_NOTE, "", ""]
+    menus = [logic.line_name_menu(m, r) for r in m.lines]
+    assert [nm.hint for nm in menus] == [SHORT_NOTE, SHORT_NOTE, "", ""]
+    assert all(nm.enabled and nm.note == "" for nm in menus)
+
+
+def test_the_short_line_note_follows_the_fingerprint_minimum(tmp_path, monkeypatch):
+    from huddle_helper import diarize
+
+    monkeypatch.setattr(diarize, "MIN_FINGERPRINT_S", 1.0)
+    m = lines_of(tmp_path, 700, 1000)
+    assert [logic.short_line_note(r) for r in m.lines] == [SHORT_NOTE, ""]

@@ -2,6 +2,8 @@ import json
 
 import numpy as np
 
+from huddle_helper import diarize
+from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.diarize import OnlineClusterer, Turn
 from huddle_helper.finalize import finalize_meeting, load_words, relabel, speaker_at
 from huddle_helper.segments import Segment, Word
@@ -544,3 +546,10 @@ def test_cluster_voices_test3_with_the_shipped_model():
         by_group = {g: {lab for lab, x in zip(labels, groups) if x == g} for g in "ABC"}
         assert all(len(v) == 1 for v in by_group.values()), (t, by_group)
         assert len(set.union(*by_group.values())) == 3, (t, by_group)
+
+
+def test_the_embedder_gives_no_fingerprint_below_the_shared_minimum(monkeypatch):
+    embedder = object.__new__(diarize.SherpaEmbedder)  # no model: short audio returns before using it
+    assert embedder.embed(np.zeros(SAMPLE_RATE // 2 - 1, dtype=np.float32)) is None
+    monkeypatch.setattr(diarize, "MIN_FINGERPRINT_S", 1.0)  # the picker's note (#26) reads the same constant
+    assert embedder.embed(np.zeros(int(0.7 * SAMPLE_RATE), dtype=np.float32)) is None

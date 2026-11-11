@@ -96,6 +96,29 @@ def test_this_line_is_names_one_line_and_chip_naming_still_reaches_it(root, tmp_
     w.destroy()
 
 
+def test_this_line_is_says_when_the_line_is_too_short_to_steer_the_voices(root, tmp_path):
+    import tkinter as tk
+
+    folder = make_meeting(tmp_path, [*LIVE, ("system", 20_000, 20_300, "SPEAKER_02", "yes.")],
+                          status=mt.STATUS_RECORDING)
+    w, _ = make_window(root, tmp_path, folder, app_cls=NamingApp)
+    long_row, short_row = w.session.model.lines[1], w.session.model.lines[-1]
+    for row, shown in ((short_row, True), (long_row, False)):
+        menu = w.view.build_menu(row)
+        sub = menu.nametowidget(menu.entrycget(next(i for i in range(menu.index("end") + 1)
+                                                    if menu.type(i) == "cascade" and menu.entrycget(i, "label") == "This line is…"), "menu"))
+        assert (logic.SHORT_LINE_NOTE in sub_labels(sub)) is shown
+        if shown:
+            note = sub_labels(sub).index(logic.SHORT_LINE_NOTE)
+            assert str(sub.entrycget(note, "state")) == "disabled"
+    w._name_line(short_row, None)  # "Someone else…": the picker says it too
+    picker = [c for c in w.win.winfo_children() if isinstance(c, tk.Toplevel)][-1]
+    labels = [c.cget("text") for c in picker.winfo_children()[0].winfo_children() if c.winfo_class() == "TLabel"]
+    assert any(logic.SHORT_LINE_NOTE in t for t in labels)
+    picker.destroy()
+    w.destroy()
+
+
 def test_you_can_be_named_and_remove_name_goes_back_to_the_label(root, tmp_path):
     folder = make_meeting(tmp_path, LIVE, status=mt.STATUS_RECORDING)
     w, _ = make_window(root, tmp_path, folder, app_cls=NamingApp)

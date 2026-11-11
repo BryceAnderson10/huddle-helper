@@ -536,7 +536,9 @@ class MainWindow:
         if s is None or s.model.final:
             return
         if name is None:
-            NamePicker(self.win, "This line is…", f"Who said this line? Only this line changes.{chr(10)}“{logic.short_name(row.text, 60)}”",
+            note = logic.short_line_note(row)
+            NamePicker(self.win, "This line is…", f"Who said this line? Only this line changes.{chr(10)}“{logic.short_name(row.text, 60)}”"
+                       + (f"{chr(10)}{note}" if note else ""),
                        al.pick_names(s.model, self._attendees(), exclude=row.name), "",
                        on_done=lambda n: self._name_line(row, n), heading=self._pick_heading())
             return

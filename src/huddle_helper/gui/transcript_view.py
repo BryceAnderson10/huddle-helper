@@ -294,6 +294,9 @@ class TranscriptView(ttk.Frame):
                     menu.add_command(label=nm.note, state="disabled")
             else:
                 sub = tk.Menu(menu, tearoff=False)
+                if nm.hint:
+                    sub.add_command(label=nm.hint, state="disabled")
+                    sub.add_separator()
                 for name in nm.choices:
                     sub.add_command(label=logic.short_name(name, 30),
                                     command=lambda n=name, r=row: self.on_name_line(r, n))

@@ -27,7 +27,8 @@ import final_lab as fl  # noqa: E402
 from huddle_helper import models  # noqa: E402
 from huddle_helper.audio import SAMPLE_RATE  # noqa: E402
 from huddle_helper.audio.buffer import read_audio  # noqa: E402
-from huddle_helper.diarize import SYSTEM_PREFIX, OnlineClusterer, cluster_voices, fold_small_clusters  # noqa: E402
+from huddle_helper.diarize import (MIN_FINGERPRINT_S, SYSTEM_PREFIX, OnlineClusterer, cluster_voices,  # noqa: E402
+                                   fold_small_clusters)
 from huddle_helper.finalize import load_words  # noqa: E402
 from huddle_helper.writer import read_events  # noqa: E402
 
@@ -63,7 +64,7 @@ def cmd_embed(args) -> int:
                 clip = audio[e["start_ms"] * SAMPLE_RATE // 1000:e["end_ms"] * SAMPLE_RATE // 1000].astype(np.float32)
                 t0 = time.perf_counter()
                 v = None
-                if len(clip) >= SAMPLE_RATE // 2:  # as SherpaEmbedder: under 0.5 s has no fingerprint
+                if len(clip) >= MIN_FINGERPRINT_S * SAMPLE_RATE:  # as SherpaEmbedder: shorter has no fingerprint
                     st = ex.create_stream()
                     st.accept_waveform(SAMPLE_RATE, clip)
                     st.input_finished()
