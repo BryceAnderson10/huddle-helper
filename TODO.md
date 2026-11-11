@@ -343,7 +343,7 @@ What went well:
   zone code address" was not joined because its gap is 2.6 s; leave that as is.)
   Fixed in WP1: 14 such pairs are joined in Test #4 (203 lines → 190), 2 in Test #2, 1 in
   Test #3. The "…" stays in the joined text.
-- [ ] (#24) **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
+- [x] (#24, closed: fixed by the WP13 model or by design) **Quick back-and-forth stays inside one line** (low priority, by design): "…preload QDM?
   Yes. Yes.", "I think that is CSV. Yeah. Okay. Okay.", "…you're all good." Interjections under
   1 s / 3 words are folded into the surrounding line on purpose (Test #1 fix), so a short reply
   from someone else is attributed to the main speaker. Revisit only if the downstream app needs it.
@@ -713,11 +713,11 @@ recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
   hint for later ones? Bryce: the named person is the main voice. So the final file
   credits him with 13 s (the opening lines plus the other person's 71 s line) and leaves
   about 60 s of his speech unnamed across two speakers.
-- [ ] (#24) **The live pass made four remote labels in the first 40 s**, two of them from lines
+- [x] (#24, closed: fixed by the WP13 model or by design) **The live pass made four remote labels in the first 40 s**, two of them from lines
   under 1 s ("Uh...", one word). The user named two of them the same person.
-- [ ] (#24) Short fillers ("Um.", "Like...", "So...") are still lines of their own, live and
+- [x] (#24, closed: fixed by the WP13 model or by design) Short fillers ("Um.", "Like...", "So...") are still lines of their own, live and
   final, and are the lines whose speaker flips.
-- [ ] (#24) Two junk system lines at 24 s (confidence 0.30 and 0.50, under 0.5 s each) as the
+- [x] (#24, closed: fixed by the WP13 model or by design) Two junk system lines at 24 s (confidence 0.30 and 0.50, under 0.5 s each) as the
   played recording started. One mic line misheard "four" as "for".
 
 ## From the quality experiments (2026-11-10, nothing in the product changed)
