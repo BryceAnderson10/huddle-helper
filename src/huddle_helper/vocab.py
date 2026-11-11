@@ -225,6 +225,14 @@ class ImportResult:
         return f"Added {self.added} term{'' if self.added == 1 else 's'} from the file.{extra}"
 
 
+def keep_added(box: Iterable[str], opened_with: Iterable[str], now: Iterable[str]) -> list[str]:
+    """The list to save from a dialog's box that was filled with ``opened_with``: the box as edited, plus the terms
+    added elsewhere since (in ``now`` but not in ``opened_with``, such as "Add to vocabulary…" from a line), skipping
+    any already in the box (ignoring case). A term deleted in the box stays deleted."""
+    before = {t.casefold() for t in opened_with}
+    return merge_import(box, [t for t in now if t.casefold() not in before]).terms
+
+
 def merge_import(current: Iterable[str], imported: Iterable[str], *, replace: bool = False) -> ImportResult:
     """Combine the list with imported terms: ``replace`` keeps only the imported ones; otherwise the imported ones
     are appended to the current list, skipping any already there (ignoring case)."""

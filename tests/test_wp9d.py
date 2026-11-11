@@ -486,6 +486,29 @@ def test_settings_vocabulary_tab_imports_exports_and_round_trips(root, tmp_path)
     assert saved[0].vocabulary == ["QDM", "ETL", "KoVa", "FMS"]
 
 
+def test_keep_added_appends_terms_added_elsewhere_and_keeps_the_box_deletions():
+    opened = ["QDM", "ETL", "FMS"]
+    now = ["QDM", "ETL", "FMS", "Quodium", "kova"]  # two added from lines while the box was being edited
+    assert vocab.keep_added(["QDM", "FMS", "KoVa"], opened, now) == ["QDM", "FMS", "KoVa", "Quodium"]
+    assert vocab.keep_added(["QDM"], opened, opened) == ["QDM"]  # nothing added elsewhere: the box as it is
+
+
+def test_settings_save_keeps_a_term_added_from_a_line_while_it_was_open(root):
+    """#29: Save writes the box back, but a term added from a line meanwhile is kept (and a deleted one stays gone)."""
+    from huddle_helper.app import AppController
+    from huddle_helper.ui import SettingsDialog
+
+    app = AppController()
+    app.settings = config.Settings(vocabulary=["QDM", "ETL", "FMS"])
+    dlg = SettingsDialog(root, app.settings, {"inputs": [], "outputs": []}, app.update_settings,
+                         current=lambda: app.settings)
+    assert app.add_vocabulary_term("Quodium").ok  # from a line, while the dialog is open
+    dlg.vocab.set_terms(["QDM", "FMS", "KoVa"])  # the user's own edit: ETL deleted, KoVa added
+    dlg._save()
+    assert app.settings.vocabulary == ["QDM", "FMS", "KoVa", "Quodium"]
+    assert config.load().vocabulary == ["QDM", "FMS", "KoVa", "Quodium"]
+
+
 # -- L40: short speakers ----------------------------------------------------------------------------------
 def seg(seq, source, start, end, speaker, text="x."):
     return {"type": "segment", "seq": seq, "start_ms": start, "end_ms": end, "source": source,

@@ -284,12 +284,16 @@ class _TypesTab:
 class SettingsDialog:
     def __init__(self, root: tk.Tk, settings: config.Settings, devices: dict[str, list[str]],
                  on_save: Callable[[config.Settings], None], plan: PlanFn | None = None,
-                 hotkey_results: HotkeyResultsFn | None = None):
+                 hotkey_results: HotkeyResultsFn | None = None,
+                 current: Callable[[], config.Settings] | None = None):
+        """``current`` gives the settings as they are now (they can change while the dialog is open, e.g. a term
+        added from a line); Save keeps the vocabulary terms added that way."""
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Settings")
         self.win.resizable(False, False)
         self._on_save = on_save
         self._orig = settings
+        self._current = current
         default = "(Windows default)"
         tabs = ttk.Notebook(self.win)
         tabs.grid(row=0, column=0, padx=8, pady=(8, 0))
@@ -482,6 +486,7 @@ class SettingsDialog:
         s.keep_audio = self.keep.get()
         s.open_window_on_start = self.open_window.get()
         s.auto_purge_days = days
-        s.vocabulary = self.vocab.terms()
+        now = self._current() if self._current is not None else self._orig
+        s.vocabulary = vocab.keep_added(self.vocab.terms(), self._orig.vocabulary, now.vocabulary)
         self.win.destroy()
         self._on_save(s)

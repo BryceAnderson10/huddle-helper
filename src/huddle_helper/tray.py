@@ -276,7 +276,8 @@ class TrayApp:
             log.exception("Could not list devices")
             devices = {"inputs": [], "outputs": []}
         SettingsDialog(self.root, self.app.settings, devices, self.app.update_settings,
-                       self.app.plan_vocabulary, hotkey_results=self._hotkey_results)
+                       self.app.plan_vocabulary, hotkey_results=self._hotkey_results,
+                       current=lambda: self.app.settings)
 
     def _hotkey_results(self, bindings: dict[str, str]) -> tuple[dict, bool]:
         """(registration results, are they live): the recording's own while one is running, else a
