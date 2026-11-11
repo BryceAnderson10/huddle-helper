@@ -705,7 +705,7 @@ recording. 125 s, headset, a recording played as the call. Copy in `lab\src\`.
   plus two of about 4 s; the long pieces (3 s and up, 46 s to the end) agree with each
   other at 0.74 to 0.88. So the split is short pieces clustering apart from long ones,
   not two people.
-- [ ] (#20) **A speaker tag carried a later live mistake into the final file.** The only piece
+- [x] (#20, kept as is: fix with a line-level name) **A speaker tag carried a later live mistake into the final file.** The only piece
   that is clearly another voice is the 6.5 s line at 71 s (0.51 to 0.58 against the long
   pieces). The live pass gave it the label the user had named at 33 s, so the tag covered
   it, and the same-name rule (L39) then forced it into the named speaker. *Decision:*
@@ -849,7 +849,7 @@ is the cutoffs at which Tests #3–#5 have 2 s or less with the wrong speaker.
   and `fold_small_clusters` then gives each half away because a cluster under 4 s is always
   folded. That rule was written for the old model's unreliable short pieces. *Next:* fold a
   cluster under 4 s only when it is alike enough, and measure; nothing was removed in WP13.
-- [ ] (#20) **Test #5 with its names still reads 13 s + 64 s**: the named speaker holds the opening
+- [x] (#20, kept as is: fix with a line-level name) **Test #5 with its names still reads 13 s + 64 s**: the named speaker holds the opening
   lines plus the other person's 71 s line, exactly the open "speaker tag carried a later live
   mistake" item above. The model swap does not touch that rule.
 - [ ] (#31) **Split points:** pieces per recording are within 10% of before at any split setting from
