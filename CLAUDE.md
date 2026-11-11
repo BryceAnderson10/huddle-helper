@@ -1,3 +1,7 @@
+## Tests
+
+Run them with the venv's Python: `.venv\Scripts\python -m pytest` (`-m "not models"` skips the real-model test). The system `python` has no pytest.
+
 ## Agent skills
 
 ### Issue tracker

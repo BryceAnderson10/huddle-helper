@@ -26,11 +26,8 @@ reason in a tooltip (and in the notice bar when clicked). The header's "Keep thi
 calls ``set_keep_audio``. The once-per-meeting headphone warning is shown in the notice bar, and the
 confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
 
-Attendees (WP9a, L13): a meeting started with a list of attendees gets a numbered strip under the speaker
-bar; while the window has the focus (and no text box does) the keys 1-9 name the latest call voice as that
-attendee, with a confirmation and Undo. In a meeting with attendees, a new unnamed call voice raises a "Who is this?" bar
-with the attendees as buttons. Both bars are part of the window (no dialog, no focus change); the decisions are in
-``attendee_logic``.
+Attendees (WP9a, L13): the numbered strip, the number keys, the confirmation with Undo and the "Who is this?"
+bar are drawn here from ``attendee_logic``. The rules are in docs/LIVE_VIEW.md, "Attendees (L13)".
 """
 
 from __future__ import annotations
