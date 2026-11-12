@@ -32,7 +32,7 @@ from huddle_helper.audio.buffer import read_audio
 from huddle_helper.config import Settings
 from huddle_helper.diarize import (SherpaEmbedder, SherpaOfflineDiarizer, cluster_voices, fold_small_clusters,
                                    profile)
-from huddle_helper.finalize import embed_pieces, load_words, split_pieces
+from huddle_helper.finalize import diarize_stretches, embed_pieces, load_words, outside_stretches, split_pieces
 from huddle_helper.segments import Segment
 from huddle_helper.writer import read_events
 
@@ -63,6 +63,7 @@ def cmd_embed(args) -> int:
     diarized = {src for src, on in (("system", rec.get("diarize_system", True)),
                                     ("mic", mt.has_shared_mic(meta))) if on}
     words = load_words(folder.words_path)
+    mic_stretches = mt.shared_mic_stretches(meta) if "mic" in diarized else None  # as the final pass
 
     timings: dict[str, float] = {}
     turns_by_source, audio = {}, {}
@@ -76,7 +77,8 @@ def cmd_embed(args) -> int:
         timings["read_audio"] = timings.get("read_audio", 0.0) + time.perf_counter() - t0
         t0 = time.perf_counter()
         diarizer = diarizer or SherpaOfflineDiarizer(threshold=voice.split_cluster, embedding_path=model_path)
-        turns_by_source[src] = diarizer.diarize(audio[src])
+        turns_by_source[src] = (diarize_stretches(diarizer, audio[src], mic_stretches) if src == "mic"
+                                else diarizer.diarize(audio[src]))
         timings[f"diarize_{src}"] = time.perf_counter() - t0
     if not audio:
         print("nothing to embed")
@@ -90,10 +92,12 @@ def cmd_embed(args) -> int:
             return None
         return embedder.embed(a[start_ms * SAMPLE_RATE // 1000:end_ms * SAMPLE_RATE // 1000])
 
-    _passthrough, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, True)
+    _passthrough, pieces_by_source = split_pieces(segments, words, turns_by_source, diarized, True,
+                                                  mic_stretches)
     arrays: dict[str, np.ndarray] = {}
     info: dict[str, list[dict]] = {}
     for src, pieces in pieces_by_source.items():
+        pieces = [(line, seg) for line, seg in pieces if not outside_stretches(seg, mic_stretches)]  # You
         t0 = time.perf_counter()
         vecs, weights, idx = embed_pieces(pieces, embed)
         timings["embed_pieces"] = timings.get("embed_pieces", 0.0) + time.perf_counter() - t0

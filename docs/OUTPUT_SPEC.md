@@ -80,6 +80,14 @@ the numbering may differ from the live file, and a live segment may be split in 
 where the refined pass finds a speaker change mid-utterance. Treat the final file as the
 source of truth once `DONE` exists.
 
+**Shared mic in the final file.** The same per-stretch rule holds, applied to the final pass's own
+pieces (after it re-splits and re-joins lines): a mic piece whose `start_ms` is inside a stretch is
+`MIC_SPEAKER_nn`, every other mic piece is `You`, so a piece that starts before a stretch and runs into
+it is `You`, and one that starts inside and runs past its end is a `MIC_SPEAKER_nn`. The speakers of all
+of a meeting's stretches are grouped together: one voice has one final label in every stretch. Only
+the mic audio inside the stretches is separated (each stretch on its own for the split points), so a
+meeting with no stretch reads no mic audio for that, and a short stretch in a long meeting costs little.
+
 **Transcript version.** Optional, additive. The final file's `meeting_start` line has
 `"transcript_version"`, an opaque string that names this one final transcript, and `meta.json` has the
 same value once the pass ends. Every final pass writes a new one, even if the words come out the same:
@@ -129,7 +137,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `playbacks`, `playback_segments_dropped` | Optional, additive (set at Stop; absent in older meetings). `playbacks`: how many clips the user played from the Transcript window while the meeting was recording (every line of a Play from here run counts as one clip). `playback_segments_dropped`: utterances that overlapped such a clip in time and repeated its words, so they were left out of the transcript (the clip came back through the system audio or the microphone) and never reached the live speaker labels. Kept as a diagnostic; both are 0 when nothing was played. |
 | `audio_deleted_at` | Optional, additive. ISO 8601 time at which the user deleted the kept `audio\` from the Meetings list (to the Recycle Bin or permanently); `audio_kept` is then `false`. Absent if that never happened. The transcripts, `speakers.json` and `marks.jsonl` are not touched. |
 | `audio_purged_at` | Optional, additive. The same for the automatic purge of kept audio after N days (Settings). |
-| `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+| `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`diarize_mic`: the split-point step over the shared mic stretches only, all stretches together; `merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
 | `final_transcriber` | Present only when the kept audio was transcribed a second time after Stop (WP15, off by default): the model's name. The text of a final line may then differ from the live line at the same time; `transcript.jsonl` and `audio\words.jsonl` are never rewritten. `final_stats` then also has `stages.retranscribe` (seconds), `retx_lines_changed` and `retx_lines_kept_live` (lines whose new text was refused as empty, under half or over twice the live line's words); `retx_failed: true` instead when the second transcription failed and the live text was kept. |
 
 ## `marks.jsonl` (bookmarks)

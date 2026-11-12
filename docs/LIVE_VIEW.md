@@ -459,9 +459,15 @@ microphone (see `GLOSSARY.md`). Mic speech inside a stretch is separated into
   line that starts at the same moment, and are shown again when the meeting is viewed later
   in its live view. Nothing is written to the transcript files for them; they are not in
   the final view or in exports. The end Stop gives an open stretch gets no divider.
+- **Final pass, per stretch.** After Stop the same rule is applied to the final pass's own
+  pieces (after it re-splits and re-joins lines), by each piece's start: inside a stretch it
+  is `MIC_SPEAKER_nn`, outside it is `You`. Only the mic audio inside the stretches is
+  separated, each stretch on its own for the split points, and the voices of all stretches
+  are grouped together, so one person has one final label in every stretch. Names given to
+  live `MIC_SPEAKER_nn` lines steer that grouping as they do for meeting audio. The
+  progress bar weighs the mic by the length of its stretches, not the whole meeting.
 - The voice model must be loaded (meeting-audio separation on, the default, or shared mic
-  ticked at Start). Until the final pass separates only the stretches, it treats a meeting
-  with any stretch as shared mic throughout.
+  ticked at Start).
 
 ## Export (`.txt` and `.md`)
 
