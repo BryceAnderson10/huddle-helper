@@ -73,7 +73,7 @@ Revisit the cap after WP13: it may no longer be needed.
   default needs a `SETTINGS_VERSION` bump and a `_MIGRATIONS` entry (now at version 4).
 - **The final pass never transcribes.** `finalize_meeting` reads the live segments and
   `audio\words.jsonl`, and reads audio only for the diarized sources (the mic's is not read
-  when `diarize_mic` is off). Final text is the live text, re-split and re-joined.
+  when the meeting has no shared mic). Final text is the live text, re-split and re-joined.
 - **Fingerprints are never stored.** The final pass computes them again from the audio, so a
   meeting recorded with one model can be finished with another. `meta.json` already
   records `diarization_embedding`.
@@ -118,6 +118,19 @@ def profile(model: str | None = None) -> VoiceProfile: ...
   parameters; callers pass the profile's values. No function reads a global.
 - Keep the old model's profile in `PROFILES` with today's values, so the lab can still run
   it and the tests that use its measured similarities stay meaningful.
+
+**Added with #56 (You inside a shared mic stretch):** three more values per profile, used by
+`finalize.you_decision` to relabel a mic speaker `You` against the mic speech outside every stretch.
+They are starting values chosen on the side of not relabelling, **not yet fitted** on kept audio (no
+kept recording has a shared mic stretch yet); fitting follows `docs/agents/real-call-tests.md`, with
+`tools/final_lab.py embed` now caching the reference (`mic_you_vecs`, `mic_you_weights`). Each
+meeting's decision and similarities are in `meta.json` `you_match`.
+
+| Cutoff | ERes2Net (shipped) | wespeaker ResNet34-LM | Why |
+| --- | --- | --- | --- |
+| `you_min_s` | 30 s | 30 s | Seconds of fingerprinted off-stretch speech. Half a minute of one voice gives a steady centroid; less is left alone. |
+| `you_match` | 0.65 | 0.85 | Centroid to centroid. ERes2Net: above the top of every range seen (final clustering passed up to 0.47 on real pieces and 0.60 on fixed ones; different speakers sit below 0.26). wespeaker: above same-speaker line pairs' p50 0.77 and different speakers' p90 0.71. |
+| `you_lead` | 0.20 | 0.10 | Best minus runner-up. ERes2Net: wider than the whole 0.13 range in which `final_match` keeps the same speakers, so two mic speakers that clustering only just kept apart never qualify. |
 
 ### 4.2 Picking a cutoff
 
@@ -350,6 +363,11 @@ Items 1–4 feed WP12 and sharpen every later check; none blocks starting.
 | 7 | Accept the chosen models' licences and attribution wording | WP13, WP15 |
 
 ## 7. Risks to watch while building
+
+- **You inside a shared mic stretch (#56) is unfitted.** Its cutoffs (4.1) are guesses from the
+  ranges above, on the side of not relabelling. Watch for: the user left as `MIC_SPEAKER_nn` in
+  meetings where they spoke a lot outside the stretches (too strict), and above all any wrong `You`.
+  Check `meta.json` `you_match` on every kept shared mic meeting.
 
 - **Fitting to four recordings.** The new model's wide range is the protection; item 5
   above is the test. Re-run `models-score` on every new kept recording.

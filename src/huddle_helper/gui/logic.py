@@ -13,6 +13,7 @@
 * ``row_clip`` ``row_play_state`` ``voice_sample`` ``speaker_chips`` ``keep_audio_view`` ``copyable``
   click to hear (WP7): what a play control plays and whether it can, "Hear this voice", the speaker
   chips, the Keep this meeting's audio check box
+* ``shared_mic_view`` ``divider_text``  the "Several people on my mic" check box and its dividers
 """
 
 from __future__ import annotations
@@ -23,10 +24,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from .. import diarize, export as export_mod, meeting as mt
+from .. import diarize, export as export_mod, meeting as mt, models
 from ..mute_reminder import duration_text
 from .. import marks as marks_mod, playback, playsequence
-from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
+from ..transcript_model import DividerRow, GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
 from . import theme
 
 # -- ops ---------------------------------------------------------------------
@@ -68,6 +69,15 @@ def gap_text(row: GapRow, model: TranscriptModel) -> str:
     who = "your mic" if row.source == "mic" else "the call"
     why = f"; {row.reason}" if row.reason else ""
     return f"— No audio from {who} {span}{why} —"
+
+
+SHARED_ON_TEXT = "Separating speakers on your mic from here"
+SHARED_OFF_TEXT = "Mic is just you from here"
+
+
+def divider_text(row: DividerRow) -> str:
+    """The thin divider at a shared mic toggle."""
+    return SHARED_ON_TEXT if row.on else SHARED_OFF_TEXT
 
 
 def mark_text(row: MarkRow, model: TranscriptModel) -> str:
@@ -160,9 +170,29 @@ def notice_view(meeting_id: str, model: TranscriptModel, state) -> NoticeView | 
         problems = list(getattr(state, "hotkey_problems", None) or []) if phase == RECORDING else []
         if problems:
             text += "\nHotkeys not working: " + "; ".join(problems) + ". The buttons and the tray menu still work."
+        voice = voice_model_notice(meeting_id, state) if phase in (RECORDING, STOPPING) else None
+        if voice is not None:
+            return NoticeView(f"{text}\n{voice.text}", voice.level)
         return NoticeView(text, "info")
     texts = naming_notices(model)
     return NoticeView(chr(10).join(texts), "info") if texts else None
+
+
+def voice_model_notice(meeting_id: str, state) -> NoticeView | None:
+    """The voice model loading for a shared mic ticked mid-meeting (#55), or its load having failed.
+    Only for the meeting being recorded (``state.recording`` is that meeting's ``Status``)."""
+    rec = getattr(state, "recording", None)
+    if rec is None or getattr(rec, "meeting_id", None) != meeting_id:
+        return None
+    status = getattr(rec, "voice_model", "")
+    if status == "loading":
+        return NoticeView("Loading the voice model: your mic's lines show as You until it is ready. "
+                          "The final transcript splits them into speakers.", "info")
+    if status == "failed":
+        why = getattr(rec, "voice_model_error", "") or "unknown error"
+        return NoticeView(f"Could not load the voice model ({why}). Your mic's lines show as You while "
+                          "recording; the final transcript still tries to split them into speakers.", "warn")
+    return None
 
 
 def _secs(ms: int) -> str:
@@ -278,7 +308,8 @@ class MuteBarView:
 
 
 def _in_room(model: TranscriptModel) -> bool:
-    return bool((model.meta.get("settings") or {}).get("diarize_mic"))
+    """A shared mic stretch is open now: muting the mic mutes everyone on it."""
+    return mt.shared_mic_open(model.meta)
 
 
 REMIND_HIGHLIGHT_S = 60.0
@@ -318,7 +349,7 @@ def mute_button_view(meeting_id: str, model: TranscriptModel, state, hotkey: str
     muted = _mic_muted(meeting_id, model, state)
     key = f" [{hotkey}]" if hotkey else ""
     tip = ("Takes your microphone out of this recording only. The call app still hears you."
-           + (" With separate speakers on the mic, everyone in the room is muted." if _in_room(model) else "")
+           + (" With several people on your mic, everyone in the room is muted." if _in_room(model) else "")
            + key)
     return MuteButtonView(True, "Unmute me" if muted else "Mute me in the recording", tip)
 
@@ -649,6 +680,30 @@ def keep_audio_view(meeting_id: str, model: TranscriptModel, state) -> KeepAudio
            if checked else
            "Off: the audio is deleted when the final transcript is ready. Tick this to keep it for this meeting.")
     return KeepAudioView(True, checked, tooltip=tip)
+
+
+@dataclass(frozen=True)
+class SharedMicView:
+    visible: bool
+    checked: bool = False
+    text: str = "Several people on my mic"
+    tooltip: str = ""
+    enabled: bool = True  # False when the voice model is not downloaded (#55)
+
+
+def shared_mic_view(meeting_id: str, model: TranscriptModel, state) -> SharedMicView:
+    """The header's shared mic check box: only while the displayed meeting is recording (not while
+    stopping or processing). Ticked while a shared mic stretch is open, including one from the Start dialog."""
+    if meeting_phase(meeting_id, model, state) != RECORDING:
+        return SharedMicView(False)
+    checked = mt.shared_mic_open(model.meta)
+    if not checked and not getattr(state, "voice_model_installed", True):
+        return SharedMicView(True, False, tooltip=models.VOICE_MODEL_MISSING, enabled=False)
+    tip = ("Your mic's speech is split into speakers from here. Untick when it is just you again."
+           if checked else
+           "Tick when people in the room with you speak into your mic: their speech is split into "
+           "speakers from here instead of all being You.")
+    return SharedMicView(True, checked, tooltip=tip)
 
 
 COPY_GLYPHS = "▶■"

@@ -405,9 +405,10 @@ two either way is bad. The system stream (the call) keeps recording.
 - **Speech in progress.** Whatever the user said up to the press is kept: the silence
   ends the utterance through the normal end-of-speech rule and it is transcribed as
   usual. Unmuting starts fresh.
-- **In-room meetings.** With "Separate speakers on my microphone" on, the mic is the
-  whole room, so muting takes everyone in the room out of the recording. The control's
-  tooltip says so in that mode.
+- **Shared mic.** While "Several people on my mic" is ticked (a shared mic stretch is
+  open, see "Shared mic" below), the mic is the whole room, so muting takes everyone in
+  the room out of the recording. The control's tooltip and the amber bar say so while a
+  stretch is open, and not otherwise.
 - **Can't be missed.** Tray icon: the red recording icon with a crossed-out mic.
   Tooltip: "● Recording 12:41 · your mic is muted". Window header: an amber "You're
   muted in the recording" bar with an Unmute button. The mic level meter shows "muted"
@@ -429,6 +430,73 @@ two either way is bad. The system stream (the call) keeps recording.
 - **Shown in the transcript.** The view draws a row "— You muted 11:05–11:07 (2 min) —"
   from `meta.json` `gaps`; exports include the same line. Echo dedupe and mic speaker
   labels need no change: a muted mic produces no lines.
+
+## Shared mic
+
+A **shared mic** is a stretch of the meeting where several people speak into the user's
+microphone (see `GLOSSARY.md`). Mic speech inside a stretch is separated into
+`MIC_SPEAKER_nn`; outside, it is all `You`. The stretches are kept in `meta.json`
+`shared_mic` (OUTPUT_SPEC).
+
+- **Start.** "Several people on my mic" in the Start dialog opens a stretch at 0.
+- **Toggle while recording.** The same words label a check box in the Transcript window,
+  in the row under the header beside "Keep this meeting's audio". It is shown only while
+  the displayed meeting is recording (not while stopping, during the final pass, or for a
+  finished meeting) and shows the meeting's current state, including a stretch opened from
+  the Start dialog. Ticking it opens a stretch at the meeting clock; unticking closes it.
+  No tray item and no hotkey.
+- **The line-start rule.** A mic line belongs to the mode in force when it *started*
+  (its `start_ms`): a line in progress at the click keeps the mode it started in. Lines
+  already written are never relabelled; the live transcript is never rewritten.
+- **One grouping across stretches.** The mic's live speaker grouping is made at the first
+  stretch and kept until Stop, so a voice heard in two stretches has the same
+  `MIC_SPEAKER_nn` label in both.
+- **Stretches are literal**, however short. At Stop an open stretch is closed at the
+  meeting's end, and a stretch in which no mic line started is dropped.
+- **Dividers.** The live view shows a thin divider where each stretch starts ("Separating
+  speakers on your mic from here") and where one is closed by the box ("Mic is just you
+  from here"). They are drawn from `meta.json` (`transcript_model.DividerRow`), sit above a
+  line that starts at the same moment, and are shown again when the meeting is viewed later
+  in its live view. Nothing is written to the transcript files for them; they are not in
+  the final view or in exports. The end Stop gives an open stretch gets no divider.
+- **Final pass, per stretch.** After Stop the same rule is applied to the final pass's own
+  pieces (after it re-splits and re-joins lines), by each piece's start: inside a stretch it
+  is `MIC_SPEAKER_nn`, outside it is `You`. Only the mic audio inside the stretches is
+  separated, each stretch on its own for the split points, and the voices of all stretches
+  are grouped together, so one person has one final label in every stretch. Names given to
+  live `MIC_SPEAKER_nn` lines steer that grouping as they do for meeting audio. The
+  progress bar weighs the mic by the length of its stretches, not the whole meeting.
+- **You inside a stretch (final pass only).** Inside a stretch the user is one of the
+  `MIC_SPEAKER_nn`. After Stop, when the meeting also has enough mic speech outside every
+  stretch (the user alone), the final pass compares each mic speaker's voice with it and
+  relabels the best match `You`, but only when it is very sure: a very close match that is
+  clearly ahead of the next mic speaker. Otherwise the user stays a `MIC_SPEAKER_nn` they
+  can name by hand; a wrong `You` is worse than an unnamed speaker. A mic speaker the user
+  named keeps the name, a whole-meeting stretch has nothing to compare with and is left
+  alone, and a display name given to `You` applies to the relabelled lines too: the final
+  view shows them as the same person as the user's other lines. The live view never attempts this: live
+  lines keep the label they were written with.
+- **The voice model.** Live grouping needs the voice model in memory. It is loaded at
+  start-up only when meeting-audio separation is on (the default); it is never loaded just
+  in case.
+  - *Ticked at Start* without it in memory: it is loaded before recording begins, so the
+    first mic line is already `MIC_SPEAKER_nn`. Whisper is not loaded again.
+  - *Ticked while recording* without it in memory: the stretch opens at the click as
+    usual and the model loads on a thread of its own, so live lines keep coming. The
+    notice bar says "Loading the voice model…" meanwhile. Mic lines transcribed before it
+    is ready are `You` (the live transcript is never rewritten); once it is ready, new mic
+    lines in the stretch get `MIC_SPEAKER_nn`, and `meta.json` `models` names it. The
+    final pass loads what it needs itself, so the whole stretch, including the lines shown
+    live as `You`, is separated in the final transcript. A loaded model is kept for later
+    meetings. Ticking again while it loads does not start a second load.
+  - *The load fails:* the notice bar says so (amber, with the reason) for the rest of the
+    recording, the stretch is kept, live transcription goes on and mic lines stay `You`;
+    the final pass still tries to separate the stretch. It is not retried in that meeting.
+  - *Not downloaded:* "Several people on my mic" is disabled, in the Start dialog and in
+    the Transcript window, with a tooltip saying the voice model is not downloaded and how
+    to get it (restart Huddle Helper while online, or `huddle-helper download-models`).
+    Nothing is downloaded during a meeting; Huddle Helper checks at start-up and when a
+    recording starts.
 
 ## Export (`.txt` and `.md`)
 
@@ -854,7 +922,8 @@ While muted, an amber bar sits under the header:
 - **Play controls.** A ▶ at the start of each line (■ while it plays); greyed out with a
   tooltip when the audio is gone or not yet readable. Speaker chips have "Hear this
   voice" in their menu. The header has a **Keep this meeting's audio** check box while
-  recording or processing.
+  recording or processing, and beside it **Several people on my mic** while recording
+  (shared mic, with a divider in the transcript at each toggle).
 - **Export…** opens a small dialog: format (Markdown / Text), times (since start /
   clock), join same-speaker lines, then Save As or Copy.
 
@@ -1003,7 +1072,7 @@ show that the call is active, but who is speaking is only known once the line la
 | Remote speech over a playing clip is dropped with it | Known gap of the drop rule; counted in `meta.json`; fixed by milestone 7. |
 | User forgets they muted and loses part of the meeting | Amber bar, tray icon, tooltip, 10-minute reminders (P1); Stop always unmutes. |
 | User thinks "Mute me" mutes them in the call (or the reverse) | Every label says "in the recording" and the bar says "the call still hears you". |
-| Mute in an in-room meeting mutes the whole room | Tooltip says so when mic speaker separation is on. |
+| Mute with a shared mic mutes the whole room | Tooltip and amber bar say so while a shared mic stretch is open. |
 | Muted audio could still be played back | Silence replaces the mic samples before the in-memory playback window as well as the buffer and transcription. |
 | **The downstream app reads a muted gap as lost audio** | Until now every `gaps` entry meant a device fault. OUTPUT_SPEC tells readers to check `reason`; `muted` is deliberate. |
 | **The downstream app ignores the new files** | Names and bookmarks never reach summaries. Update its reader alongside milestones 2 and 5, not after. |

@@ -35,7 +35,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .meeting import MeetingFolder
-from .transcript_model import KIND_ORDER, GapRow, MarkRow, TranscriptModel, fmt_elapsed
+from .transcript_model import KIND_ORDER, DividerRow, GapRow, MarkRow, TranscriptModel, fmt_elapsed
 
 PROVISIONAL = "Provisional: speaker labels may change"
 INTERRUPTED = ("Recovered after an interruption: the recording stopped unexpectedly, "
@@ -68,7 +68,7 @@ def _items(model: TranscriptModel, join: bool) -> list[_Item]:
     items: list[_Item] = []
     last_key: str | None = None  # person_key of the paragraph being extended
     for row in model.rows:
-        if isinstance(row, MarkRow):
+        if isinstance(row, (MarkRow, DividerRow)):  # dividers are the live view's, not the transcript's
             continue
         if isinstance(row, GapRow):
             items.append(_Item(row.start_ms, "gap", gap=row))

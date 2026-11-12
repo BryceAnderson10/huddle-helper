@@ -47,6 +47,10 @@ _Avoid_: Speaker id, voice
 A display name the user (or the downstream app) gave a speaker label. It is a label for reading, not a confirmed identity.
 _Avoid_: Identity, participant, person
 
+**Shared mic**:
+A stretch of a meeting the user marked as having several people speaking into their microphone. Mic speech inside it is separated into speakers; outside it, it is all `You`. On screen it is "Several people on my mic".
+_Avoid_: In-room mode, mic diarization
+
 **Attendee**:
 A name typed in the Start dialog's "Who's on the call" box to make naming speakers quicker. It is not a record of who attended or who spoke.
 _Avoid_: Participant, invitee, recipient

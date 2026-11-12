@@ -17,7 +17,7 @@ from typing import Callable
 
 from .. import playback
 from ..diarize import YOU
-from ..transcript_model import GapRow, Insert, LineRow, MarkRow, Remove, Row, TranscriptModel, Update
+from ..transcript_model import DividerRow, GapRow, Insert, LineRow, MarkRow, Remove, Row, TranscriptModel, Update
 from . import logic, theme
 
 log = logging.getLogger(__name__)
@@ -115,6 +115,8 @@ class TranscriptView(ttk.Frame):
         t.tag_configure("line", lmargin1=0, lmargin2=self.x_text, spacing1=sp, spacing3=sp)
         t.tag_configure("gaprow", lmargin1=self.x_speaker, lmargin2=self.x_speaker, spacing1=sp, spacing3=sp,
                         foreground=theme.GAP_FG, font=self.f_italic)
+        t.tag_configure("dividerrow", lmargin1=self.x_speaker, lmargin2=self.x_speaker, spacing1=sp, spacing3=sp,
+                        foreground=theme.MUTED, font=self.f_small)
         t.tag_configure("markrow", lmargin1=0, lmargin2=self.x_speaker, spacing1=sp, spacing3=sp,
                         background=theme.MARK_BG)
         t.tag_configure("markedit", foreground=theme.MUTED, font=self.f_small, underline=True)
@@ -554,6 +556,8 @@ class TranscriptView(ttk.Frame):
                     "\t", ("line",), row.text.strip() + "\n", ("line", "body", "short-body") if short else ("line", "body")]
         if isinstance(row, GapRow):
             return ["\t" + logic.gap_text(row, model) + "\n", ("gaprow",)]
+        if isinstance(row, DividerRow):
+            return ["\t" + f"──── {logic.divider_text(row)} ────" + "\n", ("dividerrow",)]
         kind_tag = f"kind:{row.kind}" if row.kind in theme.KIND_COLORS else "kind:other"
         symbol = theme.KIND_SYMBOLS.get(row.kind, theme.CUSTOM_SYMBOL)
         return [self._glyph(row), self._glyph_tags(row, "markrow"), "\t", ("markrow",), t, ("markrow", "time"),

@@ -77,6 +77,12 @@ def diarization_installed(root: Path | None = None) -> bool:
     return segmentation_model(root).exists() and embedding_model(root).exists()
 
 
+# Why "Several people on my mic" is unavailable (#55). The model is fetched when Huddle Helper starts, never
+# during a meeting.
+VOICE_MODEL_MISSING = ("The voice model is not downloaded, so your mic's speech cannot be split into speakers. "
+                       "Restart Huddle Helper while online to download it, or run: huddle-helper download-models")
+
+
 def missing_models(whisper_name: str, need_diarization: bool, root: Path | None = None) -> list[str]:
     missing = []
     if not whisper_installed(whisper_name, root):

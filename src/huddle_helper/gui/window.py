@@ -23,8 +23,8 @@ Click to hear (WP7): every line and bookmark row starts with a play control; a c
 selected line, or the right-click menu plays it through ``AppController.play_clip``, ``Esc`` stops. The
 speaker bar's chips open a menu with "Hear this voice". Controls that cannot play are greyed out with the
 reason in a tooltip (and in the notice bar when clicked). The header's "Keep this meeting's audio" check box
-calls ``set_keep_audio``. The once-per-meeting headphone warning is shown in the notice bar, and the
-confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
+calls ``set_keep_audio``; "Several people on my mic" beside it (while recording) calls ``set_shared_mic``.
+The once-per-meeting headphone warning is shown in the notice bar, and the confirmation (echo dedupe already dropped mic lines) is a Yes/No question.
 
 Attendees (WP9a, L13): the numbered strip, the number keys, the confirmation with Undo and the "Who is this?"
 bar are drawn here from ``attendee_logic``. The rules are in docs/LIVE_VIEW.md, "Attendees (L13)".
@@ -142,6 +142,12 @@ class MainWindow:
         self.keep_hint.pack(side="left", padx=(8, 0))
         self.keep_tip = Tip(self.keep_chk)
         self._keep_shown = False
+        # "Several people on my mic" (shared mic): in the same row, only while the meeting is recording.
+        self.shared_var = tk.BooleanVar(value=False)
+        self.shared_chk = ttk.Checkbutton(self.keep_row, text="Several people on my mic", variable=self.shared_var,
+                                          command=self._toggle_shared)
+        self.shared_tip = Tip(self.shared_chk)
+        self._shared_shown = False
         self._head_sep = ttk.Separator(self.tpage, orient="horizontal")
         self._head_sep.pack(fill="x")
 
@@ -747,6 +753,26 @@ class MainWindow:
             self.keep_row.pack_forget()
             self._keep_shown = False
 
+    def _set_shared(self, v: logic.SharedMicView) -> None:
+        if v.visible:
+            if self.shared_var.get() != v.checked:
+                self.shared_var.set(v.checked)
+            self.shared_tip.text = v.tooltip
+            want = ["!disabled"] if v.enabled else ["disabled"]
+            if self.shared_chk.instate(["disabled"]) == v.enabled:
+                self.shared_chk.state(want)
+            if not self._shared_shown:
+                self.shared_chk.pack(side="right")
+                self._shared_shown = True
+        elif self._shared_shown:
+            self.shared_chk.pack_forget()
+            self._shared_shown = False
+
+    def _toggle_shared(self) -> None:
+        if self.session is not None:
+            self.app.set_shared_mic(bool(self.shared_var.get()))
+            self._tick_slow()  # read the new meta now: the box, the divider and the mute tooltip follow it
+
     def _toggle_keep(self) -> None:
         if self.session is not None:
             self.app.set_keep_audio(self.session.folder, bool(self.keep_var.get()))
@@ -845,6 +871,7 @@ class MainWindow:
             self.head_text.configure(text="No meeting open")
             self._set_mute(None, None)
             self._set_keep(logic.KeepAudioView(False))
+            self._set_shared(logic.SharedMicView(False))
             self._set_prompt()
             self._set_speakers(None)
             self._set_strip()
@@ -864,6 +891,7 @@ class MainWindow:
         self._set_notice(self._banner_view() or logic.notice_view(mid, model, state))
         self._set_status(logic.status_view(mid, model, state))
         self._set_keep(logic.keep_audio_view(mid, model, state))
+        self._set_shared(logic.shared_mic_view(mid, model, state))
         self._set_prompt()
         self.view.set_short(logic.short_speakers(model))  # a name given in the final view can merge two voices
         self._set_speakers(model)

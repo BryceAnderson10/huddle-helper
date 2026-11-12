@@ -54,6 +54,9 @@ class AppState:
     message: str = ""
     last_meeting: str | None = None
     hotkey_problems: list[str] = field(default_factory=list)  # "Ctrl+Alt+B (Bookmark): already in use ..."
+    # The voice model is on disk (#55): without it "Several people on my mic" is disabled, in the Start dialog
+    # and the Transcript window. Checked at start-up and when a recording starts; never downloaded mid-meeting.
+    voice_model_installed: bool = True
 
 
 # -- after-Stop time estimate (pure) --------------------------------------
@@ -65,23 +68,38 @@ OWN_RATE_FROM = 0.10  # blend in the pass's own rate once this fraction of the p
 HISTORY = 5  # completed meetings whose final_stats.speed are used
 
 
-def pass_fraction(stage: str, frac: float, diarized: list[str] | tuple[str, ...]) -> float:
+def pass_fraction(stage: str, frac: float, diarized: list[str] | tuple[str, ...],
+                  weights: dict[str, float] | None = None) -> float:
     """Fraction (0-1) of the whole pass done, from the stage name and the fraction within it.
 
     ``diarized`` are the streams the pass diarizes, in the order it does them (sorted by name).
-    Diarization is DIARIZE_SHARE of the time, split equally over the streams; voice fingerprints
-    are the rest. "Writing final transcript" counts as the end.
+    Diarization is DIARIZE_SHARE of the time, split over the streams by ``weights`` (seconds of audio
+    each one diarizes: the mic only its shared mic stretches; equal when not given); voice
+    fingerprints are the rest. "Writing final transcript" counts as the end.
     """
     frac = min(1.0, max(0.0, frac))
     n = len(diarized)
     if stage.startswith(SPEAKER_STAGE):
         src = stage[stage.find("(") + 1:stage.find(")")] if "(" in stage else ""
         idx = list(diarized).index(src) if src in diarized else 0
-        return DIARIZE_SHARE * (idx + frac) / max(n, 1)
+        w = [max(float((weights or {}).get(s, 1.0)), 0.0) for s in diarized] if weights else [1.0] * n
+        if not any(w):
+            w = [1.0] * n
+        total = sum(w) or 1.0
+        return DIARIZE_SHARE * (sum(w[:idx]) + (w[idx] if w else 0.0) * frac) / total
     if stage == VOICE_STAGE:
         base = DIARIZE_SHARE if n else 0.0
         return base + (1.0 - base) * frac
     return 1.0 if stage.startswith("Writing") else frac
+
+
+def diarize_weights(meta: dict, length_s: float | None) -> dict[str, float]:
+    """Seconds of audio the after-Stop pass diarizes per stream, for ``pass_fraction``: the system
+    stream whole, the mic only inside its shared mic stretches (an open stretch ends at ``length_s``)."""
+    length_ms = int((length_s or 0) * 1000)
+    stretches = mt.close_stretches(mt.shared_mic_stretches(meta), length_ms)
+    mic_ms = sum(max(0, min(b, length_ms) - a) for a, b in stretches) if length_ms else 0
+    return {"system": length_ms / 1000, "mic": mic_ms / 1000}
 
 
 def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | None,
@@ -194,6 +212,7 @@ class AppController:
             for meeting_id in housekeeping.recover(meetings_dir, None, skip=self._live_ids):
                 self._enqueue(mt.MeetingFolder(meetings_dir / meeting_id))
             self.purge()
+            self._check_voice_model()
             self._get_components()
             self._set(phase="ready", message="")
         except Exception as exc:  # noqa: BLE001
@@ -202,12 +221,13 @@ class AppController:
 
     def _prepare_models(self) -> None:
         s = self.settings
-        missing = models.missing_models(s.whisper_model, s.needs_diarization)
+        # The voice model is installed even with meeting-audio separation off: a meeting can tick
+        # "Several people on my mic" at Start (shared mic), which needs it.
+        missing = models.missing_models(s.whisper_model, True)
         if missing:
             self._set(phase="downloading", message=f"Downloading models: {', '.join(missing)}")
             self._notify("Downloading speech models (one-time). Recording is available when done.")
-            models.install_all(s.whisper_model, s.needs_diarization,
-                               progress=lambda m: self._set(message=m))
+            models.install_all(s.whisper_model, True, progress=lambda m: self._set(message=m))
             self._notify("Models installed. Huddle Helper is ready.")
         if s.final_transcribe and not models.whisper_installed(s.final_model):
             # The model for the second transcription after Stop. A failure here must not stop
@@ -219,13 +239,33 @@ class AppController:
                 log.exception("Could not install the final-transcript model %s", s.final_model)
                 self._notify(f"Could not download the {s.final_model} model. Final transcripts will use the live text.")
 
-    def _get_components(self) -> Components:
+    def voice_model_installed(self) -> bool:
+        """For the Start dialog: is the voice model on disk now (``state.voice_model_installed`` follows)."""
+        return self._check_voice_model()
+
+    def _check_voice_model(self) -> bool:
+        installed = models.diarization_installed()
+        if installed != self.state.voice_model_installed:
+            self._set(voice_model_installed=installed)
+        return installed
+
+    def _get_components(self, shared_mic: bool = False) -> Components:
+        """The loaded models. ``shared_mic``: the meeting about to start needs the voice model even when
+        meeting-audio separation is off; components that already hold it (also one loaded part-way through
+        an earlier meeting) are reused."""
         s = self.settings
-        key = (s.whisper_model, s.beam_size, s.cpu_threads, s.needs_diarization)
+        voice = s.needs_diarization or shared_mic
+        key = (s.whisper_model, s.beam_size, s.cpu_threads, voice)
         with self._lock:
-            if self._components is None or self._components_key != key:
+            have = self._components_key
+            comps = self._components
+            # Components without the voice model but with its loader are kept: Recorder.start loads the model
+            # into them before recording begins, without loading Whisper again.
+            no_voice = voice and getattr(comps, "embedder", None) is None \
+                and getattr(comps, "embedder_loader", None) is None
+            if comps is None or have is None or have[:3] != key[:3] or no_voice:
                 log.info("Loading models for %s", key)
-                self._components = load_components(s)
+                self._components = load_components(s, shared_mic=shared_mic)
                 self._components_key = key
             if self._capture_factory is not None:
                 self._components.capture_factory = self._capture_factory
@@ -268,6 +308,16 @@ class AppController:
         if rec is None or not self.is_recording:
             return False
         now = rec.set_mic_muted(muted)
+        self._on_change()
+        return now
+
+    def set_shared_mic(self, on: bool) -> bool:
+        """"Several people on my mic" in the Transcript window: open (or close) a shared mic stretch now.
+        False when nothing is recording."""
+        rec = self._recorder
+        if rec is None or not self.is_recording:
+            return False
+        now = rec.set_shared_mic(on)
         self._on_change()
         return now
 
@@ -356,22 +406,25 @@ class AppController:
         return {"action": "none"}
 
     def start(self, title: str, terms: list[str] | tuple[str, ...] = (),
-              attendees: list[str] | tuple[str, ...] = (), start_muted: bool = False) -> None:
-        """Start recording. ``start_muted`` (L24): the mic is out of the recording from the first sample."""
+              attendees: list[str] | tuple[str, ...] = (), start_muted: bool = False,
+              shared_mic: bool = False) -> None:
+        """Start recording. ``start_muted`` (L24): the mic is out of the recording from the first sample.
+        ``shared_mic``: "Several people on my mic" was ticked, so the whole meeting is one shared mic stretch."""
         if not self.can_start:
             return
         self._set(phase="starting", message="Starting…")
 
         def run():
             try:
-                comps = self._get_components()
+                self._check_voice_model()  # the window's box follows it during this meeting
+                comps = self._get_components(shared_mic) if shared_mic else self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m),
                                           before_reopen=self.player.stop,  # decision 7: nothing open on re-bind
                                           on_mute_reminder=self._mute_reminder,
                                           mute_reminder_s=_reminder_interval())
                 folder = self._recorder.start(title or "meeting", terms, attendees=attendees,
-                                              start_muted=start_muted)
+                                              start_muted=start_muted, shared_mic=shared_mic)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
             except Exception as exc:  # noqa: BLE001
@@ -610,12 +663,13 @@ class AppController:
             speeds: list[float] = []
             length_s: float | None = None
             diarized: list[str] = []
+            weights: dict[str, float] | None = None
             try:
                 meta = folder.read_meta()
                 length_s = meeting_length_s(meta)
-                rec_settings = meta.get("settings", {})
-                diarized = [src for src, on in (("mic", rec_settings.get("diarize_mic", False)),
-                                                ("system", rec_settings.get("diarize_system", True))) if on]
+                diarized = [src for src, on in (("mic", mt.has_shared_mic(meta)),
+                                                ("system", meta.get("settings", {}).get("diarize_system", True))) if on]
+                weights = diarize_weights(meta, length_s) if length_s else None
                 speeds = recent_final_speeds(folder.path.parent, exclude=folder.meeting_id)
             except Exception:  # noqa: BLE001 - the estimate is optional
                 log.exception("Could not prepare the time-left estimate for %s", folder.meeting_id)
@@ -624,7 +678,7 @@ class AppController:
                 now = time.monotonic()
                 if now - last[0] > 0.5 or frac >= 1.0:
                     last[0] = now
-                    overall = pass_fraction(stage, frac, diarized)
+                    overall = pass_fraction(stage, frac, diarized, weights)
                     elapsed = now - t_start
                     self._set(finalizing=f"{stage} {frac:.0%}",
                               finalize=FinalizeProgress(mid, stage, frac, overall, elapsed,

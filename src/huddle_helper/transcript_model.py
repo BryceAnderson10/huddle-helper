@@ -8,11 +8,14 @@ Rows
                  (None when nobody named it); ``person_key`` is ``name or label``.
     ``MarkRow``  a bookmark: ``kind`` is already normalised (an unknown kind reads as ``bookmark``).
     ``GapRow``   a period with no audio from one stream (device change, or ``reason == "muted"``).
+    ``DividerRow``  a shared mic toggle (``meta.json`` ``shared_mic``): ``on`` where a stretch starts, off
+                 where one ends. Live view only (none while showing the final file); never in exports.
 
 Order
-    ``model.rows`` is sorted by ``(at_ms, rank, tie)``; rank 0 = line (``start_ms``, tie = seq),
-    1 = gap (``start_ms``), 2 = mark (``at_ms``, tie = id). So a line that arrives after a bookmark
-    but started before it lands above the bookmark.
+    ``model.rows`` is sorted by ``(at_ms, rank, tie)``; rank -1 = divider, 0 = line (``start_ms``, tie =
+    seq), 1 = gap (``start_ms``), 2 = mark (``at_ms``, tie = id). So a line that arrives after a bookmark
+    but started before it lands above the bookmark, and a line that starts at a toggle lands below its
+    divider (it belongs to the new mode).
 
 Ops
     Every mutator returns a list of ops to replay on a view, in order, each index valid at the
@@ -23,7 +26,7 @@ Feeding it (the window tails the files with ``JsonlTail`` and calls these)
     ``apply_transcript(events)``  events of transcript.jsonl or transcript.final.jsonl
     ``apply_tags(events)``        speaker_tags.jsonl events (used for names only while live)
     ``apply_marks(events)``       marks.jsonl events: mark, mark_label, mark_kind, mark_delete
-    ``set_meta(meta)``            meta.json dict: title, started_at, status, gaps, mark_kinds
+    ``set_meta(meta)``            meta.json dict: title, started_at, status, gaps, mark_kinds, shared_mic
     ``set_speakers(mapping, conflicts=None)``  speakers.json (used for names only once final)
     ``reset_transcript()``        the transcript file was replaced: drop the lines, then re-apply
     ``switch_to_final(events=None, speakers=None, conflicts=None)``
@@ -56,6 +59,7 @@ from datetime import datetime, timedelta
 from typing import Iterable, Union
 
 from . import marks as marks_mod, tags as tags_mod
+from . import meeting as mt
 from .meeting import MeetingFolder
 from .writer import read_events
 
@@ -122,7 +126,17 @@ class GapRow:
         return self.reason == "muted"
 
 
-Row = Union[LineRow, MarkRow, GapRow]
+@dataclass(frozen=True)
+class DividerRow:
+    at_ms: int
+    on: bool  # True: separating speakers on the mic from here; False: the mic is just you from here
+
+    @property
+    def start_ms(self) -> int:
+        return self.at_ms
+
+
+Row = Union[LineRow, MarkRow, GapRow, DividerRow]
 
 
 # -- ops ----------------------------------------------------------------
@@ -187,7 +201,28 @@ def _sort_key(row: Row) -> tuple:
         return (row.start_ms, 0, row.seq)
     if isinstance(row, GapRow):
         return (row.start_ms, 1, (row.end_ms, row.source))
+    if isinstance(row, DividerRow):
+        return (row.at_ms, -1, row.on)
     return (row.at_ms, 2, row.id)
+
+
+STOP_MARGIN_MS = 1000
+
+
+def shared_mic_dividers(meta: dict) -> list[DividerRow]:
+    """The live view's dividers for the meeting's shared mic stretches: one where each starts and one
+    where each ends. The end Stop gave an open stretch (the meeting's end, ``duration_s``) is not a
+    toggle and gets none."""
+    try:
+        end = int(float(meta["duration_s"]) * 1000)
+    except (KeyError, TypeError, ValueError):
+        end = None
+    out = []
+    for a, b in mt.shared_mic_stretches(meta):
+        out.append(DividerRow(a, True))
+        if b is not None and (end is None or b < end - STOP_MARGIN_MS):
+            out.append(DividerRow(b, False))
+    return out
 
 
 reduce_marks = marks_mod.reduce  # the reducer lives in marks.py; kept under its old name
@@ -273,6 +308,7 @@ class TranscriptModel:
         self._mark_state: dict[int, marks_mod.Mark] = {}
         self._cur_marks: dict[int, MarkRow] = {}
         self._cur_gaps: dict[tuple, GapRow] = {}
+        self._cur_dividers: dict[tuple, DividerRow] = {}
         self.mark_kinds: dict[str, str] = {}  # user-defined kind id -> display name (meta.json)
         # meeting info
         self.meta: dict = {}
@@ -294,6 +330,7 @@ class TranscriptModel:
             log.warning("No readable meta.json in %s", folder.path)
         if folder.is_done and folder.final_path.exists():
             m.final = True
+            m._sync_dividers()
             m.set_speakers(folder.read_speakers(), _read_conflicts(folder))
             m.apply_transcript(read_events(folder.final_path))
         elif folder.live_path.exists():
@@ -341,6 +378,10 @@ class TranscriptModel:
     @property
     def gaps(self) -> list[GapRow]:
         return [r for r in self.rows if isinstance(r, GapRow)]
+
+    @property
+    def dividers(self) -> list[DividerRow]:
+        return [r for r in self.rows if isinstance(r, DividerRow)]
 
     @property
     def last_line_end_ms(self) -> int:
@@ -512,6 +553,7 @@ class TranscriptModel:
         old_lines = self.lines
         self.reset_transcript()
         self.final = True
+        self._sync_dividers()
         self.set_speakers(speakers or {}, conflicts)
         self.apply_transcript(events)
         changed = changed_after_swap(old_lines, self.lines)
@@ -530,7 +572,11 @@ class TranscriptModel:
                 continue
             desired[(row.source, row.start_ms, row.end_ms)] = row
         ops = self._sync(self._cur_gaps, desired)
-        return ops + self._sync_marks()
+        return ops + self._sync_dividers() + self._sync_marks()
+
+    def _sync_dividers(self) -> list[Op]:
+        desired = {} if self.final else {(d.at_ms, d.on): d for d in shared_mic_dividers(self.meta)}
+        return self._sync(self._cur_dividers, desired)
 
     def apply_marks(self, events: Iterable[dict]) -> list[Op]:
         reduce_marks(events, self._mark_state)

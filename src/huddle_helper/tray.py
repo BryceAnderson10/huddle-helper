@@ -245,7 +245,7 @@ class TrayApp:
 
         if self.app.can_start:
             StartDialog(self.root, self.app.start, self.app.plan_vocabulary,
-                        self.app.settings.vocabulary)
+                        self.app.settings.vocabulary, voice_model_installed=self.app.voice_model_installed())
 
     def stop(self) -> None:
         self.app.stop()

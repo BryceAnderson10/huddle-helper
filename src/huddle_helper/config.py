@@ -53,8 +53,9 @@ class Settings:
     final_beam_size: int = 5
 
     # Speaker labels (F5).
+    # Shared mic (several people on the user's mic) is chosen per meeting at Start, not here; an old
+    # saved "diarize_mic" is an unknown key and is dropped by from_dict.
     diarize_system: bool = True
-    diarize_mic: bool = False
     # The three cutoffs depend on the fingerprint model. None (the default) means the value in that
     # model's profile, see voice_profile(); a number here overrides it (the lab and tests do this).
     live_speaker_threshold: float | None = None
@@ -94,7 +95,9 @@ class Settings:
 
     @property
     def needs_diarization(self) -> bool:
-        return self.diarize_system or self.diarize_mic
+        """The voice model is needed for every meeting (a shared mic stretch also needs it, see
+        ``recorder.load_components``)."""
+        return self.diarize_system
 
     def voice_profile(self):
         """The shipped fingerprint model's cutoffs, with any numbers set here in their place."""

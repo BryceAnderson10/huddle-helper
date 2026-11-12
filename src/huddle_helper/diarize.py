@@ -58,13 +58,20 @@ class VoiceProfile:
     fold_min: float  # fold_small_clusters: a small cluster folds only into one this alike
     tag_gate: float  # tags.piece_names: a speaker-level name steers a piece only if this alike
     split_cluster: float  # sherpa's offline clustering, which only decides where lines split
+    # Recognising You inside a shared mic stretch (finalize.you_decision, #56). Not fitted yet: chosen
+    # well above final_match and on the side of not relabelling (docs/QUALITY_PLAN.md).
+    you_min_s: float  # seconds of fingerprinted mic speech outside every stretch, at least
+    you_match: float  # the best mic speaker's voice is at least this like that speech
+    you_lead: float  # ...and at least this much more alike than the runner-up
 
 
 SHIPPED_UNTIL_WP13 = "wespeaker_en_voxceleb_resnet34_LM"
 PROFILES: dict[str, VoiceProfile] = {
     # The model shipped until WP13. final_match passed only from 0.70 to 0.71 (WP1: 0.685-0.71).
     SHIPPED_UNTIL_WP13: VoiceProfile(SHIPPED_UNTIL_WP13, live_match=0.75, live_adopt=0.6, final_match=0.70,
-                                     fold_min=0.70, tag_gate=0.70, split_cluster=0.6),
+                                     fold_min=0.70, tag_gate=0.70, split_cluster=0.6,
+                                     # same-speaker line pairs p50 0.77, different p90 0.71 (TODO.md)
+                                     you_min_s=30.0, you_match=0.85, you_lead=0.10),
     # 3D-Speaker ERes2Net, English. final_match: on the pieces the final pass really makes, confirmed
     # speech has 0 s wrong from 0.27 to 0.47 (Tests #3-#5), and every recording keeps the same
     # speakers from 0.34 to 0.47 (below 0.34 speakers nobody has confirmed start to merge; from 0.48
@@ -72,9 +79,12 @@ PROFILES: dict[str, VoiceProfile] = {
     # 0.40 is the centre of that. On fixed pieces the range ran to 0.60. live_match from 0.35 to 0.55 (replay of Tests #2-#5, tools/live_lab.py), adopt had no effect
     # from 0.25 to 0.40. split_cluster: 0.6 to 0.9 all give the old model's number of pieces within
     # 10%; 0.9 gives the fewest invented speakers (sherpa's value is a distance: higher means fewer).
+    # you_match: above the top of the range that passed on fixed pieces (0.60), so a voice that only
+    # just merges with the user's is never called You; you_lead: wider than final_match's whole 0.13-wide
+    # working range, so of two mic speakers clustering only just kept apart neither is called You.
     "3dspeaker_speech_eres2net_sv_en_voxceleb_16k": VoiceProfile(
         "3dspeaker_speech_eres2net_sv_en_voxceleb_16k", live_match=0.42, live_adopt=0.30, final_match=0.40,
-        fold_min=0.40, tag_gate=0.40, split_cluster=0.9),
+        fold_min=0.40, tag_gate=0.40, split_cluster=0.9, you_min_s=30.0, you_match=0.65, you_lead=0.20),
 }
 
 
