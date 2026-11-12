@@ -10,6 +10,7 @@ Layout (see docs/OUTPUT_SPEC.md):
         marks.jsonl             bookmarks (first bookmark creates it)
         speaker_tags.jsonl      the user's speaker names (first name creates it)
         echo_dropped.jsonl      mic lines dropped as echo (first drop creates it)
+        heartbeat.json          the recorder's "still alive" time, refreshed while recording
         DONE                    empty marker, created last
         audio/                  buffered audio, deleted unless Keep audio is on
 """
@@ -33,6 +34,7 @@ SPEAKERS = "speakers.json"
 MARKS = "marks.jsonl"
 TAGS = "speaker_tags.jsonl"
 ECHO_DROPPED = "echo_dropped.jsonl"
+HEARTBEAT = "heartbeat.json"
 DONE = "DONE"
 AUDIO = "audio"
 
@@ -74,6 +76,15 @@ def write_json_atomic(path: Path, data: dict) -> None:
 def read_json(path: Path) -> dict:
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def write_heartbeat(path: Path, at: datetime) -> None:
+    """Replace heartbeat.json atomically (temp file + rename). No fsync: after a crash the heartbeat is
+    stale whatever it holds, so it is not worth a disk flush every few seconds."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"at": at.isoformat(timespec="milliseconds")}, fh)
+    os.replace(tmp, path)
 
 
 _FOLDER_LOCKS: dict[str, threading.Lock] = {}
@@ -151,6 +162,7 @@ class MeetingFolder:
             **meta,
         }
         write_json_atomic(staging / META, full_meta)
+        write_heartbeat(staging / HEARTBEAT, started)  # status is recording: alive from the first moment
         final = meetings_dir / meeting_id
         os.replace(staging, final)
         return cls(final)
@@ -187,6 +199,10 @@ class MeetingFolder:
     @property
     def echo_dropped_path(self) -> Path:
         return self.path / ECHO_DROPPED
+
+    @property
+    def heartbeat_path(self) -> Path:
+        return self.path / HEARTBEAT
 
     @property
     def tags_path(self) -> Path:
@@ -260,6 +276,10 @@ class MeetingFolder:
             meta["mic_muted_since_ms"] = None if since_ms is None else int(since_ms)
             write_json_atomic(self.meta_path, meta)
             return meta
+
+    def beat(self, at: datetime | None = None) -> None:
+        """Refresh heartbeat.json (see ``heartbeat``)."""
+        write_heartbeat(self.heartbeat_path, at or now_local())
 
     # -- speakers (F9) --------------------------------------------------
     def read_speakers(self) -> dict[str, str]:

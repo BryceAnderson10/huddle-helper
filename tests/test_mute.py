@@ -10,34 +10,7 @@ from huddle_helper.vad import EnergyScorer
 from huddle_helper.writer import read_events
 
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
-from .helpers import make_meeting
-
-CHUNK = SAMPLE_RATE // 10  # 100 ms, like the file capture
-
-
-class ManualCapture:
-    """Stands in for the devices: the test is the capture thread and delivers audio when it says so."""
-
-    realtime = False
-    device_names = {"mic": "test", "system": "test"}
-
-    def __init__(self, on_audio, **_):
-        self.on_audio = on_audio
-
-    def start(self, t0):
-        pass
-
-    def stop(self):
-        pass
-
-    def push(self, mic: np.ndarray, system: np.ndarray) -> None:
-        n = max(len(mic), len(system))
-        mic = np.concatenate([mic, np.zeros(n - len(mic), np.float32)])
-        system = np.concatenate([system, np.zeros(n - len(system), np.float32)])
-        for i in range(0, n, CHUNK):
-            self.on_audio("mic", mic[i:i + CHUNK])
-            self.on_audio("system", system[i:i + CHUNK])
-
+from .helpers import ManualCapture, make_meeting
 
 def start(tmp_path, **kw):
     holder = {}

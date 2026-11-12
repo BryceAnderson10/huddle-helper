@@ -16,6 +16,7 @@ to them (except optionally `speakers.json`, see below).
     speaker_tags.jsonl      # the user's speaker names, append-only; exists only if they named anyone
     marks.jsonl             # bookmarks, append-only; exists only if there was a bookmark
     echo_dropped.jsonl      # mic lines dropped as echo, append-only; exists only if any were dropped
+    heartbeat.json          # recorder's "still alive" time, refreshed every 2 s while recording
     DONE                    # empty marker, created last
     audio\                  # buffered while recording; kept only if Keep audio is on
 ```
@@ -37,6 +38,9 @@ minute with the same name, the second gets a `-2` suffix.
   the user named someone), then the buffered audio is removed (unless kept), then `meta.json`
   is set to `complete`, and `DONE` is created last. Everything the downstream app needs is
   therefore in place when `DONE` appears.
+* **Is it still recording? Ask `meta.json` and `heartbeat.json`, not the transcript.** A meeting
+  is active only while its `status` is `recording` **and** its heartbeat is fresh; see
+  [`heartbeat.json`](#heartbeatjson-is-the-recorder-alive) below.
 
 ## `transcript.jsonl` and `transcript.final.jsonl`
 
@@ -185,6 +189,41 @@ echo dedupe off) has no file. It is never deleted by the after-Stop pass. Nothin
 | `overlap` | The share of the mic line's words found, in order, in the matched lines' words. A line is dropped at 0.6 or more, or at 1.0 when it has two words or fewer. |
 
 Each drop is also written to the app log at INFO level.
+
+## `heartbeat.json` (is the recorder alive?)
+
+Additive to schema 1 (absent in meetings recorded before it). Written into the folder with `meta.json`,
+before the folder appears, then replaced every **2 s** while the meeting records, by a timer of its own:
+it goes on in total silence and while the mic is muted, and while Stop finishes the live transcript. It
+stops once Stop has set `status` to `processing`; a crash stops it too, and then `meta.json` keeps
+`status: "recording"` until the app next starts. The file stays in the folder with its last beat.
+
+```json
+{"at":"2026-11-09T11:42:31.207-06:00"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `at` | Wall-clock time of the last beat, ISO 8601 with milliseconds and UTC offset. |
+
+Replaced atomically (temp file `heartbeat.json.tmp` + rename); ignore the temp file. Compare `at` with your
+own clock (same PC); do not use the file's modification time.
+
+**Telling the three states apart.** Read `status` first, then the heartbeat:
+
+| `status` | Heartbeat | State |
+| --- | --- | --- |
+| `recording` | `at` within **15 s** of now (either way) | **Recording.** The meeting is active, even if nobody has spoken for a long time: a quiet transcript is not a fault. |
+| `recording` | older than 15 s, more than 15 s in the future, missing or unreadable | **Recorder died.** Never treat it as active, however recently it started. The next app start marks it `interrupted` and finishes it. |
+| anything else | ignored | **Not recording.** Stopped (final pass running), done, interrupted or failed. |
+
+15 s is about seven missed beats, so a slow disk or a reader holding the file open for a moment does not trip
+it. On Windows, open the file, read it and close it straight away: while it is open the recorder cannot
+replace it (it tries again at the next beat).
+
+"Recorder died" is what the files show, not a verdict: if the PC sleeps mid-meeting the heartbeat goes stale and
+starts again on wake, with `status` still `recording`. Ask again before acting on a dead recorder; once the app
+has started again the meeting is `interrupted`.
 
 ## `speaker_tags.jsonl` (the user's speaker names)
 
