@@ -466,8 +466,27 @@ microphone (see `GLOSSARY.md`). Mic speech inside a stretch is separated into
   are grouped together, so one person has one final label in every stretch. Names given to
   live `MIC_SPEAKER_nn` lines steer that grouping as they do for meeting audio. The
   progress bar weighs the mic by the length of its stretches, not the whole meeting.
-- The voice model must be loaded (meeting-audio separation on, the default, or shared mic
-  ticked at Start).
+- **The voice model.** Live grouping needs the voice model in memory. It is loaded at
+  start-up only when meeting-audio separation is on (the default); it is never loaded just
+  in case.
+  - *Ticked at Start* without it in memory: it is loaded before recording begins, so the
+    first mic line is already `MIC_SPEAKER_nn`. Whisper is not loaded again.
+  - *Ticked while recording* without it in memory: the stretch opens at the click as
+    usual and the model loads on a thread of its own, so live lines keep coming. The
+    notice bar says "Loading the voice model…" meanwhile. Mic lines transcribed before it
+    is ready are `You` (the live transcript is never rewritten); once it is ready, new mic
+    lines in the stretch get `MIC_SPEAKER_nn`, and `meta.json` `models` names it. The
+    final pass loads what it needs itself, so the whole stretch, including the lines shown
+    live as `You`, is separated in the final transcript. A loaded model is kept for later
+    meetings. Ticking again while it loads does not start a second load.
+  - *The load fails:* the notice bar says so (amber, with the reason) for the rest of the
+    recording, the stretch is kept, live transcription goes on and mic lines stay `You`;
+    the final pass still tries to separate the stretch. It is not retried in that meeting.
+  - *Not downloaded:* "Several people on my mic" is disabled, in the Start dialog and in
+    the Transcript window, with a tooltip saying the voice model is not downloaded and how
+    to get it (restart Huddle Helper while online, or `huddle-helper download-models`).
+    Nothing is downloaded during a meeting; Huddle Helper checks at start-up and when a
+    recording starts.
 
 ## Export (`.txt` and `.md`)
 

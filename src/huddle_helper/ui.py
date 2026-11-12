@@ -65,7 +65,8 @@ class _TermsBox:
 
 class StartDialog:
     def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str], bool, bool], None],
-                 plan: PlanFn | None = None, settings_terms: list[str] | None = None):
+                 plan: PlanFn | None = None, settings_terms: list[str] | None = None,
+                 voice_model_installed: bool = True):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Start recording")
         self.win.resizable(False, False)
@@ -106,8 +107,13 @@ class StartDialog:
                   wraplength=330, foreground="#555").grid(row=12, column=0, columnspan=2, sticky="w", padx=(22, 0))
         # Shared mic: like Start muted, chosen per meeting and clear every time.
         self.shared_mic = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frm, text="Several people on my mic", variable=self.shared_mic).grid(
-            row=13, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.shared_chk = ttk.Checkbutton(frm, text="Several people on my mic", variable=self.shared_mic)
+        self.shared_chk.grid(row=13, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        if not voice_model_installed:  # #55: nothing is downloaded for a meeting; the tooltip says how to get it
+            from .gui.window import Tip
+
+            self.shared_chk.state(["disabled"])
+            self.shared_tip = Tip(self.shared_chk, models.VOICE_MODEL_MISSING)
         ttk.Label(frm, text="For people in the room with you: your mic's speech is split into speakers "
                             "instead of all being You.",
                   wraplength=330, foreground="#555").grid(row=14, column=0, columnspan=2, sticky="w", padx=(22, 0))

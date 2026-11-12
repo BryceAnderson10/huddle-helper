@@ -176,7 +176,8 @@ def test_controller_passes_shared_mic_and_loads_the_voice_model(tmp_path, monkey
     ctl = app.AppController(overrides={"meetings_dir": str(tmp_path), "diarize_system": False})
     loads = []
     monkeypatch.setattr(app, "load_components",
-                        lambda s, shared_mic=False: loads.append(shared_mic) or Components(transcriber=None))
+                        lambda s, shared_mic=False: loads.append(shared_mic)
+                        or Components(transcriber=None, embedder=ToneEmbedder() if shared_mic else None))
     ctl.state.phase = "ready"
     ctl.start("t", [], [], False, True)  # the Start dialog's positional call
     for _ in range(200):

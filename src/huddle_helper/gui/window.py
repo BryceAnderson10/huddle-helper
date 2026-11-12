@@ -758,6 +758,9 @@ class MainWindow:
             if self.shared_var.get() != v.checked:
                 self.shared_var.set(v.checked)
             self.shared_tip.text = v.tooltip
+            want = ["!disabled"] if v.enabled else ["disabled"]
+            if self.shared_chk.instate(["disabled"]) == v.enabled:
+                self.shared_chk.state(want)
             if not self._shared_shown:
                 self.shared_chk.pack(side="right")
                 self._shared_shown = True

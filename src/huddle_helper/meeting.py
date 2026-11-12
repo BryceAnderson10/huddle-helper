@@ -263,6 +263,15 @@ class MeetingFolder:
             write_json_atomic(self.meta_path, meta)
             return meta
 
+    def update_meta_models(self, **changes) -> dict:
+        """Add entries to ``meta["models"]`` (a model loaded part-way through the meeting) in one locked
+        read-modify-write."""
+        with self._lock:
+            meta = self.read_meta()
+            meta["models"] = {**(meta.get("models") or {}), **changes}
+            write_json_atomic(self.meta_path, meta)
+            return meta
+
     def set_shared_mic(self, stretches: list) -> dict:
         """Write the meeting's shared mic stretches and ``settings.diarize_mic`` (true when there is at
         least one), in one locked read-modify-write."""

@@ -54,6 +54,9 @@ class AppState:
     message: str = ""
     last_meeting: str | None = None
     hotkey_problems: list[str] = field(default_factory=list)  # "Ctrl+Alt+B (Bookmark): already in use ..."
+    # The voice model is on disk (#55): without it "Several people on my mic" is disabled, in the Start dialog
+    # and the Transcript window. Checked at start-up and when a recording starts; never downloaded mid-meeting.
+    voice_model_installed: bool = True
 
 
 # -- after-Stop time estimate (pure) --------------------------------------
@@ -209,6 +212,7 @@ class AppController:
             for meeting_id in housekeeping.recover(meetings_dir, None, skip=self._live_ids):
                 self._enqueue(mt.MeetingFolder(meetings_dir / meeting_id))
             self.purge()
+            self._check_voice_model()
             self._get_components()
             self._set(phase="ready", message="")
         except Exception as exc:  # noqa: BLE001
@@ -235,15 +239,31 @@ class AppController:
                 log.exception("Could not install the final-transcript model %s", s.final_model)
                 self._notify(f"Could not download the {s.final_model} model. Final transcripts will use the live text.")
 
+    def voice_model_installed(self) -> bool:
+        """For the Start dialog: is the voice model on disk now (``state.voice_model_installed`` follows)."""
+        return self._check_voice_model()
+
+    def _check_voice_model(self) -> bool:
+        installed = models.diarization_installed()
+        if installed != self.state.voice_model_installed:
+            self._set(voice_model_installed=installed)
+        return installed
+
     def _get_components(self, shared_mic: bool = False) -> Components:
         """The loaded models. ``shared_mic``: the meeting about to start needs the voice model even when
-        meeting-audio separation is off; components that already hold it are reused."""
+        meeting-audio separation is off; components that already hold it (also one loaded part-way through
+        an earlier meeting) are reused."""
         s = self.settings
         voice = s.needs_diarization or shared_mic
         key = (s.whisper_model, s.beam_size, s.cpu_threads, voice)
         with self._lock:
             have = self._components_key
-            if self._components is None or have is None or have[:3] != key[:3] or (voice and not have[3]):
+            comps = self._components
+            # Components without the voice model but with its loader are kept: Recorder.start loads the model
+            # into them before recording begins, without loading Whisper again.
+            no_voice = voice and getattr(comps, "embedder", None) is None \
+                and getattr(comps, "embedder_loader", None) is None
+            if comps is None or have is None or have[:3] != key[:3] or no_voice:
                 log.info("Loading models for %s", key)
                 self._components = load_components(s, shared_mic=shared_mic)
                 self._components_key = key
@@ -396,6 +416,7 @@ class AppController:
 
         def run():
             try:
+                self._check_voice_model()  # the window's box follows it during this meeting
                 comps = self._get_components(shared_mic) if shared_mic else self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m),
