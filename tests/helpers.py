@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 from huddle_helper import meeting as mt
+from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.segments import Segment
 from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event
 
@@ -80,3 +83,30 @@ def play_stub(**over) -> dict:
     }
     stub.update(over)
     return stub
+
+
+CHUNK = SAMPLE_RATE // 10  # 100 ms, like the file capture
+
+
+class ManualCapture:
+    """Stands in for the devices: the test is the capture thread and delivers audio when it says so."""
+
+    realtime = False
+    device_names = {"mic": "test", "system": "test"}
+
+    def __init__(self, on_audio, **_):
+        self.on_audio = on_audio
+
+    def start(self, t0):
+        pass
+
+    def stop(self):
+        pass
+
+    def push(self, mic: np.ndarray, system: np.ndarray) -> None:
+        n = max(len(mic), len(system))
+        mic = np.concatenate([mic, np.zeros(n - len(mic), np.float32)])
+        system = np.concatenate([system, np.zeros(n - len(system), np.float32)])
+        for i in range(0, n, CHUNK):
+            self.on_audio("mic", mic[i:i + CHUNK])
+            self.on_audio("system", system[i:i + CHUNK])

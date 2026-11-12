@@ -30,7 +30,7 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from . import attendees as attendees_mod, marks as marks_mod, meeting as mt, mute_reminder, playback, vocab
+from . import attendees as attendees_mod, heartbeat, marks as marks_mod, meeting as mt, mute_reminder, playback, vocab
 from .audio import SAMPLE_RATE
 from .audio.buffer import FlacBuffer
 from .audio.gate import MicGate
@@ -143,8 +143,11 @@ class Recorder:
                  on_error: Callable[[str], None] | None = None,
                  before_reopen: Callable[[], None] | None = None,
                  on_mute_reminder: Callable[[float], None] | None = None,
-                 mute_reminder_s: float = mute_reminder.INTERVAL_S):
+                 mute_reminder_s: float = mute_reminder.INTERVAL_S,
+                 heartbeat_s: float = heartbeat.INTERVAL_S):
         self.settings = settings
+        self._heartbeat_s = heartbeat_s
+        self._heartbeat: heartbeat.Heartbeat | None = None
         self.c = components
         self._on_status = on_status or (lambda s: None)
         self._on_error = on_error or (lambda msg: None)
@@ -258,6 +261,19 @@ class Recorder:
         if names:  # additive (L13): absent when none were entered
             meta["attendees"] = names
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
+        # Beats from here on, through the start-up; a start that fails stops it, so no thread is left
+        # beating for a meeting that never ran.
+        self._heartbeat = heartbeat.Heartbeat(self.folder, self._heartbeat_s)
+        self._heartbeat.start()
+        try:
+            return self._begin(started, start_muted)
+        except BaseException:
+            self._heartbeat.stop()
+            self._heartbeat = None
+            raise
+
+    def _begin(self, started, start_muted: bool) -> mt.MeetingFolder:
+        s = self.settings
         self._writer = JsonlWriter(self.folder.live_path)
         self.gate = MicGate(muted=start_muted)
         self.marklog = marks_mod.MarkLog(self.folder)
@@ -321,9 +337,21 @@ class Recorder:
         return self.folder
 
     def stop(self) -> mt.MeetingFolder:
-        """Stop capture and drain the backlog; the live file is complete on return."""
+        """Stop capture and drain the backlog; the live file is complete on return.
+
+        The heartbeat goes on while the backlog drains (``meta.json`` still says ``recording``) and
+        stops once it says ``processing``, or when stopping fails, so a reader never sees a stopped
+        recorder as alive."""
         if self.status.state != "recording":
             raise RuntimeError("Not recording")
+        try:
+            return self._stop()
+        finally:
+            if self._heartbeat is not None:
+                self._heartbeat.stop()
+                self._heartbeat = None
+
+    def _stop(self) -> mt.MeetingFolder:
         self.status.state = "stopping"
         self._publish()
         self._capture.stop()
