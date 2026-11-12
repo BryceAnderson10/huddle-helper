@@ -13,7 +13,8 @@ Which meeting
 
 Which transcript
     ``auto`` (default) the final file once ``DONE`` exists, else the live file; ``live`` or ``final`` on
-    request. ``transcript.kind`` and ``transcript.version`` say which.
+    request. ``transcript.kind`` and ``transcript.version`` say which. A final line also carries
+    ``live_wording``: what the live file said at that time when the words differ (``live_wording.py``).
 
 Which window (all on the meeting clock; lines are chosen by time, never by ``seq``)
     the last ``DEFAULT_LAST_MS`` (default), ``last_s``, ``from_s``/``to_s``, around a bookmark
@@ -35,7 +36,8 @@ from . import attendees as attendees_mod, heartbeat as hb, marks as marks_mod, m
 from .library import DeleteRefused, meeting_folder
 from .playback import bookmark_range
 from .session import MeetingSession
-from .transcript_model import GapRow, LineRow, MarkRow, TranscriptModel, _parse_iso
+from .live_wording import live_wording
+from .transcript_model import GapRow, LineRow, MarkRow, TranscriptModel, _parse_iso, live_overlaps
 from .writer import read_events
 
 DEFAULT_LAST_MS = 3 * 60_000
@@ -303,7 +305,8 @@ def _meeting_answer(folder: mt.MeetingFolder, meta: dict, live: str, selected_as
             "finished": model.ended_at is not None or model.interrupted,
         },
         "window": {**window, "incomplete": bool(reasons), "incomplete_reasons": reasons},
-        "lines": [_line(r, model.final) for r in lines],
+        "lines": [_line(r, model.final) for r in lines] if not model.final
+        else _with_live_wording(folder, lines, warnings),
         "speakers": {
             "conflicts": [c for c in model.conflicts if c.get("speaker") in labels],
             "names_changed_at": _names_changed_at(folder) if model.final else None,
@@ -321,6 +324,19 @@ def _line(r: LineRow, final: bool) -> dict:
     return {"stream": r.source, "start_ms": r.start_ms, "end_ms": r.end_ms, "text": r.text,
             "confidence": r.confidence, "speaker_label": r.label, "speaker_name": r.name,
             "name_from": (FROM_SPEAKERS if final else FROM_TAGS) if r.name else None}
+
+
+def _with_live_wording(folder: mt.MeetingFolder, lines: list[LineRow], warnings: list) -> list[dict]:
+    """Final lines, each with ``live_wording``: the live text overlapping it in time on its stream when
+    the words differ (#44), else ``None``. The live file is only read."""
+    live = TranscriptModel(folder)  # only its lines are used: no names, marks or meta needed
+    if folder.live_path.exists():
+        try:
+            live.apply_transcript(_retry(lambda: read_events(folder.live_path), folder.live_path))
+        except ContextError as exc:
+            warnings.append(exc.as_dict())
+    overlaps = live_overlaps(live.lines, lines)
+    return [{**_line(r, True), "live_wording": live_wording(r, overlaps.get(r.key, []))} for r in lines]
 
 
 def _mark(m: MarkRow, model: TranscriptModel) -> dict:

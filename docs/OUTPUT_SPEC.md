@@ -365,13 +365,13 @@ An answer (made-up data, shortened):
 | `meeting.state` | `recording` (active), `recorder_died` (status `recording` but the heartbeat is stale or missing), or the `meta.json` `status` (`processing`, `complete`, `interrupted`, `failed`). `heartbeat` is `heartbeat.json` compared with the clock of the PC. |
 | `transcript` | `kind` is `final` or `live`. `version` is the final transcript's version (`null` for live, and for final files older than the field); a version different from the one you quoted means the wording or timing may have changed. `lines`, `start_ms` and `reaches_ms` (end of the last complete line) describe the whole transcript, not the window; for live, `reaches_ms` and `finished` say how far it goes. |
 | `window` | The span chosen, in meeting ms. `incomplete` is `true` when audio was lost in it (`lost_audio`: a gap whose reason is not `muted`), when the meeting is still recording past its last written line (`still_recording`: lines arrive 1-2 s late), or when the recorder died before the window's end (`recorder_died`). A muted gap alone does not make a window incomplete. |
-| `lines` | Every line overlapping the window, both streams in time order, text exactly as written (no summaries, no rewriting). `speaker_name` is `null` when nobody named the speaker; `name_from` is `speaker_tags.jsonl` (live: the user's tags), `speakers.json` (final), or `null`. |
+| `lines` | Every line overlapping the window, both streams in time order, text exactly as written (no summaries, no rewriting). `speaker_name` is `null` when nobody named the speaker; `name_from` is `speaker_tags.jsonl` (live: the user's tags), `speakers.json` (final), or `null`. Final answers only: `live_wording` (see "Where live and final disagree"). |
 | `speakers` | `conflicts`: the `speakers.json` conflicts for speakers in the window. `names_changed_at`: from `speakers.json` (final only). |
 | `bookmarks`, `bookmarks_changed_at` | Bookmarks in the window, all events applied, placed by `at_ms`. `type` is normalised (an unknown kind reads as `bookmark`); `type_name` is its display name. `bookmarks_changed_at` is the last `changed_at` in `marks.jsonl`. |
 | `gaps` | Gaps overlapping the window; `deliberate` is `true` for `muted`. A mute still in progress (`mic_muted_since_ms`) is an `open` gap with `end_ms: null`. |
 | `attendees` | `meta.json` `attendees`, labelled: not who attended, not who spoke. |
 | `error` | Only when `ok` is `false`: `{"code", "message", "file"?}`. Codes: `unreadable` (a file could not be read; `file` names it), `not_found`, `no_meetings`, `final_not_ready`, `bookmark_not_found`, `bad_request`. |
-| `warnings` | Files that could not be read but did not stop the answer: the `meta.json` of a meeting older than the one chosen (one that may be newer is the error `unreadable`), or this meeting's `marks.jsonl`, `speaker_tags.jsonl` or `speakers.json`. |
+| `warnings` | Files that could not be read but did not stop the answer: the `meta.json` of a meeting older than the one chosen (one that may be newer is the error `unreadable`), or this meeting's `marks.jsonl`, `speaker_tags.jsonl` or `speakers.json`, or (final answers) its `transcript.jsonl`. |
 
 **Following a growing meeting.** Run the command again; every answer is a fresh read. A half-written last
 line is left out until its newline arrives. When `transcript.kind` turns from `live` to `final`, or
@@ -390,6 +390,34 @@ bookmark points into whichever file was shown when it was made).
 * Speaker names are display labels the user (or a downstream app) gave a speaker label. They are not
   confirmed identities, and not recipients to send anything to.
 * Attendees are the names typed at Start. They do not say who was on the call or who spoke.
+
+**Where live and final disagree.** When the answer is the final transcript, every line has `live_wording`:
+`null` when the live transcript said the same words there (case and punctuation aside) or had no line at
+that time on that stream, else what the live transcript said instead (made-up data):
+
+```json
+{"stream": "system", "start_ms": 10000, "end_ms": 13000, "text": "We shipped 32 items today.",
+ "confidence": 0.71, "speaker_label": "SPEAKER_01", "speaker_name": null, "name_from": null,
+ "live_wording": {"text": "We shipped our two items today.", "start_ms": 10000, "end_ms": 13000,
+                  "flags": ["number"]}}
+```
+
+* Live lines are matched to the final line by time on the same stream (they overlap it), never by `seq`.
+  `text` is the live words that line up with this final line; `start_ms`/`end_ms` span the live line(s)
+  they come from. Live words at this line's start or end that nothing here stands in for, and whose estimated
+  time (a live line's words spread evenly over it) falls outside this line, are left to the neighbouring
+  final line.
+* `flags` say what kind of words differ, on either side, in this order (empty when none applies):
+  `number` (digits or number words: "two", "hundred", "half"), `negation` ("not", "no", "never", "can't"…),
+  `name` (a capitalised word that does not start a sentence: a name, product or team, or just a different
+  word), `date_time` (days, months, "tomorrow", "morning", clock times such as 3:15, ordinals such as 15th).
+  They are coarse word lists, not understanding.
+* It is a hint, not a verdict: it never says which wording is right. Either may be wrong, and the final
+  line is still the transcript's text. Neither file is changed.
+* A low `confidence` cutoff alone does not find these: a final line that changed a number can have middling
+  confidence. Check `live_wording` for lines whose numbers, negations, names or dates matter.
+* Live answers have no `live_wording`. If the live file cannot be read, every `live_wording` is `null` and
+  `warnings` names the file.
 
 **Vocabulary.** The user adds terms that help speech recognition in Settings → Vocabulary, and for one
 meeting in the Start dialog ("Extra terms for this meeting"). `meta.json` `vocabulary` shows the terms a

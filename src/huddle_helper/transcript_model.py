@@ -193,22 +193,18 @@ def _sort_key(row: Row) -> tuple:
 reduce_marks = marks_mod.reduce  # the reducer lives in marks.py; kept under its old name
 
 
-def changed_after_swap(live: Iterable[LineRow], final: Iterable[LineRow]) -> set[tuple[str, int]]:
-    """Keys of final lines whose speaker differs from the person the live file had there (L3).
-
-    Final labels are renumbered, so labels are not compared directly. Each live label is matched
-    to the final label it overlaps most (total ms, same stream); a final line is "changed" when its
-    label is not the one its dominant live line (largest overlap) maps to.
-    """
+def live_overlaps(live: Iterable[LineRow], final: Iterable[LineRow]
+                  ) -> dict[tuple[str, int], list[tuple[LineRow, int]]]:
+    """For each final line's ``key``, the live lines on the same stream that overlap it in time, as
+    ``(live line, overlap ms)`` in time order (empty when none does). Matched by time, never by ``seq``.
+    Used for the speaker swap (L3) and for the live wording of the context command (#44)."""
     live_by_src: dict[str, list[LineRow]] = {}
     for line in live:
         live_by_src.setdefault(line.source, []).append(line)
     for lines in live_by_src.values():
         lines.sort(key=lambda r: (r.start_ms, r.end_ms))
 
-    totals: Counter = Counter()  # (source, live label, final label) -> overlap ms
-    dominant: dict[tuple[str, int], str | None] = {}
-    final = list(final)
+    out: dict[tuple[str, int], list[tuple[LineRow, int]]] = {}
     lo: dict[str, int] = {}
     for f in sorted(final, key=lambda r: (r.start_ms, r.end_ms)):
         lines = live_by_src.get(f.source, [])
@@ -216,15 +212,33 @@ def changed_after_swap(live: Iterable[LineRow], final: Iterable[LineRow]) -> set
         while i < len(lines) and lines[i].end_ms <= f.start_ms:
             i += 1
         lo[f.source] = i
-        best_ov, best = 0, None
+        found = out[f.key] = []
         j = i
         while j < len(lines) and lines[j].start_ms < f.end_ms:
             ov = min(lines[j].end_ms, f.end_ms) - max(lines[j].start_ms, f.start_ms)
             if ov > 0:
-                totals[(f.source, lines[j].label, f.label)] += ov
-                if ov > best_ov:
-                    best_ov, best = ov, lines[j]
+                found.append((lines[j], ov))
             j += 1
+    return out
+
+
+def changed_after_swap(live: Iterable[LineRow], final: Iterable[LineRow]) -> set[tuple[str, int]]:
+    """Keys of final lines whose speaker differs from the person the live file had there (L3).
+
+    Final labels are renumbered, so labels are not compared directly. Each live label is matched
+    to the final label it overlaps most (total ms, same stream); a final line is "changed" when its
+    label is not the one its dominant live line (largest overlap) maps to.
+    """
+    final = list(final)
+    overlaps = live_overlaps(live, final)
+    totals: Counter = Counter()  # (source, live label, final label) -> overlap ms
+    dominant: dict[tuple[str, int], str | None] = {}
+    for f in final:
+        best_ov, best = 0, None
+        for line, ov in overlaps.get(f.key, []):
+            totals[(f.source, line.label, f.label)] += ov
+            if ov > best_ov:
+                best_ov, best = ov, line
         dominant[f.key] = best.label if best is not None else None
 
     mapping: dict[tuple[str, str], str] = {}
