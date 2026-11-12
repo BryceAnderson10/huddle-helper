@@ -13,6 +13,7 @@
 * ``row_clip`` ``row_play_state`` ``voice_sample`` ``speaker_chips`` ``keep_audio_view`` ``copyable``
   click to hear (WP7): what a play control plays and whether it can, "Hear this voice", the speaker
   chips, the Keep this meeting's audio check box
+* ``shared_mic_view`` ``divider_text``  the "Several people on my mic" check box and its dividers
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pathlib import Path
 from .. import diarize, export as export_mod, meeting as mt
 from ..mute_reminder import duration_text
 from .. import marks as marks_mod, playback, playsequence
-from ..transcript_model import GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
+from ..transcript_model import DividerRow, GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
 from . import theme
 
 # -- ops ---------------------------------------------------------------------
@@ -68,6 +69,15 @@ def gap_text(row: GapRow, model: TranscriptModel) -> str:
     who = "your mic" if row.source == "mic" else "the call"
     why = f"; {row.reason}" if row.reason else ""
     return f"— No audio from {who} {span}{why} —"
+
+
+SHARED_ON_TEXT = "Separating speakers on your mic from here"
+SHARED_OFF_TEXT = "Mic is just you from here"
+
+
+def divider_text(row: DividerRow) -> str:
+    """The thin divider at a shared mic toggle."""
+    return SHARED_ON_TEXT if row.on else SHARED_OFF_TEXT
 
 
 def mark_text(row: MarkRow, model: TranscriptModel) -> str:
@@ -278,8 +288,8 @@ class MuteBarView:
 
 
 def _in_room(model: TranscriptModel) -> bool:
-    """The meeting has a shared mic stretch: muting the mic mutes everyone on it."""
-    return mt.has_shared_mic(model.meta)
+    """A shared mic stretch is open now: muting the mic mutes everyone on it."""
+    return mt.shared_mic_open(model.meta)
 
 
 REMIND_HIGHLIGHT_S = 60.0
@@ -650,6 +660,27 @@ def keep_audio_view(meeting_id: str, model: TranscriptModel, state) -> KeepAudio
            if checked else
            "Off: the audio is deleted when the final transcript is ready. Tick this to keep it for this meeting.")
     return KeepAudioView(True, checked, tooltip=tip)
+
+
+@dataclass(frozen=True)
+class SharedMicView:
+    visible: bool
+    checked: bool = False
+    text: str = "Several people on my mic"
+    tooltip: str = ""
+
+
+def shared_mic_view(meeting_id: str, model: TranscriptModel, state) -> SharedMicView:
+    """The header's shared mic check box: only while the displayed meeting is recording (not while
+    stopping or processing). Ticked while a shared mic stretch is open, including one from the Start dialog."""
+    if meeting_phase(meeting_id, model, state) != RECORDING:
+        return SharedMicView(False)
+    checked = mt.shared_mic_open(model.meta)
+    tip = ("Your mic's speech is split into speakers from here. Untick when it is just you again."
+           if checked else
+           "Tick when people in the room with you speak into your mic: their speech is split into "
+           "speakers from here instead of all being You.")
+    return SharedMicView(True, checked, tooltip=tip)
 
 
 COPY_GLYPHS = "▶■"

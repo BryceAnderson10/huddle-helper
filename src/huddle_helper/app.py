@@ -276,6 +276,16 @@ class AppController:
         self._on_change()
         return now
 
+    def set_shared_mic(self, on: bool) -> bool:
+        """"Several people on my mic" in the Transcript window: open (or close) a shared mic stretch now.
+        False when nothing is recording."""
+        rec = self._recorder
+        if rec is None or not self.is_recording:
+            return False
+        now = rec.set_shared_mic(on)
+        self._on_change()
+        return now
+
     def toggle_mic_muted(self) -> bool:
         return self.set_mic_muted(not self.mic_muted)
 

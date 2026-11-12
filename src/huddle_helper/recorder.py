@@ -162,6 +162,8 @@ class Recorder:
         self._workers: dict[str, _StreamWorker] = {}
         self._clusterers: dict[str, OnlineClusterer] = {}
         self._shared_mic: list[mt.Stretch] = []  # this meeting's shared mic stretches (meta.json "shared_mic")
+        self._shared_lock = threading.Lock()
+        self._mic_line_starts: list[int] = []  # start_ms of every mic line written (Stop drops empty stretches)
         self._writer: JsonlWriter | None = None
         self._merger: SegmentMerger | None = None
         self._capture = None
@@ -268,7 +270,9 @@ class Recorder:
         if names:  # additive (L13): absent when none were entered
             meta["attendees"] = names
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
-        self._shared_mic = mt.shared_mic_stretches(meta)
+        with self._shared_lock:
+            self._shared_mic = mt.shared_mic_stretches(meta)
+            self._mic_line_starts = []
         # Beats from here on, through the start-up; a start that fails stops it, so no thread is left
         # beating for a meeting that never ran.
         self._heartbeat = heartbeat.Heartbeat(self.folder, self._heartbeat_s)
@@ -303,8 +307,7 @@ class Recorder:
             self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, voice.live_match, s.live_min_new_speaker_s,
                                                          adopt_threshold=voice.live_adopt)
         if self._shared_mic:
-            self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, voice.live_match, s.live_min_new_speaker_s,
-                                                      adopt_threshold=voice.live_adopt)
+            self._mic_clusterer()
 
         capture_factory = self.c.capture_factory
         if capture_factory is None:
@@ -384,9 +387,14 @@ class Recorder:
         self._writer.close()
         # The meeting's end on the meeting clock: the audio's length (a file-fed run is faster than real time)
         end_ms = max([stopped_ms] + [w.samples * 1000 // SAMPLE_RATE for w in self._workers.values()])
+        # An open stretch ends with the meeting; a stretch in which no mic line started is dropped.
+        with self._shared_lock:
+            self._shared_mic = mt.stretches_with_lines(mt.close_stretches(self._shared_mic, end_ms),
+                                                       self._mic_line_starts)
+            shared = [list(st) for st in self._shared_mic]
+        self.folder.set_shared_mic(shared)
         self.folder.update_meta(
             status=mt.STATUS_PROCESSING, ended_at=mt.iso(ended), clean_exit=True, segments=count,
-            shared_mic=mt.close_stretches(self._shared_mic, end_ms),
             echo_segments_dropped=self._merger.dropped_echo,
             playbacks=self.playbacks.count, playback_segments_dropped=self.playbacks.dropped,
             duration_s=round(time.perf_counter() - self._t0, 1),
@@ -400,6 +408,55 @@ class Recorder:
         self._publish()
         log.info("Recording stopped: %s (%d segments)", folder.path, count)
         return folder
+
+    # -- shared mic -------------------------------------------------------------------------
+    def _mic_clusterer(self) -> OnlineClusterer:
+        """The mic's live speaker grouping, made at the first stretch and kept until Stop, so a voice keeps
+        its ``MIC_SPEAKER_nn`` label from one stretch to the next."""
+        c = self._clusterers.get("mic")
+        if c is None:
+            s = self.settings
+            voice = s.voice_profile()
+            c = self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, voice.live_match, s.live_min_new_speaker_s,
+                                                          adopt_threshold=voice.live_adopt)
+        return c
+
+    @property
+    def shared_mic(self) -> bool:
+        """A shared mic stretch is open now."""
+        with self._shared_lock:
+            return bool(self._shared_mic) and self._shared_mic[-1][1] is None
+
+    @property
+    def shared_mic_stretches(self) -> list[mt.Stretch]:
+        with self._shared_lock:
+            return [list(st) for st in self._shared_mic]
+
+    def set_shared_mic(self, on: bool, at_ms: int | None = None) -> bool:
+        """Open a shared mic stretch at the meeting clock (``on``) or close the open one. Mic lines that
+        start from then on follow the new mode; lines already written keep their labels. ``at_ms``
+        overrides the clock (tests). Returns whether a stretch is open afterwards."""
+        if self.status.state != "recording" or self.folder is None:
+            return self.shared_mic
+        with self._shared_lock:
+            is_open = bool(self._shared_mic) and self._shared_mic[-1][1] is None
+            if bool(on) == is_open:
+                return is_open
+            now = max(0, int(self.now_ms() or 0) if at_ms is None else int(at_ms))
+            if on:
+                self._mic_clusterer()
+                self._shared_mic.append([now, None])
+            else:
+                last = self._shared_mic[-1]
+                last[1] = max(now, last[0])
+            shared = [list(st) for st in self._shared_mic]
+        self.folder.set_shared_mic(shared)
+        self._publish()
+        return bool(on)
+
+    def _in_shared_mic(self, at_ms: int) -> bool:
+        with self._shared_lock:
+            return mt.in_stretch(self._shared_mic, at_ms)
 
     # -- click to hear (WP7) ---------------------------------------------------------------
     def _before_reopen(self) -> None:
@@ -589,6 +646,9 @@ class Recorder:
         with self._seq_lock:
             self._seq += 1
             self._writer.write(seg.to_event(self._seq))
+            if seg.source == "mic":
+                with self._shared_lock:
+                    self._mic_line_starts.append(seg.start_ms)
             wall = self._utt_end_wall.pop((seg.source, seg.start_ms), None)
             if wall is not None and getattr(self._capture, "realtime", True):
                 self.latencies_ms.append(int((time.perf_counter() - wall) * 1000))
@@ -601,12 +661,17 @@ class Recorder:
             log.exception("Could not record the dropped mic line at %d ms", seg.start_ms)
 
     # -- workers --------------------------------------------------------
-    def _speaker(self, utt: Utterance, words: list[Word] | None = None) -> str:
+    def _speaker(self, utt: Utterance, words: list[Word] | None = None, start_ms: int | None = None) -> str:
         """Provisional speaker label. ``words`` (with timings) give the speech span for the clusterer.
+
+        A mic line belongs to the mode in force when it started (``start_ms``, the line's start): inside
+        a shared mic stretch it is grouped into ``MIC_SPEAKER_nn``, outside it is ``You``.
 
         Test #3: a 1.6 s line measured as 2.1 s with its VAD padding and trailing silence, which
         was enough to found a speaker. Without word timings the utterance's duration is used.
         """
+        if utt.source == "mic" and not self._in_shared_mic(utt.start_ms if start_ms is None else start_ms):
+            return YOU
         clusterer = self._clusterers.get(utt.source)
         if clusterer is None:
             return YOU if utt.source == "mic" else REMOTE
@@ -645,7 +710,7 @@ class Recorder:
                         log.info("Dropped a played clip heard again at %d ms", start_ms)
                         continue
                     seg = Segment(utt.source, start_ms, end_ms, result.text, result.confidence,
-                                  self._speaker(utt, words), words)
+                                  self._speaker(utt, words, start_ms), words)
                     append_words(self.folder.words_path, seg)
                     self._utt_end_wall[(seg.source, seg.start_ms)] = self._wall_for(utt.end)
                     self._merger.add(seg)

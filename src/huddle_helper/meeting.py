@@ -263,6 +263,16 @@ class MeetingFolder:
             write_json_atomic(self.meta_path, meta)
             return meta
 
+    def set_shared_mic(self, stretches: list) -> dict:
+        """Write the meeting's shared mic stretches and ``settings.diarize_mic`` (true when there is at
+        least one), in one locked read-modify-write."""
+        with self._lock:
+            meta = self.read_meta()
+            meta["shared_mic"] = [list(s) for s in stretches]
+            meta["settings"] = {**(meta.get("settings") or {}), "diarize_mic": bool(stretches)}
+            write_json_atomic(self.meta_path, meta)
+            return meta
+
     def drop_meta(self, *keys: str) -> dict:
         """Remove keys from meta.json (e.g. ``error`` when a failed final pass is retried)."""
         with self._lock:
@@ -393,6 +403,22 @@ def has_shared_mic(meta: dict) -> bool:
 def close_stretches(stretches: list[Stretch], end_ms: int) -> list[Stretch]:
     """``stretches`` with an open end set to ``end_ms`` (Stop closes them at the meeting's end)."""
     return [[a, end_ms if b is None else b] for a, b in stretches]
+
+
+def shared_mic_open(meta: dict) -> bool:
+    """A shared mic stretch is open now (its end is ``null``): "Several people on my mic" is ticked."""
+    stretches = shared_mic_stretches(meta)
+    return bool(stretches) and stretches[-1][1] is None
+
+
+def in_stretch(stretches: list[Stretch], at_ms: int) -> bool:
+    """``at_ms`` lies inside a stretch: from its start (included) to its end (excluded, or open)."""
+    return any(a <= at_ms and (b is None or at_ms < b) for a, b in stretches)
+
+
+def stretches_with_lines(stretches: list[Stretch], mic_starts: list[int]) -> list[Stretch]:
+    """The stretches in which at least one mic line started (Stop drops the others)."""
+    return [s for s in stretches if any(in_stretch([s], t) for t in mic_starts)]
 
 
 def iter_meetings(meetings_dir: Path):
