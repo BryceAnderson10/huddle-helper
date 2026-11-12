@@ -58,7 +58,8 @@ def test_latest_finished_meeting_gives_the_last_three_minutes_of_the_final_trans
     assert texts(ans) == ["Final late mic.", "Final later."]
     first = ans["lines"][0]
     assert first == {"stream": "mic", "start_ms": 8 * MIN, "end_ms": 8 * MIN + 1500, "text": "Final late mic.",
-                     "confidence": 0.8, "speaker_label": "You", "speaker_name": None, "name_from": None}
+                     "confidence": 0.8, "speaker_label": "You", "speaker_name": None, "name_from": None,
+                     "live_wording": None}  # #44: the live file had no mic line then
     assert "generated_at" in ans
 
 
