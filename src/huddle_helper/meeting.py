@@ -364,6 +364,37 @@ class MeetingFolder:
         self.done_path.touch()
 
 
+Stretch = list  # [start_ms, end_ms | None] on the meeting clock; None while the stretch is still open
+
+
+def shared_mic_stretches(meta: dict) -> list[Stretch]:
+    """The meeting's shared mic stretches: where mic speech is separated into ``MIC_SPEAKER_nn``.
+
+    ``meta["shared_mic"]`` when present. A meeting from before that key existed, with
+    ``settings.diarize_mic: true``, had the whole mic shared: one stretch from 0, open."""
+    raw = meta.get("shared_mic")
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            if (isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], (int, float))
+                    and (item[1] is None or isinstance(item[1], (int, float)))):
+                out.append([int(item[0]), None if item[1] is None else int(item[1])])
+        return out
+    if (meta.get("settings") or {}).get("diarize_mic"):
+        return [[0, None]]
+    return []
+
+
+def has_shared_mic(meta: dict) -> bool:
+    """True when the meeting has at least one shared mic stretch."""
+    return bool(shared_mic_stretches(meta))
+
+
+def close_stretches(stretches: list[Stretch], end_ms: int) -> list[Stretch]:
+    """``stretches`` with an open end set to ``end_ms`` (Stop closes them at the meeting's end)."""
+    return [[a, end_ms if b is None else b] for a, b in stretches]
+
+
 def iter_meetings(meetings_dir: Path):
     """Yield MeetingFolder objects for every meeting folder, oldest first."""
     meetings_dir = Path(meetings_dir)

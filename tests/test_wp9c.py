@@ -148,10 +148,45 @@ def test_start_dialog_has_the_box_clear_each_time_and_passes_it(root):
     assert d.start_muted.get() is False
     d.start_muted.set(True)
     d._start()
-    assert got[-1] == ("meeting", [], [], True)
+    assert got[-1] == ("meeting", [], [], True, False)
     d = StartDialog(root, lambda *a: got.append(a))
     assert d.start_muted.get() is False  # not remembered
     d.win.destroy()
+
+
+def test_start_dialog_has_a_clear_shared_mic_box_each_time_and_passes_it(root):
+    from huddle_helper.ui import StartDialog
+
+    got = []
+    d = StartDialog(root, lambda *a: got.append(a))
+    texts = [w.cget("text") for w in d.win.winfo_children()[0].winfo_children() if w.winfo_class() == "TCheckbutton"]
+    assert "Several people on my mic" in texts
+    assert d.shared_mic.get() is False
+    d.shared_mic.set(True)
+    d._start()
+    assert got[-1] == ("meeting", [], [], False, True)
+    d = StartDialog(root, lambda *a: got.append(a))
+    assert d.shared_mic.get() is False  # not remembered
+    d.win.destroy()
+
+
+def test_settings_dialog_has_no_mic_speakers_box(root):
+    from huddle_helper.ui import SettingsDialog
+
+    saved = []
+    dlg = SettingsDialog(root, config.Settings(), {"inputs": [], "outputs": []}, saved.append, None)
+    texts = []
+    stack = [dlg.win]
+    while stack:
+        w = stack.pop()
+        stack.extend(w.winfo_children())
+        if w.winfo_class() == "TCheckbutton":
+            texts.append(w.cget("text"))
+    assert "Separate speakers in meeting audio" in texts
+    assert not any("microphone" in t for t in texts) and not hasattr(dlg, "diar_mic")
+    dlg._save()
+    assert "diarize_mic" not in saved[-1].to_dict()
+    dlg.win.destroy()
 
 
 def test_controller_start_muted_reaches_the_recorder(tmp_path, monkeypatch):
@@ -161,7 +196,7 @@ def test_controller_start_muted_reaches_the_recorder(tmp_path, monkeypatch):
         def __init__(self, *a, **kw):
             seen["init"] = kw
 
-        def start(self, title, terms=(), start_muted=False, attendees=()):
+        def start(self, title, terms=(), start_muted=False, attendees=(), shared_mic=False):
             seen["start_muted"] = start_muted
             return SimpleNamespace(meeting_id="m1")
 

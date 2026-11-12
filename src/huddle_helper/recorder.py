@@ -89,6 +89,7 @@ class _StreamWorker:
         self.lock = threading.RLock()  # re-entered when the segmenter emits an utterance
         self.outstanding: dict[int, tuple[int, int]] = {}  # utterance id -> (start, end) samples
         self.done = False
+        self.samples = 0  # audio received so far: this stream's length on the meeting clock
         self.segmenter = UtteranceSegmenter(
             source, self._on_utterance, scorer=scorer, threshold=settings.vad_threshold,
             min_silence_ms=settings.min_silence_ms, max_utterance_s=settings.max_utterance_s,
@@ -107,6 +108,7 @@ class _StreamWorker:
             if chunk is None:
                 break
             try:
+                self.samples += len(chunk)
                 self.buffer.write(chunk)
                 if self.ring is not None:
                     self.ring.write(chunk)
@@ -159,6 +161,7 @@ class Recorder:
         self._utterances: queue.PriorityQueue = queue.PriorityQueue()
         self._workers: dict[str, _StreamWorker] = {}
         self._clusterers: dict[str, OnlineClusterer] = {}
+        self._shared_mic: list[mt.Stretch] = []  # this meeting's shared mic stretches (meta.json "shared_mic")
         self._writer: JsonlWriter | None = None
         self._merger: SegmentMerger | None = None
         self._capture = None
@@ -230,7 +233,9 @@ class Recorder:
                                     vocabulary_changed_at_ms=list(self._vocab_changed_at_ms))
 
     def start(self, title: str, meeting_terms: Iterable[str] = (), start_muted: bool = False,
-              attendees: Iterable[str] = ()) -> mt.MeetingFolder:
+              attendees: Iterable[str] = (), shared_mic: bool = False) -> mt.MeetingFolder:
+        """Start a meeting. ``shared_mic``: several people speak into the mic from the start, so mic
+        speech is separated into ``MIC_SPEAKER_nn`` (one shared mic stretch from 0)."""
         if self.status.state not in ("idle", "error"):
             raise RuntimeError("Already recording")
         s = self.settings
@@ -250,17 +255,20 @@ class Recorder:
                 **self.c.model_info,
             },
             "settings": {
-                "diarize_system": s.diarize_system, "diarize_mic": s.diarize_mic,
+                # diarize_mic: the meeting has at least one shared mic stretch (kept for older readers)
+                "diarize_system": s.diarize_system, "diarize_mic": bool(shared_mic),
                 "echo_dedupe": s.echo_dedupe, "keep_audio": s.keep_audio,
             },
             "vocabulary": list(self._terms_used),
             "vocabulary_changed_at_ms": [],
             "mic_muted_since_ms": 0 if start_muted else None,
+            "shared_mic": [[0, None]] if shared_mic else [],
         }
         names = attendees_mod.clean_attendees(attendees)
         if names:  # additive (L13): absent when none were entered
             meta["attendees"] = names
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
+        self._shared_mic = mt.shared_mic_stretches(meta)
         # Beats from here on, through the start-up; a start that fails stops it, so no thread is left
         # beating for a meeting that never ran.
         self._heartbeat = heartbeat.Heartbeat(self.folder, self._heartbeat_s)
@@ -294,7 +302,7 @@ class Recorder:
         if s.diarize_system:
             self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, voice.live_match, s.live_min_new_speaker_s,
                                                          adopt_threshold=voice.live_adopt)
-        if s.diarize_mic:
+        if self._shared_mic:
             self._clusterers["mic"] = OnlineClusterer(MIC_PREFIX, voice.live_match, s.live_min_new_speaker_s,
                                                       adopt_threshold=voice.live_adopt)
 
@@ -360,6 +368,7 @@ class Recorder:
         self.status.mic_muted = False
         self._sync_mute()
         ended = mt.now_local()
+        stopped_ms = int((time.perf_counter() - self._t0) * 1000)  # before the backlog drains
         for w in self._workers.values():
             w.inbox.put(None)
         for w in self._workers.values():
@@ -373,8 +382,11 @@ class Recorder:
         count = self._seq
         self._writer.write(meeting_end_event(mt.iso(ended), count))
         self._writer.close()
+        # The meeting's end on the meeting clock: the audio's length (a file-fed run is faster than real time)
+        end_ms = max([stopped_ms] + [w.samples * 1000 // SAMPLE_RATE for w in self._workers.values()])
         self.folder.update_meta(
             status=mt.STATUS_PROCESSING, ended_at=mt.iso(ended), clean_exit=True, segments=count,
+            shared_mic=mt.close_stretches(self._shared_mic, end_ms),
             echo_segments_dropped=self._merger.dropped_echo,
             playbacks=self.playbacks.count, playback_segments_dropped=self.playbacks.dropped,
             duration_s=round(time.perf_counter() - self._t0, 1),
@@ -701,8 +713,10 @@ class Recorder:
             log.exception("Status callback failed")
 
 
-def load_components(settings: Settings, models_root: Path | None = None) -> Components:
-    """Build the real model-backed components (requires installed models)."""
+def load_components(settings: Settings, models_root: Path | None = None,
+                    shared_mic: bool = False) -> Components:
+    """Build the real model-backed components (requires installed models). ``shared_mic``: the voice
+    model is loaded even with meeting-audio separation off, for a meeting with a shared mic."""
     from . import models
     from .transcribe import WhisperTranscriber
 
@@ -710,7 +724,7 @@ def load_components(settings: Settings, models_root: Path | None = None) -> Comp
                                      models_root)
     embedder = None
     info = {}
-    if settings.needs_diarization:
+    if settings.needs_diarization or shared_mic:
         from .diarize import SherpaEmbedder
 
         embedder = SherpaEmbedder(models_root)

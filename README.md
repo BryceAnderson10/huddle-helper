@@ -22,7 +22,9 @@ The product requirements are in [docs/PRD.md](docs/PRD.md).
    microphone icon appears in the tray.
 2. Click it → **Start recording…**, name the meeting, optionally list who is on the call (names
    become numbered one-click choices: press 1-9 in the Transcript window to name the latest new voice,
-   with Undo; a bar asks "Who is this?" when a new voice appears; without names only the voice's chip asks), and start. The icon turns red with a
+   with Undo; a bar asks "Who is this?" when a new voice appears; without names only the voice's chip asks), and start.
+   Tick **Several people on my mic** when others in the room speak into your microphone: that meeting's mic
+   speech is then split into speakers instead of all being You (it is chosen per meeting, clear every time). The icon turns red with a
    dot while recording. Tell participants you're recording; laws vary by place.
 3. **Stop recording** when done. The icon turns amber while speaker labels are refined
    (a few minutes for a long meeting on a laptop CPU), then you get a notification.
@@ -125,7 +127,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `gui/storage_dialog.py` | The Storage panel: disk use, the auto-delete setting, Delete kept audio older than N days with a preview (thin Tk over `storage` and `confirm`) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
 | `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip, which final speakers are "short") as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`, `add_vocabulary_term`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted"; Settings has Vocabulary with file import and export, Hotkeys and Bookmark types; "Add to vocabulary…") |
+| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`, `add_vocabulary_term`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted" and "Several people on my mic"; Settings has Vocabulary with file import and export, Hotkeys and Bookmark types; "Add to vocabulary…") |
 
 ## Status against the PRD milestones
 

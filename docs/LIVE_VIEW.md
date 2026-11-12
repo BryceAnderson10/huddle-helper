@@ -405,9 +405,9 @@ two either way is bad. The system stream (the call) keeps recording.
 - **Speech in progress.** Whatever the user said up to the press is kept: the silence
   ends the utterance through the normal end-of-speech rule and it is transcribed as
   usual. Unmuting starts fresh.
-- **In-room meetings.** With "Separate speakers on my microphone" on, the mic is the
-  whole room, so muting takes everyone in the room out of the recording. The control's
-  tooltip says so in that mode.
+- **Shared mic.** When the meeting was started with "Several people on my mic" (a shared
+  mic), the mic is the whole room, so muting takes everyone in the room out of the
+  recording. The control's tooltip says so for such a meeting.
 - **Can't be missed.** Tray icon: the red recording icon with a crossed-out mic.
   Tooltip: "● Recording 12:41 · your mic is muted". Window header: an amber "You're
   muted in the recording" bar with an Unmute button. The mic level meter shows "muted"
@@ -1003,7 +1003,7 @@ show that the call is active, but who is speaking is only known once the line la
 | Remote speech over a playing clip is dropped with it | Known gap of the drop rule; counted in `meta.json`; fixed by milestone 7. |
 | User forgets they muted and loses part of the meeting | Amber bar, tray icon, tooltip, 10-minute reminders (P1); Stop always unmutes. |
 | User thinks "Mute me" mutes them in the call (or the reverse) | Every label says "in the recording" and the bar says "the call still hears you". |
-| Mute in an in-room meeting mutes the whole room | Tooltip says so when mic speaker separation is on. |
+| Mute with a shared mic mutes the whole room | Tooltip says so for a meeting with a shared mic. |
 | Muted audio could still be played back | Silence replaces the mic samples before the in-memory playback window as well as the buffer and transcription. |
 | **The downstream app reads a muted gap as lost audio** | Until now every `gaps` entry meant a device fault. OUTPUT_SPEC tells readers to check `reason`; `muted` is deliberate. |
 | **The downstream app ignores the new files** | Names and bookmarks never reach summaries. Update its reader alongside milestones 2 and 5, not after. |

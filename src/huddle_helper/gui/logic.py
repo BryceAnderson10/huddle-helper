@@ -278,7 +278,8 @@ class MuteBarView:
 
 
 def _in_room(model: TranscriptModel) -> bool:
-    return bool((model.meta.get("settings") or {}).get("diarize_mic"))
+    """The meeting has a shared mic stretch: muting the mic mutes everyone on it."""
+    return mt.has_shared_mic(model.meta)
 
 
 REMIND_HIGHLIGHT_S = 60.0
@@ -318,7 +319,7 @@ def mute_button_view(meeting_id: str, model: TranscriptModel, state, hotkey: str
     muted = _mic_muted(meeting_id, model, state)
     key = f" [{hotkey}]" if hotkey else ""
     tip = ("Takes your microphone out of this recording only. The call app still hears you."
-           + (" With separate speakers on the mic, everyone in the room is muted." if _in_room(model) else "")
+           + (" With several people on your mic, everyone in the room is muted." if _in_room(model) else "")
            + key)
     return MuteButtonView(True, "Unmute me" if muted else "Mute me in the recording", tip)
 

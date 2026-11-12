@@ -64,7 +64,7 @@ class _TermsBox:
 
 
 class StartDialog:
-    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str], bool], None],
+    def __init__(self, root: tk.Tk, on_start: Callable[[str, list[str], list[str], bool, bool], None],
                  plan: PlanFn | None = None, settings_terms: list[str] | None = None):
         self.win = tk.Toplevel(root)
         self.win.title("Huddle Helper - Start recording")
@@ -104,10 +104,17 @@ class StartDialog:
             row=11, column=0, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Label(frm, text="Only the call is recorded until you unmute. The call app still hears you.",
                   wraplength=330, foreground="#555").grid(row=12, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        # Shared mic: like Start muted, chosen per meeting and clear every time.
+        self.shared_mic = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Several people on my mic", variable=self.shared_mic).grid(
+            row=13, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(frm, text="For people in the room with you: your mic's speech is split into speakers "
+                            "instead of all being You.",
+                  wraplength=330, foreground="#555").grid(row=14, column=0, columnspan=2, sticky="w", padx=(22, 0))
         ttk.Label(frm, text=CONSENT_REMINDER, wraplength=330, foreground="#a33").grid(
-            row=13, column=0, columnspan=2, sticky="w", pady=(8, 12))
-        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=14, column=0, sticky="e", padx=6)
-        ttk.Button(frm, text="Start recording", command=self._start).grid(row=14, column=1, sticky="e")
+            row=15, column=0, columnspan=2, sticky="w", pady=(8, 12))
+        ttk.Button(frm, text="Cancel", command=self.win.destroy).grid(row=16, column=0, sticky="e", padx=6)
+        ttk.Button(frm, text="Start recording", command=self._start).grid(row=16, column=1, sticky="e")
         entry.bind("<Return>", lambda e: self._start())
         self.win.bind("<Escape>", lambda e: self.win.destroy())
         _center(self.win)
@@ -127,8 +134,9 @@ class StartDialog:
         names = self.attendee_names()
         terms = attendees_mod.merge_terms(self.terms.terms(), names, self.names_as_terms.get())
         muted = bool(self.start_muted.get())
+        shared = bool(self.shared_mic.get())
         self.win.destroy()
-        self._on_start(title, terms, names, muted)
+        self._on_start(title, terms, names, muted, shared)
 
 
 HotkeyResultsFn = Callable[[dict[str, str]], "tuple[dict[str, hotkeys.Registration], bool]"]
@@ -380,13 +388,10 @@ class SettingsDialog:
         r += 1
 
         self.diar_sys = tk.BooleanVar(value=settings.diarize_system)
-        self.diar_mic = tk.BooleanVar(value=settings.diarize_mic)
         self.echo = tk.BooleanVar(value=settings.echo_dedupe)
         self.keep = tk.BooleanVar(value=settings.keep_audio)
         self.open_window = tk.BooleanVar(value=settings.open_window_on_start)
         row("", ttk.Checkbutton(frm, text="Separate speakers in meeting audio", variable=self.diar_sys))
-        row("", ttk.Checkbutton(frm, text="Separate speakers on my microphone (in-room meetings)",
-                                variable=self.diar_mic))
         row("", ttk.Checkbutton(frm, text="Drop mic lines that echo the speakers (no headphones)",
                                 variable=self.echo))
         row("", ttk.Checkbutton(frm, text="Keep audio after the final transcript", variable=self.keep))
@@ -481,7 +486,6 @@ class SettingsDialog:
         s.final_transcribe = self.final_on.get()
         s.final_model = self.final_model.get()
         s.diarize_system = self.diar_sys.get()
-        s.diarize_mic = self.diar_mic.get()
         s.echo_dedupe = self.echo.get()
         s.keep_audio = self.keep.get()
         s.open_window_on_start = self.open_window.get()

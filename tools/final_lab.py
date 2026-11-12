@@ -61,7 +61,7 @@ def cmd_embed(args) -> int:
     segments = [Segment.from_event(e) for e in seg_events]
     rec = meta.get("settings", {})
     diarized = {src for src, on in (("system", rec.get("diarize_system", True)),
-                                    ("mic", rec.get("diarize_mic", False))) if on}
+                                    ("mic", mt.has_shared_mic(meta))) if on}
     words = load_words(folder.words_path)
 
     timings: dict[str, float] = {}

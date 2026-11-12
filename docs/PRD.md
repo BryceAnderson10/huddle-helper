@@ -45,7 +45,7 @@ P0 items define v1; P1 items follow once the core pipeline is stable.
 | F2 | Capture system playback (what the meeting plays through speakers or headphones) as its own stream | P0 |
 | F3 | Manual Start / Stop from a tray icon, with a clear recording indicator | P0 |
 | F4 | Transcribe both streams on-device in near real time | P0 |
-| F5 | Label speakers: mic stream is "You" by default; remote speakers are separated by diarization; a setting runs diarization on the mic stream too for in-room meetings | P0 |
+| F5 | Label speakers: mic stream is "You" by default; remote speakers are separated by diarization; when several people share the mic (a **shared mic**, ticked per meeting in the Start dialog as "Several people on my mic"), mic speech is separated into speakers too | P0 |
 | F6 | Append each transcript segment to a JSONL file as soon as it is final, with start and end timestamps | P0 |
 | F7 | One folder per meeting, with a metadata file and a completion marker | P0 |
 | F8 | After Stop, write a refined final transcript with improved speaker labels | P0 |

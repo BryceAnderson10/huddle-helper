@@ -57,18 +57,23 @@ def _settings(args) -> config.Settings:
         s.whisper_model = args.model
     if getattr(args, "keep_audio", False):
         s.keep_audio = True
-    if getattr(args, "diarize_mic", False):
-        s.diarize_mic = True
     if getattr(args, "no_echo_dedupe", False):
         s.echo_dedupe = False
     return s
 
 
-def _ensure_models(s: config.Settings) -> None:
-    missing = models.missing_models(s.whisper_model, s.needs_diarization)
+def _shared_mic(args) -> bool:
+    """``--diarize-mic``: the meeting is a shared mic from the start, as if "Several people on my mic"
+    were ticked at Start."""
+    return bool(getattr(args, "diarize_mic", False))
+
+
+def _ensure_models(s: config.Settings, shared_mic: bool = False) -> None:
+    voice = s.needs_diarization or shared_mic
+    missing = models.missing_models(s.whisper_model, voice)
     if missing:
         print(f"Installing models: {', '.join(missing)} (one-time download)")
-        models.install_all(s.whisper_model, s.needs_diarization, progress=print)
+        models.install_all(s.whisper_model, voice, progress=print)
 
 
 def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> None:
@@ -105,11 +110,13 @@ def cmd_record(args) -> int:
     from .recorder import Recorder, load_components
 
     s = _settings(args)
-    _ensure_models(s)
+    shared = _shared_mic(args)
+    _ensure_models(s, shared)
     go_offline()
     print("Reminder: tell everyone in the meeting that you are recording.")
-    rec = Recorder(s, load_components(s), on_status=_print_status, on_error=lambda m: print(f"\n! {m}"))
-    folder = rec.start(args.title)
+    rec = Recorder(s, load_components(s, shared_mic=shared), on_status=_print_status,
+                   on_error=lambda m: print(f"\n! {m}"))
+    folder = rec.start(args.title, shared_mic=shared)
     print(f"Recording to {folder.path}")
     if args.minutes:
         try:
@@ -134,9 +141,10 @@ def cmd_simulate(args) -> int:
     from .recorder import Recorder, load_components
 
     s = _settings(args)
-    _ensure_models(s)
+    shared = _shared_mic(args)
+    _ensure_models(s, shared)
     go_offline()
-    comps = load_components(s)
+    comps = load_components(s, shared_mic=shared)
     holder = {}
 
     def factory(**kw):
@@ -147,7 +155,7 @@ def cmd_simulate(args) -> int:
     comps.capture_factory = factory
     rec = Recorder(s, comps, on_status=_print_status if args.realtime else None)
     t = time.perf_counter()
-    folder = rec.start(args.title)
+    folder = rec.start(args.title, shared_mic=shared)
     holder["cap"].finished.wait()
     rec.stop()
     took = time.perf_counter() - t
@@ -345,7 +353,8 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--out", help="meetings folder (overrides settings)")
         sp.add_argument("--model", choices=models.WHISPER_MODELS, help="whisper model (overrides settings)")
         sp.add_argument("--keep-audio", action="store_true")
-        sp.add_argument("--diarize-mic", action="store_true")
+        sp.add_argument("--diarize-mic", action="store_true",
+                        help="several people on my mic: shared mic from the start (record, simulate)")
         sp.add_argument("--no-echo-dedupe", action="store_true")
 
     sp = sub.add_parser("tray", help="run the tray app")

@@ -17,7 +17,7 @@ from huddle_helper.writer import read_events
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
 
 
-def run(tmp_path, mic, system, errors=None, transcriber=None, before_stop=None, **settings):
+def run(tmp_path, mic, system, errors=None, transcriber=None, before_stop=None, shared_mic=False, **settings):
     s = config.Settings(meetings_dir=str(tmp_path / "meetings"), **settings)
     holder = {}
 
@@ -28,7 +28,7 @@ def run(tmp_path, mic, system, errors=None, transcriber=None, before_stop=None, 
     comps = Components(transcriber=transcriber or ToneTranscriber(), embedder=ToneEmbedder(),
                        scorer_factory=EnergyScorer, capture_factory=factory)
     rec = Recorder(s, comps, on_error=(errors.append if errors is not None else None))
-    folder = rec.start("Unit Test")
+    folder = rec.start("Unit Test", shared_mic=shared_mic)
     holder["cap"].finished.wait()
     if before_stop is not None:
         before_stop(folder)
@@ -146,10 +146,10 @@ def test_no_echo_dropped_file_without_drops(tmp_path):
     assert not folder.echo_dropped_path.exists()
 
 
-def test_diarize_mic_and_no_system_diarization(tmp_path):
+def test_shared_mic_and_no_system_diarization(tmp_path):
     mic = np.concatenate([silence(0.5), tone(300, 2.0), silence(1), tone(1300, 2.0), silence(1)])
     system = np.concatenate([silence(6.5), tone(900, 1.0), silence(1)])
-    _folder, events = run(tmp_path, mic, system, diarize_mic=True, diarize_system=False)
+    _folder, events = run(tmp_path, mic, system, shared_mic=True, diarize_system=False)
     speakers = [e["speaker"] for e in events if e["type"] == "segment"]
     assert speakers == ["MIC_SPEAKER_01", "MIC_SPEAKER_02", "Remote"]
 

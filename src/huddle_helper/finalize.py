@@ -476,7 +476,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
 
     rec = meta.get("settings", {})
     diarized = {src for src, on in (("system", rec.get("diarize_system", True)),
-                                    ("mic", rec.get("diarize_mic", False))) if on}
+                                    ("mic", mt.has_shared_mic(meta))) if on}
     words = load_words(folder.words_path)
 
     preloaded: dict[str, np.ndarray] = {}

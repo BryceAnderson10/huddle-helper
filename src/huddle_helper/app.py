@@ -202,12 +202,13 @@ class AppController:
 
     def _prepare_models(self) -> None:
         s = self.settings
-        missing = models.missing_models(s.whisper_model, s.needs_diarization)
+        # The voice model is installed even with meeting-audio separation off: a meeting can tick
+        # "Several people on my mic" at Start (shared mic), which needs it.
+        missing = models.missing_models(s.whisper_model, True)
         if missing:
             self._set(phase="downloading", message=f"Downloading models: {', '.join(missing)}")
             self._notify("Downloading speech models (one-time). Recording is available when done.")
-            models.install_all(s.whisper_model, s.needs_diarization,
-                               progress=lambda m: self._set(message=m))
+            models.install_all(s.whisper_model, True, progress=lambda m: self._set(message=m))
             self._notify("Models installed. Huddle Helper is ready.")
         if s.final_transcribe and not models.whisper_installed(s.final_model):
             # The model for the second transcription after Stop. A failure here must not stop
@@ -219,13 +220,17 @@ class AppController:
                 log.exception("Could not install the final-transcript model %s", s.final_model)
                 self._notify(f"Could not download the {s.final_model} model. Final transcripts will use the live text.")
 
-    def _get_components(self) -> Components:
+    def _get_components(self, shared_mic: bool = False) -> Components:
+        """The loaded models. ``shared_mic``: the meeting about to start needs the voice model even when
+        meeting-audio separation is off; components that already hold it are reused."""
         s = self.settings
-        key = (s.whisper_model, s.beam_size, s.cpu_threads, s.needs_diarization)
+        voice = s.needs_diarization or shared_mic
+        key = (s.whisper_model, s.beam_size, s.cpu_threads, voice)
         with self._lock:
-            if self._components is None or self._components_key != key:
+            have = self._components_key
+            if self._components is None or have is None or have[:3] != key[:3] or (voice and not have[3]):
                 log.info("Loading models for %s", key)
-                self._components = load_components(s)
+                self._components = load_components(s, shared_mic=shared_mic)
                 self._components_key = key
             if self._capture_factory is not None:
                 self._components.capture_factory = self._capture_factory
@@ -356,22 +361,24 @@ class AppController:
         return {"action": "none"}
 
     def start(self, title: str, terms: list[str] | tuple[str, ...] = (),
-              attendees: list[str] | tuple[str, ...] = (), start_muted: bool = False) -> None:
-        """Start recording. ``start_muted`` (L24): the mic is out of the recording from the first sample."""
+              attendees: list[str] | tuple[str, ...] = (), start_muted: bool = False,
+              shared_mic: bool = False) -> None:
+        """Start recording. ``start_muted`` (L24): the mic is out of the recording from the first sample.
+        ``shared_mic``: "Several people on my mic" was ticked, so the whole meeting is one shared mic stretch."""
         if not self.can_start:
             return
         self._set(phase="starting", message="Starting…")
 
         def run():
             try:
-                comps = self._get_components()
+                comps = self._get_components(shared_mic) if shared_mic else self._get_components()
                 self._recorder = Recorder(self.settings, comps, on_status=self._on_status,
                                           on_error=lambda m: self._notify(m),
                                           before_reopen=self.player.stop,  # decision 7: nothing open on re-bind
                                           on_mute_reminder=self._mute_reminder,
                                           mute_reminder_s=_reminder_interval())
                 folder = self._recorder.start(title or "meeting", terms, attendees=attendees,
-                                              start_muted=start_muted)
+                                              start_muted=start_muted, shared_mic=shared_mic)
                 self._live_ids.add(folder.meeting_id)
                 self._set(phase="recording", message="", last_meeting=folder.meeting_id)
             except Exception as exc:  # noqa: BLE001
@@ -613,9 +620,8 @@ class AppController:
             try:
                 meta = folder.read_meta()
                 length_s = meeting_length_s(meta)
-                rec_settings = meta.get("settings", {})
-                diarized = [src for src, on in (("mic", rec_settings.get("diarize_mic", False)),
-                                                ("system", rec_settings.get("diarize_system", True))) if on]
+                diarized = [src for src, on in (("mic", mt.has_shared_mic(meta)),
+                                                ("system", meta.get("settings", {}).get("diarize_system", True))) if on]
                 speeds = recent_final_speeds(folder.path.parent, exclude=folder.meeting_id)
             except Exception:  # noqa: BLE001 - the estimate is optional
                 log.exception("Could not prepare the time-left estimate for %s", folder.meeting_id)

@@ -73,7 +73,7 @@ Revisit the cap after WP13: it may no longer be needed.
   default needs a `SETTINGS_VERSION` bump and a `_MIGRATIONS` entry (now at version 4).
 - **The final pass never transcribes.** `finalize_meeting` reads the live segments and
   `audio\words.jsonl`, and reads audio only for the diarized sources (the mic's is not read
-  when `diarize_mic` is off). Final text is the live text, re-split and re-joined.
+  when the meeting has no shared mic). Final text is the live text, re-split and re-joined.
 - **Fingerprints are never stored.** The final pass computes them again from the audio, so a
   meeting recorded with one model can be finished with another. `meta.json` already
   records `diarization_embedding`.

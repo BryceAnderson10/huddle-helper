@@ -72,7 +72,7 @@ Segments are written in `start_ms` order across both streams.
 | `You` | Mic stream when mic diarization is off (the default). |
 | `Remote` | System stream when system diarization is off. |
 | `SPEAKER_01`, `SPEAKER_02`, … | Distinct voices in the system stream. |
-| `MIC_SPEAKER_01`, … | Distinct voices on the mic, when "separate speakers on my microphone" is on (in-room meetings). |
+| `MIC_SPEAKER_01`, … | Distinct voices on the mic inside a shared mic stretch (`meta.json` `shared_mic`: "Several people on my mic" ticked in the Start dialog). |
 
 Labels in `transcript.jsonl` are **provisional**. `transcript.final.jsonl` has the same
 schema with refined labels from a second, more accurate pass over the whole recording;
@@ -117,7 +117,8 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `segments` | Lines in the live file. |
 | `devices` | `{"mic": name, "system": name}` actually captured. |
 | `models` | Speech, VAD and diarization models used. |
-| `settings` | Diarization, echo and Keep audio settings in force for this meeting. `keep_audio` starts as the Keep audio setting and the user can change it for this one meeting while it is recording or processing (Transcript window, "Keep this meeting's audio"); the after-Stop pass reads it just before deleting `audio\`. |
+| `settings` | Diarization, echo and Keep audio settings in force for this meeting. `diarize_mic` is `true` when the meeting has at least one shared mic stretch (see `shared_mic`); it is no longer an app setting. `keep_audio` starts as the Keep audio setting and the user can change it for this one meeting while it is recording or processing (Transcript window, "Keep this meeting's audio"); the after-Stop pass reads it just before deleting `audio\`. |
+| `shared_mic` | Additive. The meeting's shared mic stretches: `[[start_ms, end_ms], ...]` on the meeting clock, stretches where several people speak into the user's microphone. Inside a stretch mic lines are separated into `MIC_SPEAKER_nn`; outside, every mic line is `You`. `end_ms` is `null` while a stretch is still open; Stop closes it at the meeting's end. Ticking "Several people on my mic" in the Start dialog (or `--diarize-mic` on the CLI) records `[[0, null]]`; otherwise it is `[]`. **Absent in older meetings:** read `settings.diarize_mic: true` there as one stretch covering the whole meeting, and `false` as none. |
 | `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio. Silence is inserted so the clock stays aligned. **Readers must check `reason`:** most gaps are lost audio (for example while re-binding after the default device changed), but `"muted"` is deliberate (see below). |
 | `mic_muted_since_ms` | While the user has their mic out of the recording: the meeting time (ms) the mute began, so a live follower knows at once that the silence on `mic` is deliberate. `null` otherwise, and at the end of every meeting. A meeting started with "Start with my mic muted" has `0` from the first moment. |
 | `marks`, `mark_kinds` | `marks`: set at Stop, the number of bookmarks (deleted ones not counted). `mark_kinds`: `{"risk": "Risk"}`, the display names of the user-defined bookmark types this meeting's bookmarks use (`{}` for none; absent while the meeting has not used one). Written as soon as a bookmark of such a type is made (so a live follower can name it) and again at Stop; the name is the one in Settings at the time and is **kept in the meeting**, so removing or renaming the type in Settings later does not change how this meeting reads. Entries are in the user's Settings order. Built-in types never appear here. |
