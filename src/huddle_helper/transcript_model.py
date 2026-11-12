@@ -264,6 +264,7 @@ class TranscriptModel:
         self.meta: dict = {}
         self.meeting_id: str = folder.meeting_id if folder is not None else ""
         self.started_at: str | None = None  # from the transcript's meeting_start, else meta
+        self.transcript_version: str | None = None  # from the final file's meeting_start (None: live, or older)
         self.ended_at: str | None = None
         self.interrupted = False
         self.last_end_ms: int | None = None
@@ -464,6 +465,8 @@ class TranscriptModel:
             elif kind == "meeting_start":
                 self.meeting_id = str(e.get("meeting_id") or self.meeting_id)
                 self.started_at = e.get("started_at") or self.started_at
+                version = e.get("transcript_version")
+                self.transcript_version = str(version) if version else None
             elif kind == "meeting_end":
                 self.ended_at = e.get("ended_at") or self.ended_at
                 self.interrupted = bool(e.get("interrupted"))
@@ -478,6 +481,7 @@ class TranscriptModel:
         self._seqs.clear()
         self._next_seq = 1
         self.ended_at, self.interrupted, self.last_end_ms = None, False, None
+        self.transcript_version = None
         return [Reset()]
 
     def switch_to_final(self, events: list[dict] | None = None, speakers: dict[str, str] | None = None,

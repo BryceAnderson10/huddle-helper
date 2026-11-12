@@ -277,9 +277,11 @@ def line_clip(row) -> Clip:
     return Clip(line_key(row.source, row.start_ms), (row.source,), row.start_ms, row.end_ms, row.text)
 
 
-def bookmark_range(at_ms: int) -> tuple[int, int]:
-    """10 s before a bookmark to 5 s after it."""
-    return max(0, at_ms - BOOKMARK_BEFORE_MS), at_ms + BOOKMARK_AFTER_MS
+def bookmark_range(at_ms: int, before_ms: int = BOOKMARK_BEFORE_MS,
+                   after_ms: int = BOOKMARK_AFTER_MS) -> tuple[int, int]:
+    """The span of the meeting clock around a bookmark, by its ``at_ms`` only (never a line's ``seq``):
+    10 s before to 5 s after it unless told otherwise."""
+    return max(0, at_ms - before_ms), at_ms + after_ms
 
 
 def bookmark_clip(rows: Iterable, mark) -> Clip:

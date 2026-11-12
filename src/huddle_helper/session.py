@@ -44,8 +44,11 @@ def _mtime(path) -> float | None:
 
 
 class MeetingSession:
-    def __init__(self, folder: MeetingFolder):
+    def __init__(self, folder: MeetingFolder, final: bool | None = None):
+        """``final`` None (the window): the final file once ``DONE`` exists, else the live file, swapping
+        when ``DONE`` appears. True or False pins that file and never swaps (``context`` on request)."""
         self.folder = folder
+        self._pinned = final is not None
         self.model = TranscriptModel(folder)
         self._meta_mtime: float | None = None
         self._speakers_mtime: float | None = None
@@ -54,7 +57,7 @@ class MeetingSession:
         self._live = JsonlTail(folder.live_path)
         self._final = JsonlTail(folder.final_path)
         self._read_meta()
-        if folder.is_done and folder.final_path.exists():
+        if final if final is not None else (folder.is_done and folder.final_path.exists()):
             self.model.final = True
             self._read_speakers()
 
@@ -94,7 +97,8 @@ class MeetingSession:
     # -- slow poll ----------------------------------------------------------
     def poll_slow(self) -> SlowPoll:
         out = SlowPoll()
-        if not self.model.final and self.folder.is_done and self.folder.final_path.exists():
+        if (not self._pinned and not self.model.final and self.folder.is_done
+                and self.folder.final_path.exists()):
             self._swap(out)
         self._read_meta(out.ops)
         if self.model.final and not out.swapped:
