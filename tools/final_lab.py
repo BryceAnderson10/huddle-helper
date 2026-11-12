@@ -97,6 +97,12 @@ def cmd_embed(args) -> int:
     arrays: dict[str, np.ndarray] = {}
     info: dict[str, list[dict]] = {}
     for src, pieces in pieces_by_source.items():
+        you = [(line, seg) for line, seg in pieces if outside_stretches(seg, mic_stretches)]
+        if you:  # the user's own voice, the final pass's reference for You inside the stretches (#56)
+            ref_vecs, ref_weights, _ = embed_pieces(you, embed)
+            arrays[f"{src}_you_vecs"] = (np.stack(ref_vecs).astype(np.float32) if ref_vecs
+                                         else np.zeros((0, 0), np.float32))
+            arrays[f"{src}_you_weights"] = np.asarray(ref_weights, dtype=np.float64)
         pieces = [(line, seg) for line, seg in pieces if not outside_stretches(seg, mic_stretches)]  # You
         t0 = time.perf_counter()
         vecs, weights, idx = embed_pieces(pieces, embed)

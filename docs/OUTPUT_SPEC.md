@@ -88,6 +88,18 @@ of a meeting's stretches are grouped together: one voice has one final label in 
 the mic audio inside the stretches is separated (each stretch on its own for the split points), so a
 meeting with no stretch reads no mic audio for that, and a short stretch in a long meeting costs little.
 
+**You inside a shared mic stretch.** Inside a stretch the user is one of the `MIC_SPEAKER_nn`. When the
+meeting also has mic speech outside every stretch (which is the user alone), the final pass compares
+each mic speaker's voice with that speech and relabels the best match `You`, only when all hold: at
+least `you_min_s` seconds of fingerprinted off-stretch speech, a similarity of at least `you_match`
+(well above the cutoff that merges speakers), a lead of at least `you_lead` over the second most alike
+mic speaker, and no name from the user on any of that speaker's lines (a named mic speaker keeps its
+name). Otherwise nothing is relabelled and the user stays a `MIC_SPEAKER_nn` they can name by hand. A
+meeting whose whole mic stream is one stretch has no reference and is left alone. The relabelled lines
+carry the label `You`, so a display name given to `You` in `speakers.json` names them too. The cutoffs
+belong to the voice model (`diarize.PROFILES`); the decision is recorded in `meta.json` `you_match`.
+The live file is never relabelled.
+
 **Transcript version.** Optional, additive. The final file's `meeting_start` line has
 `"transcript_version"`, an opaque string that names this one final transcript, and `meta.json` has the
 same value once the pass ends. Every final pass writes a new one, even if the words come out the same:
@@ -138,6 +150,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `audio_deleted_at` | Optional, additive. ISO 8601 time at which the user deleted the kept `audio\` from the Meetings list (to the Recycle Bin or permanently); `audio_kept` is then `false`. Absent if that never happened. The transcripts, `speakers.json` and `marks.jsonl` are not touched. |
 | `audio_purged_at` | Optional, additive. The same for the automatic purge of kept audio after N days (Settings). |
 | `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`diarize_mic`: the split-point step over the shared mic stretches only, all stretches together; `merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+| `you_match` | Optional, additive; a diagnostic. Present when the final pass separated mic speech inside shared mic stretches: whether it took one of those mic speakers for `You` (see "You inside a shared mic stretch"). `{"matched": bool, "reason": "matched" \| "no_reference" \| "too_little_reference" \| "below_cutoff" \| "no_clear_lead" \| "named" \| "no_mic_speakers" \| "failed", "reference_s": seconds of fingerprinted mic speech outside every stretch, "similarity": the most alike mic speaker (null when not computed), "runner_up": the second (null with one speaker)}`. Similarities are on the voice model's own scale (`diarization_embedding`). |
 | `final_transcriber` | Present only when the kept audio was transcribed a second time after Stop (WP15, off by default): the model's name. The text of a final line may then differ from the live line at the same time; `transcript.jsonl` and `audio\words.jsonl` are never rewritten. `final_stats` then also has `stages.retranscribe` (seconds), `retx_lines_changed` and `retx_lines_kept_live` (lines whose new text was refused as empty, under half or over twice the live line's words); `retx_failed: true` instead when the second transcription failed and the live text was kept. |
 
 ## `marks.jsonl` (bookmarks)

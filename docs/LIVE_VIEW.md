@@ -466,6 +466,16 @@ microphone (see `GLOSSARY.md`). Mic speech inside a stretch is separated into
   are grouped together, so one person has one final label in every stretch. Names given to
   live `MIC_SPEAKER_nn` lines steer that grouping as they do for meeting audio. The
   progress bar weighs the mic by the length of its stretches, not the whole meeting.
+- **You inside a stretch (final pass only).** Inside a stretch the user is one of the
+  `MIC_SPEAKER_nn`. After Stop, when the meeting also has enough mic speech outside every
+  stretch (the user alone), the final pass compares each mic speaker's voice with it and
+  relabels the best match `You`, but only when it is very sure: a very close match that is
+  clearly ahead of the next mic speaker. Otherwise the user stays a `MIC_SPEAKER_nn` they
+  can name by hand; a wrong `You` is worse than an unnamed speaker. A mic speaker the user
+  named keeps the name, a whole-meeting stretch has nothing to compare with and is left
+  alone, and a display name given to `You` applies to the relabelled lines too: the final
+  view shows them as the same person as the user's other lines. The live view never attempts this: live
+  lines keep the label they were written with.
 - **The voice model.** Live grouping needs the voice model in memory. It is loaded at
   start-up only when meeting-audio separation is on (the default); it is never loaded just
   in case.

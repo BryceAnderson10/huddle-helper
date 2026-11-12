@@ -6,7 +6,9 @@ Steps, in the order the output contract requires:
    shared mic stretches, each stretch on its own, and mic pieces that start outside every stretch
    are ``You`` (#54),
 2. label every line or piece by clustering voice fingerprints over the whole
-   meeting, then join sentences that were cut into lines at pauses,
+   meeting (the mic speaker inside the stretches whose voice is very surely the user's, judged against
+   the mic speech outside them, is ``You`` too: #56), then join sentences that were cut into lines at
+   pauses,
 3. write transcript.final.jsonl under a temp name and rename it into place, stamped with a new
    transcript version (its first line, and meta.json at step 5),
 4. delete the buffered audio unless Keep audio is on,
@@ -23,7 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import os
 import shutil
 import time
@@ -227,14 +229,25 @@ def assign_labels(pieces: Pieces, idx: list[int], labels: list[int]) -> None:
         seg.speaker = f"#v{assigned[i]}"
 
 
+@dataclass
+class Voices:
+    """What the clustering of one stream saw: fingerprints, their weights (s), the piece behind each,
+    its cluster, and the user's name for it (None: unnamed)."""
+    vecs: list[np.ndarray]
+    weights: list[float]
+    idx: list[int]
+    labels: list[int]
+    names: list[str | None]
+
+
 def _voice_labels(pieces: Pieces, embed: Embed, voice: VoiceProfile,
                   timings: dict[str, float] | None = None,
                   progress: Callable[[float], None] | None = None,
-                  ranges: list[tags_mod.TaggedRange] | None = None) -> None:
+                  ranges: list[tags_mod.TaggedRange] | None = None) -> Voices | None:
     """Label one stream's pieces by clustering their voices over the whole meeting.
 
     Labels are written to segment.speaker as "#v<cluster>". ``timings`` collects seconds
-    under "embed_pieces" and "cluster".
+    under "embed_pieces" and "cluster". Returns what was clustered (None: no piece had a fingerprint).
     """
     t0 = time.perf_counter()
     try:
@@ -243,14 +256,101 @@ def _voice_labels(pieces: Pieces, embed: Embed, voice: VoiceProfile,
         if timings is not None:
             timings["embed_pieces"] = timings.get("embed_pieces", 0.0) + time.perf_counter() - t0
     if not vecs:
-        return
+        return None
     t0 = time.perf_counter()
     try:
         names = tags_mod.piece_names(pieces, idx, vecs, weights, ranges, voice.tag_gate) if ranges else None
-        assign_labels(pieces, idx, label_voices(vecs, weights, voice.final_match, names, voice.fold_min))
+        labels = label_voices(vecs, weights, voice.final_match, names, voice.fold_min)
+        assign_labels(pieces, idx, labels)
     finally:
         if timings is not None:
             timings["cluster"] = timings.get("cluster", 0.0) + time.perf_counter() - t0
+    return Voices(vecs, weights, idx, labels, names or [None] * len(vecs))
+
+
+# -- You inside a shared mic stretch (#56) ---------------------------------
+def _centroid(vecs: list[np.ndarray], weights: list[float]) -> np.ndarray:
+    v = sum(np.asarray(x, np.float64) * w for x, w in zip(vecs, weights))
+    return v / (np.linalg.norm(v) or 1.0)
+
+
+def you_decision(ref_vecs: list[np.ndarray], ref_weights: list[float], voices: Voices | None,
+                 voice: VoiceProfile, named: set[int] | frozenset[int] = frozenset()) -> dict:
+    """Which mic speaker inside the shared mic stretches is the user, if any, judged against the user's
+    own voice: the fingerprints of the mic speech outside every stretch (``ref_vecs``, weights in s).
+
+    Returns the diagnostic recorded in meta.json (``you_match``): ``matched``, ``reason``, ``reference_s``,
+    ``similarity`` (the most alike mic speaker) and ``runner_up`` (the second; None with one speaker),
+    plus ``cluster`` (the matched cluster) when matched. A speaker is matched only with at least
+    ``voice.you_min_s`` of reference, a similarity of at least ``voice.you_match``, a lead of at least
+    ``voice.you_lead`` over the runner-up, and no name from the user (a piece named in ``voices.names``
+    or a cluster in ``named``); otherwise nothing is relabelled.
+    """
+    ref_s = float(sum(ref_weights))
+    out: dict = {"matched": False, "reason": "", "reference_s": round(ref_s, 1), "similarity": None,
+                 "runner_up": None}
+    if not ref_vecs:
+        out["reason"] = "no_reference"
+        return out
+    if voices is None or not voices.vecs:
+        out["reason"] = "no_mic_speakers"
+        return out
+    ref = _centroid(ref_vecs, ref_weights)
+    members: dict[int, list[int]] = {}
+    for k, lab in enumerate(voices.labels):
+        members.setdefault(lab, []).append(k)
+    sims = sorted(((float(np.dot(ref, _centroid([voices.vecs[k] for k in ks],
+                                                [voices.weights[k] for k in ks]))), lab)
+                   for lab, ks in members.items()), key=lambda t: (-t[0], t[1]))
+    best, cluster = sims[0]
+    runner = sims[1][0] if len(sims) > 1 else None
+    out["similarity"] = round(best, 3)
+    out["runner_up"] = round(runner, 3) if runner is not None else None
+    named = set(named) | {voices.labels[k] for k, n in enumerate(voices.names) if n}
+    if ref_s < voice.you_min_s:
+        out["reason"] = "too_little_reference"
+    elif best < voice.you_match:
+        out["reason"] = "below_cutoff"
+    elif runner is not None and best - runner < voice.you_lead:
+        out["reason"] = "no_clear_lead"
+    elif cluster in named:
+        out["reason"] = "named"
+    else:
+        out.update(matched=True, reason="matched", cluster=cluster)
+    return out
+
+
+def _named_clusters(separated: Pieces, ranges: list[tags_mod.TaggedRange] | None) -> set[int]:
+    """Clusters ("#v<n>") holding a piece that overlaps a mic line the user named, whether or not the
+    name steered the clustering: such a speaker is the user's to name, never relabelled."""
+    mic = [r for r in ranges or () if r.source == "mic"]
+    return {int(seg.speaker[2:]) for _line, seg in separated if seg.speaker.startswith("#v")
+            and any(tags_mod._overlap(seg.start_ms, seg.end_ms, r.start_ms, r.end_ms) for r in mic)}
+
+
+def _recognise_you(reference: Pieces, separated: Pieces, voices: Voices | None, embed: Embed,
+                   voice: VoiceProfile, timings: dict[str, float] | None = None,
+                   progress: Callable[[float], None] | None = None,
+                   ranges: list[tags_mod.TaggedRange] | None = None) -> dict:
+    """Fingerprint the off-stretch mic pieces, decide (``you_decision``) and relabel the matched mic
+    speaker's pieces ``You``. Returns the decision without its cluster number."""
+    ref_vecs: list[np.ndarray] = []
+    ref_weights: list[float] = []
+    if reference:
+        t0 = time.perf_counter()
+        try:
+            ref_vecs, ref_weights, _idx = embed_pieces(reference, embed, progress)
+        finally:
+            if timings is not None:
+                timings["embed_pieces"] = timings.get("embed_pieces", 0.0) + time.perf_counter() - t0
+    decision = you_decision(ref_vecs, ref_weights, voices, voice, _named_clusters(separated, ranges))
+    cluster = decision.pop("cluster", None)
+    if decision["matched"]:
+        for _line, seg in separated:
+            if seg.speaker == f"#v{cluster}":
+                seg.speaker = YOU
+    log.info("You inside shared mic: %s", decision)
+    return decision
 
 
 def _rejoin_lines(pieces: Pieces, words: dict[tuple[str, int], list[Word]]) -> list[Segment]:
@@ -339,7 +439,8 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             progress: Callable[[float], None] | None = None,
             ranges: list[tags_mod.TaggedRange] | None = None,
             voice: VoiceProfile | None = None,
-            mic_stretches: list[mt.Stretch] | None = None) -> list[Segment]:
+            mic_stretches: list[mt.Stretch] | None = None,
+            you: dict | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
     With ``embed`` (the buffered audio is available), each line is split where the offline
@@ -351,8 +452,9 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
     the user named (``tags.tagged_ranges``); they steer the clustering (L14). ``voice`` holds the
     fingerprint model's cutoffs (default: the shipped model's); a ``voice_threshold`` replaces its
     ``final_match``. ``mic_stretches`` (shared mic): only mic pieces that start inside a stretch are
-    separated, the stretches clustered together into one set of speakers; the rest are ``You``.
-    None separates the whole mic stream.
+    separated, the stretches clustered together into one set of speakers; the rest are ``You``, and so
+    is the mic speaker inside whose voice is very surely the same (``you_decision``, #56); ``you``
+    (optional) gets that decision. None separates the whole mic stream.
     """
     voice = voice or profile()
     if voice_threshold is not None:
@@ -361,20 +463,42 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
                                          mic_stretches)
     separated = {src: [(line, seg) for line, seg in pieces if not outside_stretches(seg, mic_stretches)]
                  for src, pieces in pieces_by_source.items()}
-    total = sum(len(p) for p in separated.values()) or 1
+    # Shared mic: the mic speech outside every stretch is the user alone, the reference for recognising
+    # them inside (#56). A whole-meeting stretch has none and is left alone.
+    reference = {src: [(line, seg) for line, seg in pieces if outside_stretches(seg, mic_stretches)]
+                 for src, pieces in pieces_by_source.items()}
+    checks_you = {src for src in separated if src == "mic" and mic_stretches is not None and separated[src]}
+    total = (sum(len(p) for p in separated.values())
+             + sum(len(reference[src]) for src in checks_you)) or 1
     done = 0
 
     for source, pieces in pieces_by_source.items():
-        def part(f: float, base: int = done, n: int = len(separated[source])) -> None:
+        n_sep, n_ref = len(separated[source]), len(reference[source]) if source in checks_you else 0
+
+        def part(f: float, base: int = done, n: int = n_sep) -> None:
             if progress:
                 progress((base + f * n) / total)
 
-        done += len(separated[source])
+        def ref_part(f: float, base: int = done + n_sep, n: int = n_ref) -> None:
+            if progress:
+                progress((base + f * n) / total)
+
+        done += n_sep + n_ref
+        voices = None
         try:
             if separated[source]:
-                _voice_labels(separated[source], embed, voice, timings, part, ranges)
+                voices = _voice_labels(separated[source], embed, voice, timings, part, ranges)
         except Exception:  # noqa: BLE001 - fall back to the diarizer's labels
             log.exception("Voice clustering failed for %s; using diarizer labels", source)
+        if source in checks_you:
+            try:
+                decision = _recognise_you(reference[source], separated[source], voices, embed, voice, timings,
+                                          ref_part, ranges)
+            except Exception:  # noqa: BLE001 - the user stays a MIC_SPEAKER_nn they can name
+                log.exception("Recognising You inside the shared mic stretches failed")
+                decision = {"matched": False, "reason": "failed"}
+            if you is not None:
+                you.update(decision)
         out.extend(_rejoin_lines(pieces, words))
 
     # Number refined speakers per stream in order of first appearance.
@@ -642,10 +766,11 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
 
     progress("Grouping voices", 0.0)
     voice_timings: dict[str, float] = {}
+    you: dict = {}
     ranges = tags_mod.tagged_ranges(read_tags(folder), segments)  # the user's names as rules; [] without tags
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
                              voice_timings, lambda f: progress("Grouping voices", f), ranges or None, voice,
-                             mic_stretches)
+                             mic_stretches, you)
     final_segments = join_fragments(final_segments)
     if embed is not None:
         stages.update(voice_timings)
@@ -672,6 +797,8 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
                    "stages": {k: round(v, 2) for k, v in stages.items()},
                    **{k: v for k, v in retx.items() if k != "final_transcriber"}}
     extra = {"final_transcriber": retx["final_transcriber"]} if retx.get("final_transcriber") else {}
+    if you:
+        extra["you_match"] = you  # diagnostic: whether a mic speaker in the stretches was taken for You
 
     folder.update_meta(status=mt.STATUS_COMPLETE, final_written_at=mt.iso(mt.now_local()),
                        final_segments=count, transcript_version=version, audio_kept=folder.audio_dir.exists(),
