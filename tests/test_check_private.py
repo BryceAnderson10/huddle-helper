@@ -1,7 +1,12 @@
 """tools/check_private.py: the private-terms guard for commits and gh bodies."""
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
@@ -90,3 +95,69 @@ def test_missing_terms_file_warns_and_passes(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HUDDLE_PRIVATE_TERMS", str(tmp_path / "absent.txt"))
     assert cp.main(["--claude-hook"], stdin='{"tool_input": {"command": "gh issue list"}}') == 0
     assert "absent.txt" in capsys.readouterr().err
+
+
+# --- worktrees: no lab/ or .venv of their own, so they use the main checkout's ---
+
+
+@pytest.fixture(autouse=True)
+def no_outer_git(monkeypatch):
+    """Inside a git hook, GIT_DIR and friends point at the real repo; keep them away."""
+    for name in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(name)
+
+
+def git(cwd, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                   cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture
+def main_and_worktree(tmp_path, monkeypatch):
+    monkeypatch.delenv("HUDDLE_PRIVATE_TERMS", raising=False)
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    main.mkdir()
+    git(main, "init", "-q")
+    (main / "README").write_text("x\n", encoding="utf-8")
+    git(main, "add", "README")
+    git(main, "commit", "-q", "-m", "init")
+    git(main, "worktree", "add", "-q", str(wt))
+    (main / "lab").mkdir()
+    (main / "lab" / "private_terms.txt").write_text("Zelda\n", encoding="utf-8")
+    return main, wt
+
+
+def test_worktree_reads_the_main_checkouts_terms(main_and_worktree):
+    main, wt = main_and_worktree
+    assert cp.terms_path(wt).resolve() == (main / "lab" / "private_terms.txt").resolve()
+
+
+def test_worktree_own_terms_win(main_and_worktree):
+    _, wt = main_and_worktree
+    (wt / "lab").mkdir()
+    (wt / "lab" / "private_terms.txt").write_text("Link\n", encoding="utf-8")
+    assert cp.terms_path(wt) == wt / "lab" / "private_terms.txt"
+
+
+def test_env_terms_win_over_the_main_checkout(main_and_worktree, monkeypatch, tmp_path):
+    _, wt = main_and_worktree
+    monkeypatch.setenv("HUDDLE_PRIVATE_TERMS", str(tmp_path / "other.txt"))
+    assert cp.terms_path(wt) == tmp_path / "other.txt"
+
+
+def test_outside_git_the_local_path_is_reported(tmp_path, monkeypatch):
+    monkeypatch.delenv("HUDDLE_PRIVATE_TERMS", raising=False)
+    assert cp.terms_path(tmp_path) == tmp_path / "lab" / "private_terms.txt"
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX sh")
+def test_hooks_find_the_main_checkouts_venv(main_and_worktree):
+    main, wt = main_and_worktree
+    exe = main / ".venv" / "Scripts" / "python.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("", encoding="utf-8")
+    exe.chmod(0o755)
+    finder = Path(__file__).resolve().parents[1] / ".githooks" / "find-python.sh"
+    out = subprocess.run(["sh", "-c", f'. "{finder.as_posix()}"; echo "$py"'], cwd=wt,
+                         check=True, capture_output=True, encoding="utf-8").stdout.strip()
+    assert Path(out).resolve() == exe.resolve()

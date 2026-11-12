@@ -6,7 +6,8 @@
     python tools/check_private.py FILE [FILE ...]     # any files, e.g. an issue body before posting
 
 The terms live in ``lab/private_terms.txt`` (``lab/`` is not in git), or the file named by
-``HUDDLE_PRIVATE_TERMS``. One term per line; ``#`` starts a comment. A term matches as a whole
+``HUDDLE_PRIVATE_TERMS``. A git worktree has no ``lab/`` of its own, so it reads the main
+checkout's list. One term per line; ``#`` starts a comment. A term matches as a whole
 word, ignoring case; prefix it with ``case:`` to match case only (``case:Mark`` passes "mark
 the line"). Words of a multi-word term may be joined by spaces, hyphens or underscores, so
 "Weekly Sync" also catches the folder name "weekly-sync".
@@ -26,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TERMS = ROOT / "lab" / "private_terms.txt"
 SEP = r"[\s_-]+"
 
 
@@ -106,8 +106,30 @@ def scan_hook_event(event: dict, terms: list[Term]) -> list[Hit]:
     return hits
 
 
+def main_checkout(root: Path = ROOT) -> Path | None:
+    """The main checkout a worktree belongs to (``root`` itself in the main checkout)."""
+    try:
+        out = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             cwd=root, capture_output=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return Path(out.stdout.strip()).parent if out.returncode == 0 and out.stdout.strip() else None
+
+
+def terms_path(root: Path = ROOT) -> Path:
+    """``HUDDLE_PRIVATE_TERMS``, else this checkout's list, else the main checkout's."""
+    if os.environ.get("HUDDLE_PRIVATE_TERMS"):
+        return Path(os.environ["HUDDLE_PRIVATE_TERMS"])
+    local = root / "lab" / "private_terms.txt"
+    if local.is_file():
+        return local
+    main = main_checkout(root)
+    shared = main / "lab" / "private_terms.txt" if main else None
+    return shared if shared and shared.is_file() else local
+
+
 def load_terms() -> tuple[list[Term], Path]:
-    path = Path(os.environ.get("HUDDLE_PRIVATE_TERMS") or DEFAULT_TERMS)
+    path = terms_path()
     if not path.is_file():
         return [], path
     return parse_terms(path.read_text(encoding="utf-8")), path
