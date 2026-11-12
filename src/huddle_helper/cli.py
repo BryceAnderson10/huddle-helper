@@ -9,6 +9,9 @@
     huddle-helper recover                               close out meetings left by a crash
     huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--start-muted] [--no-window] [--open-latest] [--open-meetings]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]
+    huddle-helper context [--meeting latest|active|ID] [--transcript auto|live|final]
+                          [--last S | --from S --to S | --bookmark ID | --whole] [--meetings-dir DIR]
+                                                        a window of a meeting as JSON, for another app (read-only)
     huddle-helper devices | download-models
 """
 
@@ -269,6 +272,18 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_context(args) -> int:
+    from . import context
+
+    meetings_dir = Path(args.meetings_dir) if args.meetings_dir else config.load().resolved_meetings_dir()
+    ans = context.answer(meetings_dir, args.meeting, args.transcript, last_s=args.last, from_s=args.from_s,
+                         to_s=args.to_s, bookmark=args.bookmark, whole=args.whole)
+    # ASCII-only JSON: whatever code page the caller's console or pipe uses, it decodes the same.
+    sys.stdout.write(json.dumps(ans, indent=2 if args.pretty else None) + "\n")
+    sys.stdout.flush()
+    return 0 if ans["ok"] else 1
+
+
 def cmd_recover(args) -> int:
     from .housekeeping import recover
 
@@ -397,6 +412,26 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--times", choices=("elapsed", "clock"), default="elapsed")
     sp.add_argument("--no-join", action="store_true", help="one entry per line instead of per speaker turn")
     sp.set_defaults(func=cmd_export)
+
+    sp = sub.add_parser("context", help="print a window of a meeting as JSON, for another app (read-only)",
+                        description="Print a bounded window of one meeting as JSON on stdout. Read-only. "
+                                    "Exit code 0 when ok is true, 1 when the answer is an error.")
+    sp.add_argument("--meeting", default="latest",
+                    help="latest (default: the active meeting, else the most recently started), "
+                         "active (only a meeting recording now), or a meeting id")
+    sp.add_argument("--transcript", choices=("auto", "live", "final"), default="auto",
+                    help="auto (default): the final transcript once the meeting is done, else the live one")
+    win = sp.add_mutually_exclusive_group()
+    win.add_argument("--last", type=float, metavar="SECONDS",
+                     help="the last SECONDS of the meeting (default 180; at most 900)")
+    win.add_argument("--from", dest="from_s", type=float, metavar="SECONDS",
+                     help="from this meeting time, with --to (at most 900 s long)")
+    win.add_argument("--bookmark", type=int, metavar="ID", help="3 minutes before to 30 s after this bookmark")
+    win.add_argument("--whole", action="store_true", help="the whole meeting (no cap)")
+    sp.add_argument("--to", dest="to_s", type=float, metavar="SECONDS", help="end of the --from window")
+    sp.add_argument("--meetings-dir", help="meetings folder (default: the one in Settings)")
+    sp.add_argument("--pretty", action="store_true", help="indent the JSON")
+    sp.set_defaults(func=cmd_context)
 
     sp = sub.add_parser("recover", help="finish meetings left by a crash")
     common(sp)

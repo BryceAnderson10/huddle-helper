@@ -66,6 +66,7 @@ python tools\make_sample_meeting.py --out sample --echo          # synthetic two
 huddle-helper simulate --mic sample\mic.wav --system sample\system.wav --realtime
 huddle-helper finalize <meeting folder>             # re-run the after-Stop pass
 huddle-helper recover                               # finish meetings left by a crash
+huddle-helper context --pretty                      # read-only: last 3 min of the latest meeting as JSON (docs/OUTPUT_SPEC.md)
 huddle-helper tray --replay <meeting folder> --out <dir> [--keep-audio]  # dev: run a kept meeting's audio through the tray app (add --auto to run unattended)
 huddle-helper devices
 ```
@@ -93,6 +94,7 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `transcribe.py` | faster-whisper wrapper |
 | `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence; one term from a line (`check_new_term`: tidy, no duplicates, budget note); the plain-text vocabulary file (read, write, merge) |
 | `storage.py` | The Storage panel's numbers: meetings-folder use split into audio and the rest, the largest by audio, and the previewed set for "delete kept audio older than N days" (the age rule of auto-purge) |
+| `context.py` | The read-only `context` command for a downstream app: the active, latest or a named meeting; live or final transcript; a capped time window (last N s, a range, around a bookmark) or the whole meeting; returned as JSON |
 | `attendees.py` | The attendee list from the Start dialog: parse, dedupe, `meta.json` `attendees`, the opt-in to add names to the vocabulary |
 | `diarize.py` | Live clustering and offline diarization |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |

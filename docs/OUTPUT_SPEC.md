@@ -307,3 +307,90 @@ back, and keep the fields it does not know.
 `mic.flac` and `system.flac` (16 kHz mono) plus `words.jsonl` (word timings used by the
 final pass). Internal: deleted after the final transcript unless Keep audio is on, and
 optionally auto-purged after N days.
+
+## Reading a meeting from another app
+
+The files above are the contract. The supported way to read them without writing your own tailer is one
+read-only command that prints a bounded window of one meeting as JSON on stdout (ADR 0001):
+
+```text
+huddle-helper context [--meeting latest|active|<meeting id>] [--transcript auto|live|final]
+                      [--last SECONDS | --from SECONDS --to SECONDS | --bookmark ID | --whole]
+                      [--meetings-dir DIR] [--pretty]
+```
+
+In the installed app the console program is `huddle-helper-cli.exe` (the tray program has no console).
+It never writes to the meeting folder. Exit code 0 when `ok` is `true`, 1 when the answer is an error.
+
+| Option | Meaning |
+| --- | --- |
+| `--meeting latest` (default) | The **active meeting** if there is one, else the most recently started meeting in whatever state it is in (still in its final pass, done, interrupted, failed). A meeting that started seconds ago *is* the latest, even if nearly empty. `meeting.selected_as` says which of the two you got: `active` or `latest` (`id` for a named meeting). |
+| `--meeting active` | Only a meeting whose `status` is `recording` **and** whose heartbeat is fresh. With none: `"meeting": null`, `"no_active_meeting": true`, and `just_ended` names the most recently started meeting (id, title, state, times), or is `null` if there are no meetings. A stopped meeting, or one whose recorder died, is never returned as active. |
+| `--meeting <id>` | That meeting. |
+| `--transcript auto` (default) | The final transcript once `DONE` exists, else the live one. `live` or `final` on request (`final` before it exists is the error `final_not_ready`). |
+| (no window option) | The last **3 minutes**: up to now on the meeting clock for the active meeting, else up to the end of the meeting. |
+| `--last SECONDS` | The last SECONDS. |
+| `--from S --to S` | Meeting time S to S (seconds since the meeting started, i.e. `start_ms / 1000`). |
+| `--bookmark ID` | **3 minutes before to 30 seconds after** the bookmark's `at_ms`. |
+| `--whole` | The whole meeting, with no cap. |
+
+`--last` and `--from`/`--to` are capped at **15 minutes** (`window.capped` is then `true`; a `--from` window
+keeps its start). Ask for `--whole` deliberately when you need more.
+
+An answer (made-up data, shortened):
+
+```json
+{"ok": true, "generated_at": "2026-11-09T11:20:00.120-06:00",
+ "meeting": {"id": "2026-11-09_1100_weekly-sync", "title": "Weekly sync", "state": "recording", "active": true,
+             "started_at": "2026-11-09T11:00:03-06:00", "ended_at": null, "selected_as": "active",
+             "heartbeat": {"state": "active", "last_beat": "2026-11-09T11:19:59.204-06:00", "age_s": 0.9}},
+ "transcript": {"kind": "live", "version": null, "lines": 212, "start_ms": 1200, "reaches_ms": 1195400,
+                "finished": false},
+ "window": {"mode": "last", "start_ms": 1017000, "end_ms": 1197000, "capped": false,
+            "incomplete": true, "incomplete_reasons": ["still_recording"]},
+ "lines": [{"stream": "system", "start_ms": 1190100, "end_ms": 1195400, "text": "Legal still needs one more day.",
+            "confidence": 0.88, "speaker_label": "SPEAKER_02", "speaker_name": "Dana",
+            "name_from": "speaker_tags.jsonl"}],
+ "speakers": {"conflicts": [], "names_changed_at": null},
+ "bookmarks": [{"id": 3, "type": "decision", "type_name": "Decision", "label": "Ship Friday", "at_ms": 1101000}],
+ "bookmarks_changed_at": "2026-11-09T11:18:40.020-06:00",
+ "gaps": [{"stream": "mic", "start_ms": 1150000, "end_ms": null, "reason": "muted", "deliberate": true, "open": true}],
+ "attendees": {"names": ["Dana", "Luis"],
+               "meaning": "Names typed in the Start dialog to make naming speakers quicker. Not a record of who attended, and not who spoke."},
+ "warnings": []}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `meeting.state` | `recording` (active), `recorder_died` (status `recording` but the heartbeat is stale or missing), or the `meta.json` `status` (`processing`, `complete`, `interrupted`, `failed`). `heartbeat` is `heartbeat.json` compared with the clock of the PC. |
+| `transcript` | `kind` is `final` or `live`. `version` is the final transcript's version (`null` for live, and for final files older than the field); a version different from the one you quoted means the wording or timing may have changed. `lines`, `start_ms` and `reaches_ms` (end of the last complete line) describe the whole transcript, not the window; for live, `reaches_ms` and `finished` say how far it goes. |
+| `window` | The span chosen, in meeting ms. `incomplete` is `true` when audio was lost in it (`lost_audio`: a gap whose reason is not `muted`), when the meeting is still recording past its last written line (`still_recording`: lines arrive 1-2 s late), or when the recorder died before the window's end (`recorder_died`). A muted gap alone does not make a window incomplete. |
+| `lines` | Every line overlapping the window, both streams in time order, text exactly as written (no summaries, no rewriting). `speaker_name` is `null` when nobody named the speaker; `name_from` is `speaker_tags.jsonl` (live: the user's tags), `speakers.json` (final), or `null`. |
+| `speakers` | `conflicts`: the `speakers.json` conflicts for speakers in the window. `names_changed_at`: from `speakers.json` (final only). |
+| `bookmarks`, `bookmarks_changed_at` | Bookmarks in the window, all events applied, placed by `at_ms`. `type` is normalised (an unknown kind reads as `bookmark`); `type_name` is its display name. `bookmarks_changed_at` is the last `changed_at` in `marks.jsonl`. |
+| `gaps` | Gaps overlapping the window; `deliberate` is `true` for `muted`. A mute still in progress (`mic_muted_since_ms`) is an `open` gap with `end_ms: null`. |
+| `attendees` | `meta.json` `attendees`, labelled: not who attended, not who spoke. |
+| `error` | Only when `ok` is `false`: `{"code", "message", "file"?}`. Codes: `unreadable` (a file could not be read; `file` names it), `not_found`, `no_meetings`, `final_not_ready`, `bookmark_not_found`, `bad_request`. |
+| `warnings` | Files that could not be read but did not stop the answer: the `meta.json` of a meeting older than the one chosen (one that may be newer is the error `unreadable`), or this meeting's `marks.jsonl`, `speaker_tags.jsonl` or `speakers.json`. |
+
+**Following a growing meeting.** Run the command again; every answer is a fresh read. A half-written last
+line is left out until its newline arrives. When `transcript.kind` turns from `live` to `final`, or
+`transcript.version` changes, text you hold may have changed: read it again.
+
+**Find lines by time, never by `seq`.** The live and final files number their lines differently, and every
+final pass numbers them anew. A line is `(stream, start_ms)`; a bookmark is its `at_ms` (the `seq` of a line
+bookmark points into whichever file was shown when it was made).
+
+**What the text is and is not.**
+
+* "Final" does not mean verified. The final transcript is the source of truth once the meeting is done, but
+  live and final may disagree, and either may be wrong.
+* `confidence` comes from the speech model's token probabilities. It is not a calibrated probability that
+  the words are right.
+* Speaker names are display labels the user (or a downstream app) gave a speaker label. They are not
+  confirmed identities, and not recipients to send anything to.
+* Attendees are the names typed at Start. They do not say who was on the call or who spoke.
+
+**Vocabulary.** The user adds terms that help speech recognition in Settings → Vocabulary, and for one
+meeting in the Start dialog ("Extra terms for this meeting"). `meta.json` `vocabulary` shows the terms a
+meeting actually used. The downstream app does not supply vocabulary.
