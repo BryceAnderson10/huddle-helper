@@ -32,4 +32,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# This checkout's src first: the venv's editable install points at the main checkout,
+# so a worktree using that venv would otherwise test the main checkout's code.
+pythonpath = ["src"]
 markers = ["models: needs the downloaded whisper and diarization models (slow)"]
