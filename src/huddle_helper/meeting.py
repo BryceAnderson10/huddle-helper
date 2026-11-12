@@ -20,7 +20,7 @@ import json
 import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__
@@ -51,6 +51,21 @@ def now_local() -> datetime:
 
 def iso(dt: datetime) -> str:
     return dt.isoformat(timespec="seconds")
+
+
+def change_time(previous: str | None = None) -> str:
+    """Now, in ISO 8601 with milliseconds, for a "last changed" time (speaker names, bookmarks).
+
+    Strictly later than ``previous`` (the time the thing last changed), so two changes in the same
+    millisecond still give a reader two different times."""
+    now = now_local()
+    try:
+        before = datetime.fromisoformat(previous) if previous else None
+    except (TypeError, ValueError):
+        before = None
+    if before is not None and before.tzinfo is not None and now <= before:
+        now = (before + timedelta(milliseconds=1)).astimezone(now.tzinfo)
+    return now.isoformat(timespec="milliseconds")
 
 
 def slugify(title: str, max_len: int = 40) -> str:
@@ -272,7 +287,18 @@ class MeetingFolder:
     def write_speakers(self, mapping: dict[str, str]) -> None:
         clean = {k: v.strip() for k, v in mapping.items() if v and v.strip() and v.strip() != k}
         with self._lock:
-            write_json_atomic(self.speakers_path, {"speakers": clean, "updated_at": iso(now_local())})
+            try:
+                prev = read_json(self.speakers_path)
+            except (OSError, ValueError):
+                prev = {}
+            prev = prev if isinstance(prev, dict) else {}
+            data = {"speakers": clean, "updated_at": iso(now_local())}
+            last = prev.get("names_changed_at") if isinstance(prev.get("names_changed_at"), str) else None
+            if prev.get("speakers") == clean and last:
+                data["names_changed_at"] = last
+            else:
+                data["names_changed_at"] = change_time(last)
+            write_json_atomic(self.speakers_path, data)
 
     def merge_speakers(self, user_names: dict[str, str | None], *, from_tags: bool | None = None,
                        conflicts: list[dict] | None = None) -> dict:
@@ -280,7 +306,8 @@ class MeetingFolder:
         name (the downstream app may have set it). The file is re-read under the lock immediately before
         the write. A value that is None, empty or equal to the label removes the name for that speaker.
         ``from_tags`` and ``conflicts`` are set when given (the final pass); otherwise conflicts for a
-        speaker named here are dropped, as the user has settled them. Other keys in the file are kept."""
+        speaker named here are dropped, as the user has settled them. ``names_changed_at`` moves only
+        when a name actually changes (never with the transcript version). Other keys in the file are kept."""
         with self._lock:
             try:
                 data = read_json(self.speakers_path)
@@ -290,6 +317,7 @@ class MeetingFolder:
                 data = {}
             speakers = data.get("speakers")
             speakers = {str(k): str(v) for k, v in speakers.items()} if isinstance(speakers, dict) else {}
+            before = dict(speakers)
             for label, name in user_names.items():
                 name = (name or "").strip()
                 if name and name != label:
@@ -297,6 +325,9 @@ class MeetingFolder:
                 else:
                     speakers.pop(label, None)
             data["speakers"] = speakers
+            if speakers != before:
+                prev = data.get("names_changed_at")
+                data["names_changed_at"] = change_time(prev if isinstance(prev, str) else None)
             if from_tags is not None:
                 data["from_tags"] = bool(from_tags)
             if conflicts is not None:

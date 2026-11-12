@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import threading
 from pathlib import Path
 from typing import Callable, Iterable
@@ -54,9 +55,14 @@ class JsonlWriter:
         self.close()
 
 
-def meeting_start_event(meeting_id: str, started_at: str) -> dict:
+def meeting_start_event(meeting_id: str, started_at: str, **extra) -> dict:
     return {"type": "meeting_start", "meeting_id": meeting_id, "started_at": started_at,
-            "schema": SCHEMA_VERSION}
+            "schema": SCHEMA_VERSION, **extra}
+
+
+def new_transcript_version() -> str:
+    """A new Transcript version: an opaque stamp naming one final transcript. Compare it, never parse it."""
+    return secrets.token_hex(8)
 
 
 def meeting_end_event(ended_at: str, segments: int, **extra) -> dict:
@@ -64,11 +70,13 @@ def meeting_end_event(ended_at: str, segments: int, **extra) -> dict:
 
 
 def write_transcript(path: Path, meeting_id: str, started_at: str, ended_at: str,
-                     segments: Iterable[Segment], **end_extra) -> int:
-    """Write a complete transcript file (used for transcript.final.jsonl)."""
+                     segments: Iterable[Segment], *, transcript_version: str | None = None, **end_extra) -> int:
+    """Write a complete transcript file (used for transcript.final.jsonl). ``transcript_version`` goes in
+    the first line, so the file names its own version."""
     count = 0
+    start_extra = {"transcript_version": transcript_version} if transcript_version else {}
     with JsonlWriter(path, mode="w") as w:
-        w.write(meeting_start_event(meeting_id, started_at))
+        w.write(meeting_start_event(meeting_id, started_at, **start_extra))
         for seg in segments:
             count += 1
             w.write(seg.to_event(count))

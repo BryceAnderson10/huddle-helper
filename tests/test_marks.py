@@ -1,6 +1,7 @@
 """marks.jsonl: the reducer, MarkLog (ids, the 2 s rule, edits), and the controller's bookmark API."""
 
 import threading
+from datetime import datetime
 
 from huddle_helper import app, marks, meeting as mt
 from huddle_helper.writer import read_events
@@ -10,6 +11,11 @@ from .helpers import make_meeting
 
 def mark(mid, at_ms, kind="bookmark", **extra):
     return {"type": "mark", "id": mid, "kind": kind, "at_ms": at_ms, **extra}
+
+
+def untimed(event):
+    """The event as the builders make it: MarkLog adds the time it wrote it."""
+    return {k: v for k, v in event.items() if k != "changed_at"}
 
 
 # -- reducer ---------------------------------------------------------------------
@@ -102,7 +108,7 @@ def test_a_different_kind_within_two_seconds_retypes_the_previous_bookmark(tmp_p
     clock.t += 1.0
     res = log.add("decision", 2000)
     assert res.action == "retyped" and res.id == 1 and res.at_ms == 1000
-    assert read_events(folder.marks_path)[1] == marks.kind_event(1, "decision")
+    assert untimed(read_events(folder.marks_path)[1]) == marks.kind_event(1, "decision")
     state = log.state()
     assert list(state) == [1] and state[1].kind == "decision" and log.count == 1
     clock.t += 1.0
@@ -143,7 +149,7 @@ def test_edit_writes_only_what_changed(tmp_path):
     assert log.edit(1, label="", kind="bookmark") is True
     assert len(read_events(folder.marks_path)) == n
     assert log.edit(1, label="  Ship it  ", kind="decision") is True
-    tail = read_events(folder.marks_path)[n:]
+    tail = [untimed(e) for e in read_events(folder.marks_path)[n:]]
     assert tail == [marks.label_event(1, "Ship it"), marks.kind_event(1, "decision")]
     assert log.edit(1, kind="not a kind!") is True and len(read_events(folder.marks_path)) == n + 2
     assert log.edit(99, label="x") is False
@@ -177,3 +183,19 @@ def test_controller_bookmarks_a_line_of_a_past_meeting_and_edits_it(tmp_path):
     # nothing recording: a press has nowhere to go
     assert ctl.bookmark("bookmark")["action"] == "none" and ctl.bookmark("bookmark", folder=folder)["action"] == "none"
     assert ctl.hotkey_pressed("mute")["action"] == "none" and ctl.now_ms() is None and ctl.mic_muted is False
+
+
+def test_every_event_says_when_it_was_written_and_the_last_is_the_bookmarks_last_change(tmp_path):
+    folder, log, clock = new_log(tmp_path)
+    assert marks.last_changed([]) is None
+    log.add("bookmark", 1000)
+    clock.t += 1.0
+    log.add("decision", 2000)  # within 2 s: retypes the first
+    log.add("question", 500, "line", seq=3)
+    log.edit(1, label="Ship it")
+    log.edit(2, delete=True)
+    events = read_events(folder.marks_path)
+    times = [datetime.fromisoformat(e["changed_at"]) for e in events]
+    assert len(events) == 5 and times == sorted(times) and len(set(times)) == 5  # strictly later each time
+    assert marks.last_changed(events) == events[-1]["changed_at"]
+    assert marks.last_changed([mark(1, 0)]) is None  # a file from before the field existed
