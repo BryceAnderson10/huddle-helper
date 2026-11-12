@@ -7,6 +7,9 @@ Events (append-only, one JSON object per line; see docs/OUTPUT_SPEC.md)
     {"type":"mark_kind","id":1,"kind":"action"}
     {"type":"mark_delete","id":1}
 
+``MarkLog`` adds ``"changed_at"`` (when it wrote the line, strictly increasing) to every event; the last
+line's is when the bookmarks last changed (``last_changed``). It is not part of what the builders return.
+
 ``reduce(events)`` applies them in order and returns ``{id: Mark}``. The transcript model feeds the
 same reducer (``transcript_model.reduce_marks`` is this function), so the window, the export and
 ``MarkLog`` cannot disagree. A kind the reader does not know reads as ``bookmark``
@@ -112,6 +115,16 @@ def reduce(events: Iterable[dict], state: dict[int, Mark] | None = None) -> dict
     return state
 
 
+def last_changed(events: Iterable[dict]) -> str | None:
+    """When the bookmarks last changed: the ``changed_at`` of the last event that has one (None for a
+    file written before the field existed, or no file)."""
+    last = None
+    for e in events:
+        if isinstance(e.get("changed_at"), str):
+            last = e["changed_at"]
+    return last
+
+
 def kind_name(kind: str, custom: dict[str, str] | None = None) -> str:
     return KIND_NAMES.get(kind) or (custom or {}).get(kind) or KIND_NAMES[BOOKMARK]
 
@@ -182,8 +195,13 @@ class MarkLog:
     def state(self) -> dict[int, Mark]:
         return self._read()
 
-    def _write(self, event: dict) -> None:
-        mt.append_jsonl_unlocked(self.path, event)
+    def _write(self, event: dict, after: str | None) -> str:
+        """Append ``event`` stamped with ``changed_at``: when it was written, strictly after ``after`` (the
+        file's last ``changed_at``), so the last line says when the bookmarks last changed. Returns the
+        stamp. The caller holds the folder lock."""
+        stamp = mt.change_time(after)
+        mt.append_jsonl_unlocked(self.path, {**event, "changed_at": stamp})
+        return stamp
 
     # -- adding ----------------------------------------------------------------------
     def add(self, kind: str, at_ms: int, via: str = "hotkey", *, seq: int | None = None,
@@ -192,6 +210,7 @@ class MarkLog:
         with self._lock, mt.folder_lock(self.folder.path):
             events = self._events()
             state = reduce(events)
+            changed = last_changed(events)
             now = self._clock()
             live = via != "line"
             if live and self._last is not None and now - self._last[0] <= self._double_press_s:
@@ -199,12 +218,12 @@ class MarkLog:
                 if prev is not None:
                     if prev.kind == kind:
                         return MarkResult("ignored", prev.id, prev.kind, prev.at_ms)
-                    self._write(kind_event(prev.id, kind))
+                    self._write(kind_event(prev.id, kind), changed)
                     self._count = len(state)
                     return MarkResult("retyped", prev.id, kind, prev.at_ms)
             top = max((int(e["id"]) for e in events if isinstance(e.get("id"), int)), default=0)
             mid = top + 1
-            self._write(mark_event(mid, kind, at_ms, at or mt.iso(mt.now_local()), via, seq))
+            self._write(mark_event(mid, kind, at_ms, at or mt.iso(mt.now_local()), via, seq), changed)
             self._count = len(state) + 1
             if live:
                 self._last = (now, mid)
@@ -216,17 +235,19 @@ class MarkLog:
         """Write the events that make mark ``mark_id`` match; nothing is written for a part that
         already matches. Returns False when the mark does not exist."""
         with self._lock, mt.folder_lock(self.folder.path):
-            state = reduce(self._events())
+            events = self._events()
+            state = reduce(events)
+            changed = last_changed(events)
             cur = state.get(int(mark_id))
             if cur is None:
                 return False
             if delete:
-                self._write(delete_event(cur.id))
+                self._write(delete_event(cur.id), changed)
                 del state[cur.id]
             else:
                 if label is not None and label.strip() != cur.label:
-                    self._write(label_event(cur.id, label.strip()))
+                    changed = self._write(label_event(cur.id, label.strip()), changed)
                 if kind is not None and kind != cur.kind and (kind in KIND_NAMES or KIND_PATTERN.match(kind)):
-                    self._write(kind_event(cur.id, kind))
+                    self._write(kind_event(cur.id, kind), changed)
             self._count = len(state)
             return True

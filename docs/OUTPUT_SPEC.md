@@ -80,6 +80,18 @@ the numbering may differ from the live file, and a live segment may be split in 
 where the refined pass finds a speaker change mid-utterance. Treat the final file as the
 source of truth once `DONE` exists.
 
+**Transcript version.** Optional, additive. The final file's `meeting_start` line has
+`"transcript_version"`, an opaque string that names this one final transcript, and `meta.json` has the
+same value once the pass ends. Every final pass writes a new one, even if the words come out the same:
+re-running `huddle-helper finalize`, or the second transcription, replaces the file and its version.
+Earlier final transcripts are not kept. Compare versions for equality only; do not parse them. A reader
+that quoted the final transcript keeps the version it read: a different version means the wording or
+timing may have changed. Naming a speaker or editing a bookmark never changes it (those have their own
+times: `names_changed_at` in `speakers.json`, `changed_at` in `marks.jsonl`). The file's first line is
+authoritative: while a re-run is finishing, `meta.json` still holds the previous version until it is set
+to `complete`. The live file has no version: it is append-only, so the lines read so far say how current
+it is. Final files written before this field existed have none.
+
 **Echo.** Without headphones the mic hears the call. Mic segments that repeat
 system-stream speech at the same time are dropped (setting: on by default), so remote
 speech isn't attributed to `You`. Every dropped mic line is kept in `echo_dropped.jsonl` (below).
@@ -101,6 +113,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `clean_exit` | `null` while recording, `true` after a normal Stop, `false` after a crash. |
 | `started_at`, `ended_at` | ISO 8601 with UTC offset. |
 | `final_written_at`, `final_segments` | Set when the final transcript is in place. |
+| `transcript_version` | Optional, additive. The version of the final transcript in place, set with `final_written_at` (see Transcript version above). |
 | `segments` | Lines in the live file. |
 | `devices` | `{"mic": name, "system": name}` actually captured. |
 | `models` | Speech, VAD and diarization models used. |
@@ -126,11 +139,11 @@ transcript. Bookmarks can also be added, labelled, retyped or deleted after the 
 should apply the events rather than trust a count.
 
 ```json
-{"type":"mark","id":1,"kind":"decision","at_ms":381200,"at":"2026-11-09T11:06:24-06:00","via":"hotkey"}
-{"type":"mark","id":2,"kind":"bookmark","at_ms":512000,"at":"2026-11-09T11:08:35-06:00","via":"line","seq":44}
-{"type":"mark_label","id":1,"label":"Ship Friday"}
-{"type":"mark_kind","id":2,"kind":"action"}
-{"type":"mark_delete","id":2}
+{"type":"mark","id":1,"kind":"decision","at_ms":381200,"at":"2026-11-09T11:06:24-06:00","via":"hotkey","changed_at":"2026-11-09T11:06:24.512-06:00"}
+{"type":"mark","id":2,"kind":"bookmark","at_ms":512000,"at":"2026-11-09T11:08:35-06:00","via":"line","seq":44,"changed_at":"2026-11-09T11:08:40.020-06:00"}
+{"type":"mark_label","id":1,"label":"Ship Friday","changed_at":"2026-11-09T11:09:02.300-06:00"}
+{"type":"mark_kind","id":2,"kind":"action","changed_at":"2026-11-09T11:09:10.004-06:00"}
+{"type":"mark_delete","id":2,"changed_at":"2026-11-09T12:15:47.881-06:00"}
 ```
 
 | Field | Meaning |
@@ -141,6 +154,7 @@ should apply the events rather than trust a count.
 | `at` | Wall-clock time of the press (or of the line, for a line bookmark). |
 | `via` | `hotkey`, `button` (window), `tray`, or `line` (right-click on a line). |
 | `seq` | Only for `via: "line"`: the line's `seq` in the file that was shown. The live and final files number lines differently, so rely on `at_ms`. |
+| `changed_at` | Optional, additive, on every event. Wall-clock time the event was written (ISO 8601 with milliseconds and UTC offset), each strictly later than the one before; compare as times, not as text (the offset changes with daylight saving). Unlike `at`, which for a line bookmark is the line's time, this is when the change was made. **The last line's `changed_at` is when the bookmarks last changed.** It never changes the transcript version. Absent in files written before it existed. |
 
 `mark_label` sets or replaces a label (an empty string clears it); `mark_kind` changes the type;
 `mark_delete` removes the bookmark. Readers apply events in order and ignore events for an `id` they have
@@ -256,6 +270,7 @@ final pass has already turned them into names for the final labels.
 {"speakers": {"SPEAKER_01": "Dana", "SPEAKER_02": "Luis"},
  "from_tags": true,
  "conflicts": [{"speaker": "SPEAKER_02", "names": {"Luis": 41200, "Dana": 11800}}],
+ "names_changed_at": "2026-11-09T12:10:00.412-06:00",
  "updated_at": "2026-11-09T12:10:00-06:00"}
 ```
 
@@ -267,6 +282,7 @@ apply the mapping when you read.
 | `speakers` | Final label to display name. A speaker without an entry has no name (keep showing the label). |
 | `from_tags` | Optional, additive. `true` when the after-Stop pass wrote the names from `speaker_tags.jsonl`. |
 | `conflicts` | Optional, additive. Final speakers that hold the speech of two named people: `{"speaker", "names": {name: ms}}`, milliseconds of that person's tagged speech inside the speaker, largest first. The speaker is listed under the largest name in `speakers`. A second name is reported when it has at least 25% of the largest one's overlap. The user is shown these in the window; a downstream app can treat the speaker as uncertain. |
+| `names_changed_at` | Optional, additive. When `speakers` last changed (ISO 8601 with milliseconds and UTC offset, strictly later than the time before; compare as times, not as text). Huddle Helper moves it only when a name is added, changed or removed, not when it writes the same names again, and never with the transcript version: a reader holding quotes re-applies the names without treating the quotes as outdated. Absent until Huddle Helper first changes a name. A downstream app that changes `speakers` should set it too. |
 | `updated_at` | When the file was last written. |
 
 How the names are made: the pass sums, for each final speaker, the overlap in ms between its segments and

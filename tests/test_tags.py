@@ -2,6 +2,7 @@
 and the order of the files at the end of the final pass. Names here are invented (Ana, Ben, Cy)."""
 
 import json
+import re
 import threading
 
 import numpy as np
@@ -407,8 +408,12 @@ def test_no_tags_file_gives_byte_identical_output(tmp_path):
     run(empty)
     untagged = build(tmp_path / "c", [sp("SPEAKER_01", "Ana"), tags.tag_speaker_event("SPEAKER_01", None)], name="Same")
     run(untagged)
-    ref = plain.final_path.read_bytes()
-    assert empty.final_path.read_bytes() == ref and untagged.final_path.read_bytes() == ref
+    def unversioned(folder):  # every final pass stamps its own transcript version (#41); all else is equal
+        return re.sub(rb',"transcript_version":"[0-9a-f]+"', b"", folder.final_path.read_bytes())
+
+    ref = unversioned(plain)
+    assert b"transcript_version" not in ref
+    assert unversioned(empty) == ref and unversioned(untagged) == ref
     assert not plain.speakers_path.exists() and not empty.speakers_path.exists() and not untagged.speakers_path.exists()
     # and the clustering itself is the plain call when no names are passed
     assert label_voices([vec(0), vec(0.1)], [3.0, 3.0], 0.7) == label_voices([vec(0), vec(0.1)], [3.0, 3.0], 0.7, [None, None])

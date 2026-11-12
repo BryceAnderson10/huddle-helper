@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import numpy as np
 
@@ -553,3 +554,49 @@ def test_the_embedder_gives_no_fingerprint_below_the_shared_minimum(monkeypatch)
     assert embedder.embed(np.zeros(SAMPLE_RATE // 2 - 1, dtype=np.float32)) is None
     monkeypatch.setattr(diarize, "MIN_FINGERPRINT_S", 1.0)  # the picker's note (#26) reads the same constant
     assert embedder.embed(np.zeros(int(0.7 * SAMPLE_RATE), dtype=np.float32)) is None
+
+
+# -- transcript version and last-changed times (#41) ---------------------------------------------
+def _versions(folder):
+    return read_events(folder.final_path)[0].get("transcript_version"), folder.read_meta().get("transcript_version")
+
+
+def test_each_final_pass_stamps_a_new_transcript_version(tmp_path):
+    folder = make_meeting_to_finalize(tmp_path, keep_audio=True)
+    finalize_meeting(folder, FakeDiarizer, keep_audio=True)
+    in_file, in_meta = _versions(folder)
+    assert in_file and in_file == in_meta
+    assert "transcript_version" not in read_events(folder.live_path)[0]  # the live file needs none
+    finalize_meeting(folder, FakeDiarizer, keep_audio=True)  # `huddle-helper finalize` run again
+    again, again_meta = _versions(folder)
+    assert again == again_meta and again != in_file  # a reader holding the old version sees the change
+
+
+def test_renaming_a_speaker_after_done_changes_only_the_names_time(tmp_path):
+    folder = make_meeting_to_finalize(tmp_path)
+    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    version = _versions(folder)
+    assert "names_changed_at" not in json.loads(folder.speakers_path.read_text(encoding="utf-8")) \
+        if folder.speakers_path.exists() else True
+    folder.merge_speakers({"SPEAKER_01": "Ana"})
+    first = json.loads(folder.speakers_path.read_text(encoding="utf-8"))["names_changed_at"]
+    folder.merge_speakers({"SPEAKER_01": "Ana"})  # the same name again: nothing changed
+    assert json.loads(folder.speakers_path.read_text(encoding="utf-8"))["names_changed_at"] == first
+    folder.merge_speakers({"SPEAKER_01": "Ben"})  # at once, within the same millisecond if it may
+    second = json.loads(folder.speakers_path.read_text(encoding="utf-8"))["names_changed_at"]
+    assert datetime.fromisoformat(second) > datetime.fromisoformat(first)
+    assert _versions(folder) == version
+
+
+def test_editing_a_bookmark_after_done_changes_only_the_bookmarks_time(tmp_path):
+    from huddle_helper import marks
+
+    folder = make_meeting_to_finalize(tmp_path)
+    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    version = _versions(folder)
+    log = marks.MarkLog(folder)
+    log.add("decision", 500, "line", seq=2)
+    added = marks.last_changed(read_events(folder.marks_path))
+    log.edit(1, label="Ship it")
+    assert datetime.fromisoformat(marks.last_changed(read_events(folder.marks_path))) > datetime.fromisoformat(added)
+    assert _versions(folder) == version

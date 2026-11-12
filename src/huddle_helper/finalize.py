@@ -5,7 +5,8 @@ Steps, in the order the output contract requires:
    line should be split because the speaker changes mid-line),
 2. label every line or piece by clustering voice fingerprints over the whole
    meeting, then join sentences that were cut into lines at pauses,
-3. write transcript.final.jsonl under a temp name and rename it into place,
+3. write transcript.final.jsonl under a temp name and rename it into place, stamped with a new
+   transcript version (its first line, and meta.json at step 5),
 4. delete the buffered audio unless Keep audio is on,
 5. mark meta.json complete and create DONE last.
 
@@ -35,7 +36,7 @@ from .diarize import (MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OfflineD
                       VoiceProfile, cluster_voices, fold_small_clusters, label, profile)
 from .retranscribe import FinalTranscriber, retranscribe
 from .segments import Segment, Word
-from .writer import read_events, write_transcript
+from .writer import new_transcript_version, read_events, write_transcript
 
 log = logging.getLogger(__name__)
 
@@ -565,7 +566,9 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     audio_by_source.clear()
     progress("Writing final transcript", 1.0)
     t0 = time.perf_counter()
-    count = write_transcript(folder.final_tmp_path, folder.meeting_id, started_at, ended_at, final_segments)
+    version = new_transcript_version()  # every final transcript gets its own, even with the same words
+    count = write_transcript(folder.final_tmp_path, folder.meeting_id, started_at, ended_at, final_segments,
+                             transcript_version=version)
     os.replace(folder.final_tmp_path, folder.final_path)
 
     stages["write"] = time.perf_counter() - t0
@@ -583,7 +586,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     extra = {"final_transcriber": retx["final_transcriber"]} if retx.get("final_transcriber") else {}
 
     folder.update_meta(status=mt.STATUS_COMPLETE, final_written_at=mt.iso(mt.now_local()),
-                       final_segments=count, audio_kept=folder.audio_dir.exists(),
+                       final_segments=count, transcript_version=version, audio_kept=folder.audio_dir.exists(),
                        refined_streams=refined, final_stats=final_stats, **extra)
     folder.mark_done()
     return count
