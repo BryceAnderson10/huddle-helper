@@ -150,7 +150,7 @@ def test_keep_this_meetings_audio_box_only_while_recording_or_processing(root, t
     folder.update_meta(settings={"keep_audio": False, "echo_dedupe": True})
     w, ctl = make_window(root, tmp_path, folder)
     st = w.app.state
-    st.finalize = SimpleNamespace(meeting_id=folder.meeting_id, stage="Grouping voices", frac=0.2, overall=0.3,
+    st.finalize = SimpleNamespace(meeting_id=folder.meeting_id, label="Grouping voices", frac=0.2, overall=0.3,
                                   eta_s=None)
     w._refresh_all()
     root.update()

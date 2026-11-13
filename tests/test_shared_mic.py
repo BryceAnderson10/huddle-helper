@@ -134,7 +134,7 @@ def test_cli_diarize_mic_is_shared_mic_from_the_start(tmp_path, monkeypatch, fla
     monkeypatch.setattr(recorder, "load_components", fake_load)
     monkeypatch.setattr(cli, "_ensure_models", lambda s, shared=False: None)
     monkeypatch.setattr(cli, "go_offline", lambda: None)
-    monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: finalized.append(folder))
+    monkeypatch.setattr(cli, "_finalize", lambda folder, s: finalized.append(folder))
     argv = ["simulate", "--mic", str(tmp_path / "mic.wav"), "--system", str(tmp_path / "system.wav"),
             "--out", str(tmp_path / "meetings")] + (["--diarize-mic"] if flag else [])
     assert cli.main(argv) == 0

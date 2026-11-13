@@ -551,6 +551,7 @@ def cmd_finalize(args) -> int:
     for name in ("transcript.final.jsonl", "DONE"):
         (dest / name).unlink(missing_ok=True)
     folder = mt.MeetingFolder(dest)
+    folder.update_meta_settings(keep_audio=True)  # the copy keeps its audio whatever the meeting chose
     voice, model_path = voice_for(args.embedding)
     n = args.threads  # 0: the old defaults (diarizer 2 threads, embedder 1)
     count = finalize_meeting(

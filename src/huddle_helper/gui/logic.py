@@ -274,7 +274,7 @@ def status_view(meeting_id: str, model: TranscriptModel, state) -> StatusView:
                           f"Lag {rec.lag_s:.1f} s   Backlog {rec.backlog}", phase == RECORDING, True, muted)
     if phase == PROCESSING:
         fin = state.finalize
-        parts = [f"{fin.stage} {fin.frac:.0%}" if fin.frac > 0 else fin.stage]
+        parts = [f"{fin.label} {fin.frac:.0%}" if fin.frac > 0 else fin.label]
         if fin.overall > 0:
             parts.append(f"{fin.overall:.0%} overall")
         eta = format_eta(fin.eta_s)

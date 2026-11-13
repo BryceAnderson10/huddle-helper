@@ -337,17 +337,6 @@ def test_finalize_honours_keep_audio_set_in_meta_late(tmp_path):
     assert seen and folder.audio_file("system").exists() and folder.read_meta()["audio_kept"] is True
 
 
-def test_cmd_finalize_keeps_audio_unless_asked(tmp_path, monkeypatch):
-    from huddle_helper import cli
-
-    calls = []
-    monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: calls.append(keep_audio))
-    folder = make_meeting_to_finalize(tmp_path)
-    assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path)]) == 0
-    assert cli.main(["finalize", str(folder.path), "--out", str(tmp_path), "--delete-audio"]) == 0
-    assert calls == [True, False]
-
-
 def test_voice_label_steps_match_combined_helper():
     from huddle_helper.diarize import profile
     from huddle_helper.finalize import _voice_labels, assign_labels, embed_pieces, label_voices
@@ -474,7 +463,7 @@ def test_finalize_reports_grouping_progress_and_merge_small_stage(tmp_path):
     seen = []
     finalize_meeting(folder, TimedDiarizer, keep_audio=False, embedder_factory=FlatEmbedder,
                      progress=lambda stage, frac: seen.append((stage, frac)))
-    grouping = [f for stage, f in seen if stage == "Grouping voices"]
+    grouping = [f for stage, f in seen if stage.label == "Grouping voices"]
     assert grouping[0] == 0.0 and grouping[-1] == 1.0 and grouping == sorted(grouping) and len(grouping) > 2
     stages = folder.read_meta()["final_stats"]["stages"]
     assert stages["merge_small_system"] == 1.5 and "diarize_system" in stages

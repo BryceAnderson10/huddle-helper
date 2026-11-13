@@ -134,7 +134,7 @@ def test_finalize_uses_the_second_transcription(tmp_path):
     stats = meta["final_stats"]
     assert stats["retx_lines_changed"] == 2 and stats["retx_lines_kept_live"] == 0
     assert "retranscribe" in stats["stages"]
-    assert stages[0] == "Improving the transcript" and folder.done_path.exists()
+    assert stages[0].label == "Improving the transcript" and folder.done_path.exists()
 
 
 def test_finalize_survives_a_failing_second_transcriber(tmp_path):

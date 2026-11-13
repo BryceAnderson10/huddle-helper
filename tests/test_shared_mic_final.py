@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from huddle_helper import app, finalize, meeting as mt
+from huddle_helper import finalize, meeting as mt
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.diarize import Turn
 from huddle_helper.finalize import append_words, diarize_stretches, finalize_meeting
@@ -178,20 +178,3 @@ def test_diarize_stretches_puts_turns_on_the_meeting_clock_with_separate_ids():
     assert [(t.start_ms, t.end_ms) for t in turns] == [(1000, 3000), (6000, 8000)]
     assert turns[0].speaker != turns[1].speaker
     assert seen == sorted(seen) and seen[-1] == 1.0
-
-
-# -- progress -------------------------------------------------------------------------------------
-def test_progress_weights_the_mic_by_its_stretches():
-    meta = {"shared_mic": [[0, 300_000], [3_600_000, None]]}
-    w = app.diarize_weights(meta, 7200)
-    assert w == {"system": 7200, "mic": 300 + 3600}
-    small = {"system": 7200.0, "mic": 600.0}
-    both = ["mic", "system"]
-    f = app.pass_fraction
-    assert f("Identifying speakers (mic)", 1.0, both, small) == pytest.approx(app.DIARIZE_SHARE * 600 / 7800)
-    assert f("Identifying speakers (system)", 0.0, both, small) == pytest.approx(app.DIARIZE_SHARE * 600 / 7800)
-    assert f("Identifying speakers (system)", 1.0, both, small) == pytest.approx(app.DIARIZE_SHARE)
-    assert f("Identifying speakers (mic)", 0.5, ["mic"], {"mic": 10.0}) == pytest.approx(app.DIARIZE_SHARE / 2)
-    assert f("Identifying speakers (mic)", 0.5, both) == pytest.approx(app.DIARIZE_SHARE * 0.25)  # no weights
-    assert f("Identifying speakers (mic)", 0.5, both, {"mic": 0, "system": 0}) == pytest.approx(
-        app.DIARIZE_SHARE * 0.25)

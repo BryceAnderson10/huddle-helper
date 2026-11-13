@@ -76,21 +76,14 @@ def _ensure_models(s: config.Settings, shared_mic: bool = False) -> None:
         models.install_all(s.whisper_model, voice, progress=print)
 
 
-def _finalize(folder, s: config.Settings, keep_audio: bool | None = None) -> None:
-    from .diarize import SherpaEmbedder, SherpaOfflineDiarizer, final_threads
-    from .finalize import finalize_meeting
-    from .transcribe import final_transcriber_factory
+def _finalize(folder, s: config.Settings) -> None:
+    """The final pass, the same one the app runs (``final_pass.FinalPass``)."""
+    from . import final_pass
 
-    def progress(stage, frac):
-        print(f"\r{stage}: {frac:4.0%}   ", end="", flush=True)
+    def progress(p):
+        print(f"\r{p.label}: {p.frac:4.0%}   ", end="", flush=True)
 
-    threads = final_threads()
-    voice = s.voice_profile()
-    count = finalize_meeting(folder, lambda: SherpaOfflineDiarizer(
-                                 threshold=voice.split_cluster, merge_small=False, num_threads=threads),
-                             keep_audio=s.keep_audio if keep_audio is None else keep_audio,
-                             progress=progress, embedder_factory=lambda: SherpaEmbedder(num_threads=threads),
-                             voice=voice, transcriber_factory=final_transcriber_factory(s, lambda: threads))
+    count = final_pass.FinalPass(s).run(folder, progress)
     print(f"\nFinal transcript: {folder.final_path} ({count} segments)")
 
 
@@ -255,9 +248,10 @@ def cmd_finalize(args) -> int:
         models.install_whisper(s.final_model, progress=print)  # before go_offline: may download once
     go_offline()
     folder = MeetingFolder(Path(args.folder))
-    if folder.done_path.exists():
-        folder.done_path.unlink()
-    _finalize(folder, s, keep_audio=not getattr(args, "delete_audio", False))
+    if getattr(args, "keep_audio", False) or getattr(args, "delete_audio", False):
+        # like "Keep this meeting's audio" in the app: the meeting's own choice, which the pass follows
+        folder.update_meta_settings(keep_audio=bool(getattr(args, "keep_audio", False)))
+    _finalize(folder, s)
     return 0
 
 
@@ -404,10 +398,13 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--beam", type=int, default=1)
     sp.set_defaults(func=cmd_bench)
 
-    sp = sub.add_parser("finalize", help="re-run the after-Stop pass on a meeting folder")
+    sp = sub.add_parser("finalize", help="re-run the final pass on a meeting folder",
+                        description="Run the final pass again, replacing the final transcript. The buffered "
+                                    "audio is kept or removed as the meeting's own Keep audio choice says; "
+                                    "--keep-audio or --delete-audio change that choice first.")
     sp.add_argument("folder")
     sp.add_argument("--delete-audio", action="store_true",
-                    help="remove the buffered audio afterwards (default: keep it)")
+                    help="set this meeting to remove its buffered audio afterwards (--keep-audio wins)")
     sp.add_argument("--final-model", help="transcribe the kept audio again with this model (e.g. small.en)")
     sp.add_argument("--no-final-transcribe", action="store_true",
                     help="keep the live text even if Settings turns the second transcription on")
