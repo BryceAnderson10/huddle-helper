@@ -15,13 +15,11 @@ from .helpers import make_meeting
 
 
 def final_pass(**kw):
-    from huddle_helper.final_pass import FinalPass
-
     settings = kw.pop("settings", None) or config.Settings()
     kw.setdefault("diarizer_factory", FakeDiarizer)
     kw.setdefault("embedder_factory", None)
     kw.setdefault("transcriber_factory", None)
-    return FinalPass(settings, **kw)
+    return fp.FinalPass(settings, **kw)
 
 
 def test_progress_never_goes_back_with_the_second_transcription_on(tmp_path):
@@ -34,6 +32,32 @@ def test_progress_never_goes_back_with_the_second_transcription_on(tmp_path):
     labels = [p.stage.label for p in seen]
     assert "Improving the transcript" in labels and "Identifying speakers (system)" in labels
     assert labels.index("Improving the transcript") < labels.index("Identifying speakers (system)")
+
+
+def test_progress_goes_forward_when_a_line_of_the_second_transcription_fails(tmp_path):
+    class FailsOnSecondLine(ScriptedTranscriber):
+        def transcribe(self, audio, prompt=None):
+            if self.calls:
+                raise RuntimeError("model broke")
+            return super().transcribe(audio, prompt)
+
+    folder = make_meeting_to_finalize(tmp_path)
+    seen = []
+    final_pass(transcriber_factory=FailsOnSecondLine).run(folder, seen.append)
+    overall = [p.overall for p in seen]
+    assert overall == sorted(overall) and overall[-1] == 1.0
+    assert folder.read_meta()["final_stats"]["retx_lines_kept_live"] == 1
+
+
+def test_the_shares_of_a_mic_only_or_weightless_plan():
+    mic = fp.Stage(fp.Step.SEPARATE, "mic")
+    only_mic = fp.ProgressPlan(("mic",), {"mic": 10.0})
+    assert only_mic.overall(mic, 0.5) == pytest.approx(0.87 / 2)
+    no_weights = fp.ProgressPlan(("mic", "system"), {"mic": 0.0, "system": 0.0})  # treated as equal
+    assert no_weights.overall(mic, 0.5) == pytest.approx(0.87 / 4)
+    open_stretch = fp.ProgressPlan.for_meeting({"shared_mic": [[0, 300_000], [3_600_000, None]],
+                                                "duration_s": 7200}, second_transcription=False)
+    assert open_stretch.weights == {"system": 7200, "mic": 300 + 3600}
 
 
 def test_without_the_second_transcription_progress_starts_at_speakers(tmp_path):
@@ -137,7 +161,7 @@ class FakeFinalPass:
 
         on_progress(PassProgress(folder.meeting_id, Stage(Step.SECOND_TRANSCRIPTION), 0.0, 0.0))
         self.during.append(self.app.live_state().progress)
-        on_progress(PassProgress(folder.meeting_id, Stage(Step.SEPARATE, "system"), 1.0, 0.9, 3.0, 1.0))
+        on_progress(PassProgress(folder.meeting_id, Stage(Step.SEPARATE, "system"), 0.5, 0.9, 3.0, 1.0))
         self.during.append((self.app.state.finalizing, self.app.state.finalize.label,
                             self.app.live_state().progress))
         try:
@@ -151,8 +175,6 @@ class FakeFinalPass:
 
 def run_in_app(tmp_path, fake):
     from huddle_helper import app
-
-    from .helpers import make_meeting
 
     folder = make_meeting(tmp_path, [("system", 0, 1000, "SPEAKER_01", "x.")], status=mt.STATUS_FAILED)
     notes = []
@@ -169,7 +191,7 @@ def run_in_app(tmp_path, fake):
 def test_the_app_shows_the_final_pass_progress_and_tells_when_it_is_ready(tmp_path):
     fake = FakeFinalPass()
     ctl, folder, notes = run_in_app(tmp_path, fake)
-    assert fake.during == [0.0, ("Identifying speakers (system) 100%", "Identifying speakers (system)", 0.9)]
+    assert fake.during == [0.0, ("Identifying speakers (system) 50%", "Identifying speakers (system)", 0.9)]
     assert notes == [f"Final transcript ready: {folder.meeting_id}"]
     assert ctl.state.finalize is None and ctl.state.finalizing == "" and ctl.state.finalize_queue == 0
 

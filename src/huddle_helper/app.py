@@ -558,16 +558,16 @@ class AppController:
         folder.merge_speakers({final_label: name})
         self._on_change()
 
-    # -- after-Stop pass ------------------------------------------------
+    # -- final pass ------------------------------------------------------
     def _finalize_worker(self) -> None:
         while True:
             folder: mt.MeetingFolder = self._jobs.get()
-            last = [0.0]
+            last = [0.0, None]  # when the window was last told, and of which stage
 
             def progress(p: PassProgress) -> None:
                 now = time.monotonic()
-                if now - last[0] > 0.5 or p.frac >= 1.0:
-                    last[0] = now
+                if now - last[0] > 0.5 or p.frac >= 1.0 or p.stage != last[1]:
+                    last[0], last[1] = now, p.stage
                     self._set(finalizing=f"{p.label} {p.frac:.0%}", finalize=p)
 
             try:

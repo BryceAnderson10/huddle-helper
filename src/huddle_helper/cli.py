@@ -5,7 +5,7 @@
     huddle-helper simulate --mic a.wav --system b.wav   run audio files through the full pipeline
     huddle-helper capture-spike --minutes 30            milestone 1: raw capture check
     huddle-helper bench --audio x.wav --models base.en,small.en   milestone 2: speed check
-    huddle-helper finalize <meeting folder>             re-run the after-Stop pass
+    huddle-helper finalize <meeting folder>             re-run the final pass
     huddle-helper recover                               close out meetings left by a crash
     huddle-helper tray --replay <meeting folder> [--out DIR] [--auto] [--keep-open] [--keep-audio] [--start-muted] [--no-window] [--open-latest] [--open-meetings]
     huddle-helper export <meeting folder> --format md|txt [--out FILE] [--times elapsed|clock] [--no-join]

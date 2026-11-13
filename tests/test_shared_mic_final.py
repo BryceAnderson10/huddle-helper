@@ -83,7 +83,7 @@ def build(tmp_path, lines=LINES, *, shared_mic=None, diarize_mic=True, tags=None
 
 def final(folder, embedder=ToneEmbedder):
     RecordingDiarizer.calls = []  # also when the pass never makes a diarizer
-    finalize_meeting(folder, RecordingDiarizer, keep_audio=False, embedder_factory=embedder)
+    finalize_meeting(folder, RecordingDiarizer, default_keep_audio=False, embedder_factory=embedder)
     return [(e["start_ms"], e["text"], e["speaker"]) for e in read_events(folder.final_path)
             if e["type"] == "segment"]
 

@@ -85,19 +85,19 @@ class ProgressPlan:
     def overall(self, stage: Stage, frac: float) -> float:
         """Fraction (0-1) of the whole pass done at ``frac`` of ``stage``. The write is the end."""
         frac = min(1.0, max(0.0, frac))
-        retx = SECOND_TRANSCRIPTION_SHARE if self.second_transcription else 0.0
+        second = SECOND_TRANSCRIPTION_SHARE if self.second_transcription else 0.0
         if stage.step is Step.SECOND_TRANSCRIPTION:
-            return retx * frac
-        speakers = 1.0 - retx
+            return second * frac
+        speakers = 1.0 - second
         if stage.step is Step.SEPARATE:
             w = [max(float((self.weights or {}).get(s, 1.0)), 0.0) for s in self.streams]
             if not any(w):
                 w = [1.0] * len(w)
             idx = self.streams.index(stage.stream) if stage.stream in self.streams else 0
             done = (sum(w[:idx]) + (w[idx] if w else 0.0) * frac) / (sum(w) or 1.0)
-            return retx + speakers * DIARIZE_SHARE * done
+            return second + speakers * DIARIZE_SHARE * done
         if stage.step is Step.GROUP:
-            base = retx + (speakers * DIARIZE_SHARE if self.streams else 0.0)
+            base = second + (speakers * DIARIZE_SHARE if self.streams else 0.0)
             return base + (1.0 - base) * frac
         return 1.0
 
@@ -144,6 +144,8 @@ _FROM_SETTINGS = object()  # a factory argument left out: build the real model f
 
 
 class FinalPass:
+    """The final pass with its models, built from Settings; ``run`` does one meeting."""
+
     def __init__(self, settings: config.Settings, *, busy: Callable[[], bool] = lambda: False,
                  diarizer_factory=_FROM_SETTINGS, embedder_factory=_FROM_SETTINGS,
                  transcriber_factory=_FROM_SETTINGS, clock: Callable[[], float] = time.monotonic):
@@ -186,7 +188,7 @@ class FinalPass:
         t_start = self._clock()
         mid = folder.meeting_id
         second = self._transcriber_factory is not None
-        plan = ProgressPlan((), None, second)
+        plan = ProgressPlan(streams=(), second_transcription=second)
         length_s: float | None = None
         speeds: list[float] = []
         try:
@@ -198,12 +200,13 @@ class FinalPass:
             log.exception("Could not prepare the progress estimate for %s", mid)
 
         def progress(stage: Stage, frac: float) -> None:
+            frac = min(1.0, max(0.0, frac))
             overall = plan.overall(stage, frac)
             elapsed = self._clock() - t_start
-            report(PassProgress(mid, stage, min(1.0, max(0.0, frac)), overall, elapsed,
+            report(PassProgress(mid, stage, frac, overall, elapsed,
                                 estimate_remaining_s(overall, elapsed, length_s, speeds)))
 
         progress(plan.first_stage, 0.0)
-        return finalize_meeting(folder, self._diarizer_factory, keep_audio=self.settings.keep_audio,
+        return finalize_meeting(folder, self._diarizer_factory, default_keep_audio=self.settings.keep_audio,
                                 progress=progress, embedder_factory=self._embedder_factory,
                                 voice=self.settings.voice_profile(), transcriber_factory=self._transcriber_factory)

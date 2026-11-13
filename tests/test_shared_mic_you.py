@@ -58,7 +58,7 @@ ENOUGH = profile(you_min_s=10.0)  # the shipped cutoffs, with a reference short 
 
 
 def final(folder, voice=ENOUGH):
-    finalize_meeting(folder, RecordingDiarizer, keep_audio=False, embedder_factory=AmpEmbedder, voice=voice)
+    finalize_meeting(folder, RecordingDiarizer, default_keep_audio=False, embedder_factory=AmpEmbedder, voice=voice)
     return {e["text"]: e["speaker"] for e in read_events(folder.final_path) if e["type"] == "segment"}
 
 

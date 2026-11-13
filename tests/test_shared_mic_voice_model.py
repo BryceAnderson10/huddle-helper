@@ -115,7 +115,7 @@ def test_final_pass_separates_the_whole_stretch_including_lines_shown_as_you(tmp
 
     loader = GatedLoader()
     folder, _rec, _ = record(tmp_path, loader, [(True, 3000)], release_at=3)
-    finalize_meeting(folder, RecordingDiarizer, keep_audio=False, embedder_factory=ToneEmbedder)
+    finalize_meeting(folder, RecordingDiarizer, default_keep_audio=False, embedder_factory=ToneEmbedder)
     final = [(e["start_ms"], e["speaker"]) for e in read_events(folder.final_path)
              if e["type"] == "segment" and e["source"] == "mic"]
     assert final[0][1] == "You" and final[0][0] < 3000

@@ -47,7 +47,6 @@ from .writer import new_transcript_version, read_events, write_transcript
 log = logging.getLogger(__name__)
 
 
-
 class Step(Enum):
     """The stages of the final pass, in the order they run; the value is the on-screen wording."""
     SECOND_TRANSCRIPTION = "Improving the transcript"
@@ -680,14 +679,15 @@ def separated_streams(meta: dict) -> list[str]:
 
 
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
-                     keep_audio: bool, progress: Progress | None = None,
+                     default_keep_audio: bool, progress: Progress | None = None,
                      embedder_factory: Callable[[], Embedder] | None = None,
                      voice_threshold: float | None = None, voice: VoiceProfile | None = None,
                      transcriber_factory: Callable[[], FinalTranscriber] | None = None) -> int:
     """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count.
 
-    Run again on a done meeting it replaces the final transcript: DONE is cleared first. ``keep_audio``
-    is the Keep audio setting, used only when the meeting has no Keep audio choice of its own.
+    Run again on a done meeting it replaces the final transcript: DONE is cleared first.
+    ``default_keep_audio`` is the Keep audio setting, used only for a meeting without a Keep audio choice of
+    its own.
     With ``transcriber_factory`` the kept audio of both sources is transcribed a second time first
     (``retranscribe``); if that fails for any reason the pass carries on with the live text.
     Most callers want ``final_pass.FinalPass``, which wires the models and reports overall progress."""
@@ -816,7 +816,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     except Exception:  # noqa: BLE001 - the transcript is done; names can be given again in the window
         log.exception("Could not write speaker names for %s", folder.meeting_id)
 
-    _remove_audio(folder, keep_audio)
+    _remove_audio(folder, default_keep_audio)
     took = time.perf_counter() - t_start
     final_stats = {"took_s": round(took, 2), "audio_s": round(audio_s, 2) if audio_s is not None else None,
                    "speed": round(took / audio_s, 2) if audio_s else None,
