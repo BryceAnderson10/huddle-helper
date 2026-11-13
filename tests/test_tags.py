@@ -14,6 +14,8 @@ from huddle_helper.finalize import append_words, finalize_meeting, label_voices
 from huddle_helper.segments import Segment, Word
 from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event, read_events
 
+from .helpers import no_wait
+
 
 def sp(label, name, at="t"):
     return {"type": "tag", "at": at, "scope": "speaker", "label": label, "name": name}
@@ -425,7 +427,7 @@ def test_crash_recovery_takes_the_same_path_and_keeps_the_names(tmp_path):
     f = build(tmp_path, [sp("SPEAKER_01", "Ana"), ln("system", 3000, "Ben", 5000)], name="Crash")
     f.update_meta(status=mt.STATUS_RECORDING, clean_exit=None)  # the app died while recording
     done = housekeeping.recover(tmp_path, lambda folder: finalize_meeting(
-        folder, NoTurns, keep_audio=False, embedder_factory=AmpEmbedder))
+        folder, NoTurns, keep_audio=False, embedder_factory=AmpEmbedder), wait=no_wait)
     assert done == [f.meeting_id] and f.is_done
     assert f.read_meta()["status"] == mt.STATUS_INTERRUPTED or f.read_meta()["status"] == mt.STATUS_COMPLETE
     assert f.read_speakers() == {"SPEAKER_01": "Ana", "SPEAKER_02": "Ben"}

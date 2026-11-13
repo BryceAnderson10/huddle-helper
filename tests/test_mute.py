@@ -10,7 +10,7 @@ from huddle_helper.vad import EnergyScorer
 from huddle_helper.writer import read_events
 
 from .conftest import ToneEmbedder, ToneTranscriber, silence, tone
-from .helpers import ManualCapture, make_meeting
+from .helpers import ManualCapture, make_meeting, no_wait
 
 def start(tmp_path, **kw):
     holder = {}
@@ -151,7 +151,7 @@ def crashed_while_muted(tmp_path, *, audio_s: float | None, last_line_end: int =
 
 def test_recovery_closes_an_open_mute_at_the_end_of_the_audio(tmp_path):
     folder = crashed_while_muted(tmp_path, audio_s=45.5)
-    assert housekeeping.recover(tmp_path, None) == [folder.meeting_id]
+    assert housekeeping.recover(tmp_path, None, wait=no_wait) == [folder.meeting_id]
     meta = folder.read_meta()
     assert meta["mic_muted_since_ms"] is None and meta["status"] == "interrupted" and meta["clean_exit"] is False
     assert meta["gaps"][-1] == {"source": "mic", "start_ms": 20_000, "end_ms": 45_500, "reason": "muted"}
@@ -161,12 +161,12 @@ def test_recovery_closes_an_open_mute_at_the_end_of_the_audio(tmp_path):
 
 def test_recovery_without_audio_uses_the_last_line_and_leaves_closed_meetings_alone(tmp_path):
     folder = crashed_while_muted(tmp_path, audio_s=None, last_line_end=41_000)
-    housekeeping.recover(tmp_path, None)
+    housekeeping.recover(tmp_path, None, wait=no_wait)
     assert folder.read_meta()["gaps"][-1]["end_ms"] == 41_000 and folder.read_meta()["mic_muted_since_ms"] is None
     # nothing open: nothing added
     other = make_meeting(tmp_path / "o", [], status=mt.STATUS_RECORDING)
     other.update_meta(clean_exit=None, mic_muted_since_ms=None)
-    housekeeping.recover(tmp_path / "o", None)
+    housekeeping.recover(tmp_path / "o", None, wait=no_wait)
     assert other.read_meta()["gaps"] == []
 
 
