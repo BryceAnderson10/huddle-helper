@@ -1,8 +1,8 @@
 """The Meetings list (L29-L31): one ``MeetingInfo`` per meeting folder, and deleting a meeting or its audio.
 
 No Tk. ``scan`` is cheap on a large folder because a meeting is re-read only when something that
-feeds its row changed (``meta.json``, ``DONE``, the final transcript, ``speakers.json`` or
-``marks.jsonl``, by modification time); the sizes of ``audio\\`` and of the whole folder are measured
+feeds its row changed (``meta.json``, ``DONE``, the final transcript, ``speakers.json``,
+``marks.jsonl`` or ``heartbeat.json``, by modification time); the sizes of ``audio\\`` and of the whole folder are measured
 by one worker thread of the ``ScanCache`` and show up in a later scan (``audio_bytes`` is None until then).
 The window runs ``scan`` on its own worker thread so even the first pass never blocks Tk.
 
@@ -110,16 +110,17 @@ def read_info(folder: mt.MeetingFolder) -> MeetingInfo | None:
         meta = folder.read_meta()
     except (OSError, ValueError):
         return None
+    if not isinstance(meta, dict):
+        return None
     try:
         marks = len(marks_mod.reduce(read_events(folder.marks_path))) if folder.marks_path.exists() else 0
     except (OSError, ValueError):
         marks = int(meta.get("marks") or 0)
-    if not isinstance(meta, dict):
-        return None
     return MeetingInfo(
         id=folder.meeting_id, path=folder.path, title=str(meta.get("title") or folder.meeting_id),
         started_at=str(meta.get("started_at") or ""), length_s=meeting_length_s(meta),
-        files=status_mod.read(folder, meta), speakers=_count_speakers(folder), marks=marks, has_audio=folder.audio_dir.is_dir(),
+        files=status_mod.read(folder, meta), speakers=_count_speakers(folder), marks=marks,
+        has_audio=folder.audio_dir.is_dir(),
         audio_bytes=None, total_bytes=None, error=str(meta.get("error") or ""),
         finished_at=str(meta.get("final_written_at") or meta.get("ended_at") or ""),
         done_at=(_mtime(folder.done_path) or 0) / 1e9 or None)
@@ -283,7 +284,7 @@ _FILTER_OF = {RECORDING: "Recording", PROCESSING: "Processing", QUEUED: "Process
 class StatusView:
     kind: str
     text: str
-    busy: bool  # recording, queued or processing (here or in another process): not deletable
+    busy: bool  # recording, queued or processing, here or in another process: not deletable
 
 
 def status_of(info: MeetingInfo, live: LiveState | None = None, now: datetime | None = None) -> StatusView:
@@ -294,8 +295,9 @@ def status_of(info: MeetingInfo, live: LiveState | None = None, now: datetime | 
     if s in (status_mod.RECORDING, status_mod.STOPPING):
         return StatusView(RECORDING, "Recording", True)
     if s == status_mod.PROCESSING:
-        pct = f" {live.progress:.0%}" if shown.held and live.progress is not None else ""
-        return StatusView(PROCESSING, f"Processing{pct}", True)
+        pct = f" {live.progress:.0%}" if shown.here and live.progress is not None else ""
+        # busy while a process holds it: this app, or another with a fresh heartbeat (ADR 0002)
+        return StatusView(PROCESSING, f"Processing{pct}", shown.here or info.files.heartbeat_fresh(now))
     if s == status_mod.RETRY_WAITING:
         return StatusView(RETRY_WAITING, "Retry queued until recording stops", True)
     if s == status_mod.QUEUED:

@@ -126,6 +126,10 @@ def test_status_mapping(tmp_path):
     cases.append((i, library.LiveState(queued=frozenset({i.id}), finalizing=i.id, progress=0.6), library.PROCESSING,
                   "Processing 60%", True))
     cases.append((i, library.LiveState(recording=i.id), library.RECORDING, "Recording", True))
+    f, i = one(tmp_path / "p", status=mt.STATUS_PROCESSING, final=None)
+    cases.append((i, None, library.PROCESSING, "Processing", False))  # no process holds it: deletable
+    f.beat()
+    cases.append((library.scan(tmp_path / "p")[0], None, library.PROCESSING, "Processing", True))
     f, i = one(tmp_path / "c", status=mt.STATUS_RECORDING, final=None)
     f.beat()
     i = library.scan(tmp_path / "c")[0]

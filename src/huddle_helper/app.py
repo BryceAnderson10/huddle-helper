@@ -19,6 +19,7 @@ from typing import Callable
 from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .recorder import Components, Recorder, Status, load_components
 from .shared_mic import SharedMic
+from . import status as status_mod
 from .transcribe import final_transcriber_factory
 
 log = logging.getLogger(__name__)
@@ -754,7 +755,7 @@ class AppController:
             meta = folder.read_meta()
         except (library.DeleteRefused, OSError, ValueError):
             return "refused"
-        if self.is_busy(meeting_id) or folder.is_done or meta.get("status") != mt.STATUS_FAILED:
+        if self.is_busy(meeting_id) or folder.is_done or status_mod.read(folder, meta).status() != status_mod.FAILED:
             return "refused"
         with self._jobs_lock:
             if self._recording_now():

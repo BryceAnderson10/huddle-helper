@@ -68,7 +68,7 @@ class Files:
 
     @property
     def recovered(self) -> bool:
-        return recovered({"status": self.meta_status, "clean_exit": self.clean_exit})
+        return self.meta_status == INTERRUPTED or self.clean_exit is False
 
 
 def heartbeat_state(file_status: str) -> str:
@@ -99,24 +99,26 @@ def from_meta(meta: dict, *, done: bool, last_beat: datetime | None) -> Files:
 @dataclass(frozen=True)
 class Shown:
     """A meeting's status as the app shows it (``shown``)."""
-    status: str  # held here: RECORDING, STOPPING, PROCESSING, RETRY_WAITING, QUEUED; else COMPLETE once
+    status: str  # this app's: RECORDING, STOPPING, PROCESSING, RETRY_WAITING, QUEUED; else COMPLETE once
     #              DONE exists, else the file status
-    held: bool  # this app is recording, stopping, processing or queueing it
+    here: bool  # this app is recording, stopping, processing or queueing it (another process may hold
+    #             a meeting too: ``Files.heartbeat_fresh``, ADR 0002)
     recovered: bool  # see ``recovered``
 
 
 def shown(files: Files, meeting_id: str, live=None, now: datetime | None = None) -> Shown:
     """The file status with what this app is doing laid over it. ``live`` is a ``library.LiveState``
-    (``AppController.live_state()``), or None outside the app. One precedence rule: recording here,
+    (``AppController.live_state()``; read by its fields, as library imports this module), or None
+    outside the app. One precedence rule: recording here,
     stopping, its final pass running, a retry waiting for the recording to stop, queued for the final
     pass, finished (``DONE``), then the file status. The app's state wins because ``meta.json`` lags it."""
-    held = _held(meeting_id, live)
-    if held is not None:
-        return Shown(held, True, files.recovered)
+    mine = _this_app(meeting_id, live)
+    if mine is not None:
+        return Shown(mine, True, files.recovered)
     return Shown(COMPLETE if files.done else files.status(now), False, files.recovered)
 
 
-def _held(meeting_id: str, live) -> str | None:
+def _this_app(meeting_id: str, live) -> str | None:
     if live is None:
         return None
     if meeting_id == live.recording:

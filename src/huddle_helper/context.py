@@ -99,7 +99,8 @@ def _check_readable(path: Path) -> None:
 # -- meeting summary -----------------------------------------------------------------------------------
 def _heartbeat(files: status_mod.Files, state: str, now: datetime) -> dict:
     beat = files.last_beat
-    return {"state": status_mod.heartbeat_state(state), "last_beat": beat.isoformat(timespec="milliseconds") if beat else None,
+    return {"state": status_mod.heartbeat_state(state),
+            "last_beat": beat.isoformat(timespec="milliseconds") if beat else None,
             "age_s": round((now - beat).total_seconds(), 1) if beat else None}
 
 

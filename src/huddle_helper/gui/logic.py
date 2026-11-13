@@ -111,7 +111,7 @@ def meeting_phase(meeting_id: str, model: TranscriptModel, state) -> str:
     shown = status.shown(files, meeting_id, _app_live(state))
     if shown.status == status.COMPLETE:
         return (RECOVERED if shown.recovered else FINAL) if model.final else LIVE_ONLY
-    return _PHASE_OF.get((shown.status, shown.held), LIVE_ONLY)
+    return _PHASE_OF.get((shown.status, shown.here), LIVE_ONLY)
 
 
 _PHASE_OF = {

@@ -115,8 +115,8 @@ def shown(f, live=None):
     return status.shown(f, "m", live)
 
 
-def test_with_nothing_held_here_the_file_status_shows():
-    assert shown(files()) == status.Shown(status.RECORDING, held=False, recovered=False)
+def test_with_nothing_held_by_this_app_the_file_status_shows():
+    assert shown(files()) == status.Shown(status.RECORDING, here=False, recovered=False)
     assert shown(files(beat_age_s=None)).status == status.RECORDER_DIED
     assert shown(files("failed")).status == status.FAILED
     assert shown(files("processing"), library.LiveState()).status == status.PROCESSING
@@ -124,7 +124,7 @@ def test_with_nothing_held_here_the_file_status_shows():
 
 def test_done_shows_as_complete_whatever_the_meta_status():
     s = shown(files("interrupted", done=True, clean_exit=False))
-    assert s == status.Shown(status.COMPLETE, held=False, recovered=True)
+    assert s == status.Shown(status.COMPLETE, here=False, recovered=True)
 
 
 @pytest.mark.parametrize("live, expected", [
@@ -138,12 +138,12 @@ def test_what_the_app_is_doing_wins_over_the_files(live, expected):
     # meta.json lags the app by a moment: a meeting this app has stopped may still say recording, and a
     # retried one still says failed
     for f in (files("recording", beat_age_s=None), files("failed"), files("processing")):
-        assert shown(f, live) == status.Shown(expected, held=True, recovered=False)
+        assert shown(f, live) == status.Shown(expected, here=True, recovered=False)
 
 
 def test_the_app_state_of_another_meeting_does_not_count():
     live = library.LiveState(recording="other", finalizing="other2", queued=frozenset({"other2"}))
-    assert shown(files("failed"), live) == status.Shown(status.FAILED, held=False, recovered=False)
+    assert shown(files("failed"), live) == status.Shown(status.FAILED, here=False, recovered=False)
 
 
 def test_recovered_is_carried_through_the_overlay():
