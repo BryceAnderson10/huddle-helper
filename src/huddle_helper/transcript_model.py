@@ -59,8 +59,8 @@ from datetime import datetime, timedelta
 from typing import Iterable, Union
 
 from . import marks as marks_mod, tags as tags_mod
-from . import meeting as mt
 from .meeting import MeetingFolder
+from .shared_mic import SharedMic
 from .writer import read_events
 
 log = logging.getLogger(__name__)
@@ -206,23 +206,9 @@ def _sort_key(row: Row) -> tuple:
     return (row.at_ms, 2, row.id)
 
 
-STOP_MARGIN_MS = 1000
-
-
 def shared_mic_dividers(meta: dict) -> list[DividerRow]:
-    """The live view's dividers for the meeting's shared mic stretches: one where each starts and one
-    where each ends. The end Stop gave an open stretch (the meeting's end, ``duration_s``) is not a
-    toggle and gets none."""
-    try:
-        end = int(float(meta["duration_s"]) * 1000)
-    except (KeyError, TypeError, ValueError):
-        end = None
-    out = []
-    for a, b in mt.shared_mic_stretches(meta):
-        out.append(DividerRow(a, True))
-        if b is not None and (end is None or b < end - STOP_MARGIN_MS):
-            out.append(DividerRow(b, False))
-    return out
+    """The live view's dividers for the meeting's shared mic stretches (``SharedMic.dividers``)."""
+    return [DividerRow(at, on) for at, on in SharedMic.from_meta(meta).dividers()]
 
 
 reduce_marks = marks_mod.reduce  # the reducer lives in marks.py; kept under its old name

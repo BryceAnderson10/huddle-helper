@@ -771,7 +771,8 @@ class MainWindow:
     def _toggle_shared(self) -> None:
         if self.session is not None:
             self.app.set_shared_mic(bool(self.shared_var.get()))
-            self._tick_slow()  # read the new meta now: the box, the divider and the mute tooltip follow it
+            self._tick_slow()  # the divider now, from the new meta
+            self._refresh_all()  # the box and the mute tooltip now, from the recorder's live status
 
     def _toggle_keep(self) -> None:
         if self.session is not None:

@@ -257,12 +257,13 @@ def test_mute_bar_and_button_follow_the_displayed_meeting(tmp_path):
     assert not logic.mute_button_view(mid, m, stopping).visible
 
 
-def test_in_room_mode_warns_that_everyone_is_muted(tmp_path):
+def test_open_shared_mic_warns_that_everyone_is_muted(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
-    m.set_meta({**m.meta, "settings": {"diarize_mic": True}})
     mid = m.meeting_id
-    assert "Everyone in the room" in logic.mute_bar_view(mid, m, muted_state(mid)).text
-    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
+    st = muted_state(mid)
+    st.recording.shared_mic = True  # a shared mic stretch is open (the recorder's live status)
+    assert "Everyone in the room" in logic.mute_bar_view(mid, m, st).text
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, st).tooltip
 
 
 def test_bookmark_items_list_the_four_types_with_symbol_and_hotkey():
