@@ -83,3 +83,12 @@ def test_the_in_process_skip_list_still_wins_over_a_stale_heartbeat(tmp_path):
     waits = Waits()
     assert housekeeping.recover(tmp_path / "meetings", None, skip={folder.meeting_id}, wait=waits) == []
     assert waits.calls == [] and folder.read_meta()["status"] == mt.STATUS_RECORDING
+
+
+def test_a_meeting_stopped_during_the_recheck_is_left_to_the_process_that_stopped_it(tmp_path):
+    """Its recorder looked dead, but by the re-check it had moved on to its final pass: alive after all."""
+    folder = crashed_meeting(tmp_path, beat_age_s=hb.STALE_AFTER_S + 5)
+    waits = Waits(then=lambda: folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True))
+    finalized = []
+    assert housekeeping.recover(tmp_path / "meetings", finalized.append, wait=waits) == []
+    assert finalized == [] and folder.read_meta()["status"] == mt.STATUS_PROCESSING

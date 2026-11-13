@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 
-from huddle_helper import meeting as mt
+from huddle_helper import heartbeat as hb, meeting as mt
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.segments import Segment
 from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event
@@ -116,10 +116,6 @@ def no_wait(_seconds: float) -> None:
     """Recover's re-check of a stale heartbeat, without the real one-beat sleep."""
 
 
-def crash(folder) -> None:
-    """Leave ``folder`` as a crash does: its last heartbeat long stale (status stays as it is)."""
-    from datetime import timedelta
-
-    from huddle_helper import meeting as mt
-
-    folder.beat(mt.now_local() - timedelta(minutes=5))
+def stale_heartbeat(folder) -> None:
+    """Leave ``folder``'s last heartbeat well past stale, as a crash does (its status stays as it is)."""
+    folder.beat(mt.now_local() - timedelta(seconds=2 * hb.STALE_AFTER_S))

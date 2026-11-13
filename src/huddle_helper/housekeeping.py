@@ -136,16 +136,22 @@ def _without_active(folders: list[mt.MeetingFolder], wait: Callable[[float], Non
 
     A stale heartbeat may only mean the PC has just woken from sleep, so the meetings whose recorder
     looks dead are asked about again once, after one beat interval (a single wait shared by all of
-    them, and none when there are none), and kept only if they still look dead. A meeting whose
-    ``meta.json`` cannot be read is left for the next recover.
+    them, and none when there are none), and kept only if they still look dead: one that has beaten
+    again, or moved on from ``recording`` in the meantime, has a live process behind it. A meeting
+    whose ``meta.json`` cannot be read right now is left for the next recover.
     """
     states = {f.meeting_id: _liveness(f) for f in folders}
-    if any(state == hb.RECORDER_DIED for state in states.values()):
+    stale = [f for f in folders if states[f.meeting_id] == hb.RECORDER_DIED]
+    dead: set[str] = set()
+    if stale:
         wait(hb.INTERVAL_S)
-        for f in folders:
-            if states[f.meeting_id] == hb.RECORDER_DIED:
-                states[f.meeting_id] = _liveness(f)
-    return [f for f in folders if states[f.meeting_id] not in (hb.ACTIVE, None)]
+        dead = {f.meeting_id for f in stale if _liveness(f) == hb.RECORDER_DIED}
+    keep = []
+    for f in folders:
+        state = states[f.meeting_id]
+        if state == hb.NOT_RECORDING or (state == hb.RECORDER_DIED and f.meeting_id in dead):
+            keep.append(f)
+    return keep
 
 
 def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | None = None,
