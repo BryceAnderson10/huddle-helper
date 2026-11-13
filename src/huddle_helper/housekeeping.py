@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import marks as marks_mod, meeting as mt
+from . import heartbeat as hb, marks as marks_mod, meeting as mt
 from .writer import dumps, meeting_end_event, read_events
 
 log = logging.getLogger(__name__)
@@ -123,16 +123,48 @@ def find_unfinished(meetings_dir: Path) -> list[mt.MeetingFolder]:
     return out
 
 
+def _liveness(folder: mt.MeetingFolder) -> str | None:
+    """``heartbeat.liveness``, or None when ``meta.json`` cannot be read right now."""
+    try:
+        return hb.liveness(folder)
+    except (OSError, ValueError):
+        return None
+
+
+def _without_active(folders: list[mt.MeetingFolder], wait: Callable[[float], None]) -> list[mt.MeetingFolder]:
+    """Drop the meetings another recorder is still writing: status ``recording`` with a fresh heartbeat.
+
+    A stale heartbeat may only mean the PC has just woken from sleep, so the meetings whose recorder
+    looks dead are asked about again once, after one beat interval (a single wait shared by all of
+    them, and none when there are none), and kept only if they still look dead: one that has beaten
+    again, or moved on from ``recording`` in the meantime, has a live process behind it. A meeting
+    whose ``meta.json`` cannot be read right now is left for the next recover.
+    """
+    states = {f.meeting_id: _liveness(f) for f in folders}
+    stale = [f for f in folders if states[f.meeting_id] == hb.RECORDER_DIED]
+    dead: set[str] = set()
+    if stale:
+        wait(hb.INTERVAL_S)
+        dead = {f.meeting_id for f in stale if _liveness(f) == hb.RECORDER_DIED}
+    keep = []
+    for f in folders:
+        state = states[f.meeting_id]
+        if state == hb.NOT_RECORDING or (state == hb.RECORDER_DIED and f.meeting_id in dead):
+            keep.append(f)
+    return keep
+
+
 def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | None = None,
-            skip: set[str] | None = None) -> list[str]:
+            skip: set[str] | None = None, wait: Callable[[float], None] = time.sleep) -> list[str]:
     """Close out meetings left unfinished by a crash, then finalize them.
 
-    ``skip`` holds meeting ids that are live in this process and must be left alone.
+    ``skip`` holds meeting ids that are live in this process and must be left alone. A meeting another
+    process is still recording (fresh heartbeat) is left alone too; ``wait`` is the pause before a
+    stale heartbeat is checked again (see ``_without_active``).
     """
     recovered = []
-    for folder in find_unfinished(meetings_dir):
-        if skip and folder.meeting_id in skip:
-            continue
+    candidates = [f for f in find_unfinished(meetings_dir) if not (skip and f.meeting_id in skip)]
+    for folder in _without_active(candidates, wait):
         meta = folder.read_meta()
         try:
             if meta.get("status") == mt.STATUS_RECORDING or meta.get("clean_exit") is not True:
