@@ -18,6 +18,7 @@ from typing import Callable
 from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .final_pass import FinalPass, PassProgress
 from .recorder import Components, Recorder, Status, load_components
+from . import status as status_mod
 
 log = logging.getLogger(__name__)
 
@@ -604,7 +605,8 @@ class AppController:
                     or (rec is not None and rec.meeting_id == meeting_id))
 
     def live_state(self) -> library.LiveState:
-        """What the Meetings view needs to label each row (see ``library.status_of``)."""
+        """What this app is doing with its meetings, for ``status.shown`` (the Meetings view's rows and the
+        Transcript window's phase)."""
         rec = self.current_folder()
         fin = self.state.finalize
         with self._jobs_lock:
@@ -613,7 +615,8 @@ class AppController:
                 finalizing=fin.meeting_id if fin is not None else None,
                 progress=fin.overall if fin is not None else None,
                 queued=frozenset(self._queued),
-                waiting=frozenset(f.meeting_id for f in self._retry_waiting))
+                waiting=frozenset(f.meeting_id for f in self._retry_waiting),
+                stopping=rec is not None and self.state.phase == "stopping")
 
     def _recording_now(self) -> bool:
         return self._recorder is not None or self.state.phase in ("recording", "stopping")
@@ -628,7 +631,7 @@ class AppController:
             meta = folder.read_meta()
         except (library.DeleteRefused, OSError, ValueError):
             return "refused"
-        if self.is_busy(meeting_id) or folder.is_done or meta.get("status") != mt.STATUS_FAILED:
+        if self.is_busy(meeting_id) or folder.is_done or status_mod.read(folder, meta).status() != status_mod.FAILED:
             return "refused"
         with self._jobs_lock:
             if self._recording_now():

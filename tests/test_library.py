@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from huddle_helper import library, meeting as mt
+from huddle_helper import library, meeting as mt, status
 
 from .helpers import STARTED_AT, make_meeting
 
@@ -42,7 +42,7 @@ def test_scan_reads_rows_newest_first_and_counts_people_and_marks(tmp_path):
     infos = library.scan(tmp_path)
     assert [i.title for i in infos] == ["Newer", "Older"]
     older = infos[1]
-    assert older.speakers == 3 and older.marks == 1 and older.done and older.status == mt.STATUS_COMPLETE
+    assert older.speakers == 3 and older.marks == 1 and older.done and older.files.status() == status.COMPLETE
     assert infos[0].speakers is None and infos[0].marks == 0 and not infos[0].done
     # two labels named the same person count once
     a.write_speakers({"SPEAKER_01": "Dana", "SPEAKER_02": "Dana"})
@@ -126,8 +126,17 @@ def test_status_mapping(tmp_path):
     cases.append((i, library.LiveState(queued=frozenset({i.id}), finalizing=i.id, progress=0.6), library.PROCESSING,
                   "Processing 60%", True))
     cases.append((i, library.LiveState(recording=i.id), library.RECORDING, "Recording", True))
+    f, i = one(tmp_path / "p", status=mt.STATUS_PROCESSING, final=None)
+    cases.append((i, None, library.PROCESSING, "Processing", False))  # no process holds it: deletable
+    f.beat()
+    cases.append((library.scan(tmp_path / "p")[0], None, library.PROCESSING, "Processing", True))
     f, i = one(tmp_path / "c", status=mt.STATUS_RECORDING, final=None)
-    cases.append((i, None, library.UNFINISHED, "Not finished", False))
+    f.beat()
+    i = library.scan(tmp_path / "c")[0]
+    cases.append((i, None, library.RECORDING, "Recording", True))  # a fresh heartbeat: another process records it
+    f.heartbeat_path.unlink()
+    cases.append((library.scan(tmp_path / "c")[0], None, library.UNFINISHED, "Not finished", False))  # recorder died
+    cases.append((i, library.LiveState(recording=i.id, stopping=True), library.RECORDING, "Recording", True))
     f, i = one(tmp_path / "d", status=mt.STATUS_INTERRUPTED, final=None)
     cases.append((i, None, library.UNFINISHED, "Interrupted", False))
     for info, live, kind, text, busy in cases:
@@ -247,7 +256,8 @@ def test_finished_within_and_hours_since():
     now = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
 
     def mk(at, done=True):
-        return library.MeetingInfo("m", None, "t", "", None, "complete", done, False, None, 0, False, None, None, "", at)
+        files = status.Files(meta_status="complete", clean_exit=True, done=done, last_beat=None)
+        return library.MeetingInfo("m", None, "t", "", None, files, None, 0, False, None, None, "", at)
 
     assert library.finished_within(mk("2026-01-15T00:30:00+00:00"), now=now)
     assert not library.finished_within(mk("2026-01-14T11:00:00+00:00"), now=now)

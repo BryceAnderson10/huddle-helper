@@ -11,7 +11,8 @@ just the same. It stops when Stop has set ``meta.json`` to ``processing``; a cra
     NOT_RECORDING  any other status: stopped, in its final pass, done, interrupted or failed
 
 A separate small file, rather than a field in ``meta.json``, so every ``meta.json`` watcher is not woken
-every two seconds. See docs/OUTPUT_SPEC.md, "heartbeat.json".
+every two seconds. See docs/OUTPUT_SPEC.md, "heartbeat.json". A meeting's status as a whole (the heartbeat
+together with ``meta.json`` and ``DONE``) is worked out in ``status``.
 """
 
 from __future__ import annotations
@@ -81,14 +82,9 @@ def last_beat(folder: mt.MeetingFolder) -> datetime | None:
 
 def liveness(folder: mt.MeetingFolder, now: datetime | None = None,
              stale_after_s: float = STALE_AFTER_S) -> str:
-    """``ACTIVE``, ``RECORDER_DIED`` or ``NOT_RECORDING`` (see the module docstring). Raises OSError or
-    ValueError when ``meta.json`` cannot be read right now (it is being replaced): ask again."""
-    if folder.read_meta().get("status") != mt.STATUS_RECORDING:
-        return NOT_RECORDING
-    at = last_beat(folder)
-    if at is None:
-        return RECORDER_DIED
-    age = ((now or mt.now_local()) - at).total_seconds()
-    # A beat from the future counts as stale too: a clock set back after a crash must not keep a dead
-    # meeting looking alive.
-    return ACTIVE if abs(age) <= stale_after_s else RECORDER_DIED
+    """``ACTIVE``, ``RECORDER_DIED`` or ``NOT_RECORDING`` (see the module docstring), from
+    ``status.read``. Raises OSError or ValueError when ``meta.json`` cannot be read right now (it is being
+    replaced): ask again. Only recover still asks this way; the rest of the app reads ``status``."""
+    from . import status  # status reads the heartbeat through this module
+
+    return status.heartbeat_state(status.read(folder).status(now, stale_after_s))
