@@ -2,7 +2,7 @@
 
 * ``normalize_ops``     how the view applies a model change list
 * ``line_time`` ``gap_text`` ``mark_text`` ``short_name``   row texts
-* ``meeting_phase``     recording / stopping / processing / ... for the displayed meeting
+* ``meeting_phase``     recording / stopping / processing / ... for the displayed meeting (``status.shown``)
 * ``header_view`` ``notice_view`` ``status_view``   header, notice bar and status bar contents
 * ``format_eta`` ``level_bars``
 * ``list_meetings`` ``default_meeting``   the "Open meeting..." picker and which meeting to show
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from .. import diarize, export as export_mod, meeting as mt, models
+from .. import diarize, export as export_mod, heartbeat as hb, library, meeting as mt, models, status
 from ..mute_reminder import duration_text
 from .. import marks as marks_mod, playback, playsequence
 from ..transcript_model import DividerRow, GapRow, LineRow, MarkRow, Op, Reset, TranscriptModel, fmt_elapsed
@@ -89,28 +89,37 @@ def mark_text(row: MarkRow, model: TranscriptModel) -> str:
 
 RECORDING, STOPPING, PROCESSING, WAITING = "recording", "stopping", "processing", "waiting"
 FINAL, RECOVERED, FAILED, UNFINISHED, LIVE_ONLY = "final", "recovered", "failed", "unfinished", "live"
+ELSEWHERE = "elsewhere"  # recording, but not by this app (a fresh heartbeat: ``huddle-helper record``)
+
+
+def _app_live(state) -> library.LiveState | None:
+    """What ``AppState`` tells of this app's meetings (the window does not see the final pass queue: a
+    queued meeting's own status, ``processing``, shows it waiting)."""
+    if state is None:
+        return None
+    fin = getattr(state, "finalize", None)
+    return library.LiveState(
+        recording=state.last_meeting if state.phase in ("recording", "stopping") else None,
+        stopping=state.phase == "stopping", finalizing=fin.meeting_id if fin is not None else None)
 
 
 def meeting_phase(meeting_id: str, model: TranscriptModel, state) -> str:
-    """``state`` is ``AppState`` (phase, last_meeting, finalize)."""
-    if state is not None:
-        if state.last_meeting == meeting_id and state.phase == "recording":
-            return RECORDING
-        if state.last_meeting == meeting_id and state.phase == "stopping":
-            return STOPPING
-        fin = getattr(state, "finalize", None)
-        if fin is not None and fin.meeting_id == meeting_id:
-            return PROCESSING
-    status = model.status
-    if model.final:
-        return RECOVERED if (model.interrupted or model.meta.get("clean_exit") is False) else FINAL
-    if status == mt.STATUS_FAILED:
-        return FAILED
-    if status == mt.STATUS_PROCESSING:
-        return WAITING
-    if status in (mt.STATUS_RECORDING, mt.STATUS_INTERRUPTED):
-        return UNFINISHED
-    return LIVE_ONLY
+    """``status.shown`` for the displayed meeting as the window shows it: finished once its final
+    transcript is loaded. ``state`` is ``AppState`` (phase, last_meeting, finalize)."""
+    beat = hb.last_beat(model.folder) if model.folder is not None else None
+    files = status.from_meta(model.meta, done=model.final, last_beat=beat)
+    shown = status.shown(files, meeting_id, _app_live(state))
+    if shown.status == status.COMPLETE:
+        return (RECOVERED if shown.recovered else FINAL) if model.final else LIVE_ONLY
+    return _PHASE_OF.get((shown.status, shown.here), LIVE_ONLY)
+
+
+_PHASE_OF = {
+    (status.RECORDING, True): RECORDING, (status.RECORDING, False): ELSEWHERE,
+    (status.STOPPING, True): STOPPING, (status.PROCESSING, True): PROCESSING,
+    (status.PROCESSING, False): WAITING, (status.QUEUED, True): WAITING, (status.RETRY_WAITING, True): WAITING,
+    (status.FAILED, False): FAILED, (status.RECORDER_DIED, False): UNFINISHED, (status.INTERRUPTED, False): UNFINISHED,
+}
 
 
 def elapsed_text(seconds: float) -> str:
@@ -142,6 +151,8 @@ def header_view(meeting_id: str, model: TranscriptModel, state) -> HeaderView:
         return HeaderView("busy", "Waiting for the final pass")
     if phase == FAILED:
         return HeaderView("error", "Final pass failed")
+    if phase == ELSEWHERE:
+        return HeaderView("recording", f"Recording elsewhere · {lines} · live")
     if phase == UNFINISHED:
         return HeaderView("idle", f"Not finished · {lines}")
     mins = f"{max(1, round(model.duration_ms / 60000))} min"
@@ -164,8 +175,8 @@ def notice_view(meeting_id: str, model: TranscriptModel, state) -> NoticeView | 
         err = str(model.meta.get("error") or "unknown error")
         return NoticeView(f"The final pass failed ({err}). Showing the live transcript; it can be "
                           "re-run with: huddle-helper finalize <folder>", "error")
-    if phase in (RECORDING, STOPPING, PROCESSING, WAITING, LIVE_ONLY, UNFINISHED):
-        tail = " after Stop." if phase in (RECORDING, STOPPING) else "."
+    if phase in (RECORDING, STOPPING, ELSEWHERE, PROCESSING, WAITING, LIVE_ONLY, UNFINISHED):
+        tail = " after Stop." if phase in (RECORDING, STOPPING, ELSEWHERE) else "."
         text = f"Provisional: speaker labels may change{tail}"
         problems = list(getattr(state, "hotkey_problems", None) or []) if phase == RECORDING else []
         if problems:
@@ -274,7 +285,7 @@ def status_view(meeting_id: str, model: TranscriptModel, state) -> StatusView:
                           f"Lag {rec.lag_s:.1f} s   Backlog {rec.backlog}", phase == RECORDING, True, muted)
     if phase == PROCESSING:
         fin = state.finalize
-        parts = [f"{fin.stage} {fin.frac:.0%}" if fin.frac > 0 else fin.stage]
+        parts = [f"{fin.label} {fin.frac:.0%}" if fin.frac > 0 else fin.label]
         if fin.overall > 0:
             parts.append(f"{fin.overall:.0%} overall")
         eta = format_eta(fin.eta_s)
@@ -307,9 +318,9 @@ class MuteBarView:
     emphasis: bool = False  # a "still muted" reminder came in the last REMIND_HIGHLIGHT_S: stronger colours
 
 
-def _in_room(model: TranscriptModel) -> bool:
-    """A shared mic stretch is open now: muting the mic mutes everyone on it."""
-    return mt.shared_mic_open(model.meta)
+def _shared_mic_open(state) -> bool:
+    """A shared mic stretch is open now (the recorder's live status): muting the mic mutes everyone on it."""
+    return bool(getattr(getattr(state, "recording", None), "shared_mic", False))
 
 
 REMIND_HIGHLIGHT_S = 60.0
@@ -326,11 +337,11 @@ def mute_bar_view(meeting_id: str, model: TranscriptModel, state, now: float | N
     if secs > 0:
         now = time.monotonic() if now is None else now
         text = f"Muted for {duration_text(secs)}. Your mic is still out of the recording (the call still hears you)."
-        if _in_room(model):
+        if _shared_mic_open(state):
             text += " Everyone in the room is out of the recording too."
         return MuteBarView("MIC MUTED", text, now - float(getattr(rec, "mute_reminder_at", 0.0)) < REMIND_HIGHLIGHT_S)
     text = "You're muted in the recording (the call still hears you)."
-    if _in_room(model):
+    if _shared_mic_open(state):
         text += " Everyone in the room is out of the recording too."
     return MuteBarView("MIC MUTED", text)
 
@@ -349,7 +360,7 @@ def mute_button_view(meeting_id: str, model: TranscriptModel, state, hotkey: str
     muted = _mic_muted(meeting_id, model, state)
     key = f" [{hotkey}]" if hotkey else ""
     tip = ("Takes your microphone out of this recording only. The call app still hears you."
-           + (" With several people on your mic, everyone in the room is muted." if _in_room(model) else "")
+           + (" With several people on your mic, everyone in the room is muted." if _shared_mic_open(state) else "")
            + key)
     return MuteButtonView(True, "Unmute me" if muted else "Mute me in the recording", tip)
 
@@ -693,10 +704,11 @@ class SharedMicView:
 
 def shared_mic_view(meeting_id: str, model: TranscriptModel, state) -> SharedMicView:
     """The header's shared mic check box: only while the displayed meeting is recording (not while
-    stopping or processing). Ticked while a shared mic stretch is open, including one from the Start dialog."""
+    stopping or processing). Ticked while a shared mic stretch is open, including one from the Start dialog:
+    the recorder's live status says so."""
     if meeting_phase(meeting_id, model, state) != RECORDING:
         return SharedMicView(False)
-    checked = mt.shared_mic_open(model.meta)
+    checked = _shared_mic_open(state)
     if not checked and not getattr(state, "voice_model_installed", True):
         return SharedMicView(True, False, tooltip=models.VOICE_MODEL_MISSING, enabled=False)
     tip = ("Your mic's speech is split into speakers from here. Untick when it is just you again."

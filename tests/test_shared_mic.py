@@ -61,19 +61,6 @@ def test_saved_settings_file_with_diarize_mic_loads(tmp_path):
     assert "diarize_mic" not in s.to_dict()
 
 
-# -- meta.json stretches -----------------------------------------------------------------------------
-def test_stretches_from_meta():
-    assert mt.shared_mic_stretches({"shared_mic": [[0, None]]}) == [[0, None]]
-    assert mt.shared_mic_stretches({"shared_mic": [], "settings": {"diarize_mic": True}}) == []
-    # a meeting from before the list existed: the old flag means the whole meeting
-    assert mt.shared_mic_stretches({"settings": {"diarize_mic": True}}) == [[0, None]]
-    assert mt.shared_mic_stretches({"settings": {"diarize_mic": False}}) == []
-    assert mt.shared_mic_stretches({}) == []
-    assert mt.shared_mic_stretches({"shared_mic": [[0, 5000], "junk", [1, "x"]]}) == [[0, 5000]]
-    assert mt.has_shared_mic({"shared_mic": [[0, 5000]]}) and not mt.has_shared_mic({"shared_mic": []})
-    assert mt.close_stretches([[0, 100], [200, None]], 900) == [[0, 100], [200, 900]]
-
-
 # -- Recorder + final pass -----------------------------------------------------------------------------
 def test_ticked_at_start_separates_the_mic_live_and_in_the_final_transcript(tmp_path):
     seen = {}
@@ -87,7 +74,7 @@ def test_ticked_at_start_separates_the_mic_live_and_in_the_final_transcript(tmp_
     assert meta["settings"]["diarize_mic"] is True
     assert speakers(folder.live_path) == ["MIC_SPEAKER_01", "MIC_SPEAKER_02"]
 
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     final = speakers(folder.final_path)
     assert final and all(sp.startswith("MIC_SPEAKER_") for sp in final)
     assert "mic" in folder.read_meta()["refined_streams"]
@@ -100,7 +87,7 @@ def test_not_ticked_keeps_every_mic_line_as_you(tmp_path):
     meta = folder.read_meta()
     assert meta["shared_mic"] == [] and meta["settings"]["diarize_mic"] is False
     assert speakers(folder.live_path) == ["You", "You"]
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     assert speakers(folder.final_path) == ["You", "You"]
     assert "mic" not in folder.read_meta()["refined_streams"]
 
@@ -123,7 +110,7 @@ def test_old_meeting_with_the_flag_and_no_list_is_separated_whole(tmp_path):
         w.write(meeting_end_event(mt.iso(started), len(segs)))
     folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True)
 
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     assert speakers(folder.final_path) == ["MIC_SPEAKER_01", "MIC_SPEAKER_02"]
     assert folder.read_meta()["refined_streams"] == ["mic"]
 
@@ -147,7 +134,7 @@ def test_cli_diarize_mic_is_shared_mic_from_the_start(tmp_path, monkeypatch, fla
     monkeypatch.setattr(recorder, "load_components", fake_load)
     monkeypatch.setattr(cli, "_ensure_models", lambda s, shared=False: None)
     monkeypatch.setattr(cli, "go_offline", lambda: None)
-    monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: finalized.append(folder))
+    monkeypatch.setattr(cli, "_finalize", lambda folder, s: finalized.append(folder))
     argv = ["simulate", "--mic", str(tmp_path / "mic.wav"), "--system", str(tmp_path / "system.wav"),
             "--out", str(tmp_path / "meetings")] + (["--diarize-mic"] if flag else [])
     assert cli.main(argv) == 0
@@ -193,8 +180,9 @@ def test_controller_passes_shared_mic_and_loads_the_voice_model(tmp_path, monkey
 # -- Mute tooltip ------------------------------------------------------------------------------------------
 def test_mute_tooltip_warns_for_a_meeting_started_with_the_box_ticked(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
-    m.set_meta({**m.meta, "shared_mic": [[0, None]], "settings": {"diarize_mic": True}})
     mid = m.meeting_id
-    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
-    m.set_meta({**m.meta, "shared_mic": [], "settings": {"diarize_mic": False}})
-    assert "everyone in the room" not in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
+    st = muted_state(mid)
+    st.recording.shared_mic = True  # the recorder's live status
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, st).tooltip
+    st.recording.shared_mic = False
+    assert "everyone in the room" not in logic.mute_button_view(mid, m, st).tooltip

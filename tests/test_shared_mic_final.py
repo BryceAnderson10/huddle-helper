@@ -5,10 +5,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from huddle_helper import app, finalize, meeting as mt
+from huddle_helper import finalize, meeting as mt
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.diarize import Turn
-from huddle_helper.finalize import append_words, diarize_stretches, finalize_meeting, stretch_spans
+from huddle_helper.finalize import append_words, diarize_stretches, finalize_meeting
+from huddle_helper.shared_mic import SharedMic
 from huddle_helper.segments import Segment, Word
 from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event, read_events
 
@@ -82,7 +83,7 @@ def build(tmp_path, lines=LINES, *, shared_mic=None, diarize_mic=True, tags=None
 
 def final(folder, embedder=ToneEmbedder):
     RecordingDiarizer.calls = []  # also when the pass never makes a diarizer
-    finalize_meeting(folder, RecordingDiarizer, keep_audio=False, embedder_factory=embedder)
+    finalize_meeting(folder, RecordingDiarizer, default_keep_audio=False, embedder_factory=embedder)
     return [(e["start_ms"], e["text"], e["speaker"]) for e in read_events(folder.final_path)
             if e["type"] == "segment"]
 
@@ -141,7 +142,7 @@ def test_whole_meeting_stretch_gives_the_same_pieces_as_no_stretch_list():
         return [(s.start_ms, s.speaker) for s in finalize.relabel(fresh, words, turns, {"mic"},
                                                                   mic_stretches=stretches)]
 
-    assert run(None) == run([[0, None]]) == run([[0, LENGTH_MS]])
+    assert run(None) == run(SharedMic(((0, None),))) == run(SharedMic(((0, LENGTH_MS),)))
 
 
 # -- names given to live mic speakers -------------------------------------------------------------
@@ -170,34 +171,10 @@ def test_names_keep_differently_named_mic_speakers_apart_and_same_named_together
 
 
 # -- the pieces of the step -----------------------------------------------------------------------
-def test_stretch_spans_clip_to_the_audio_and_run_open_stretches_to_its_end():
-    n = 10 * SAMPLE_RATE
-    assert stretch_spans([[2000, 3000], [8000, None]], n) == [(32000, 48000), (128000, n)]
-    assert stretch_spans([[0, 99_000]], n) == [(0, n)]
-    assert stretch_spans([[12_000, 13_000]], n) == []
-
-
 def test_diarize_stretches_puts_turns_on_the_meeting_clock_with_separate_ids():
     seen = []
     turns = diarize_stretches(RecordingDiarizer(), np.zeros(10 * SAMPLE_RATE, np.float32),
-                              [[6000, 8000], [1000, 3000]], seen.append)
+                              SharedMic(((6000, 8000), (1000, 3000))), seen.append)
     assert [(t.start_ms, t.end_ms) for t in turns] == [(1000, 3000), (6000, 8000)]
     assert turns[0].speaker != turns[1].speaker
     assert seen == sorted(seen) and seen[-1] == 1.0
-
-
-# -- progress -------------------------------------------------------------------------------------
-def test_progress_weights_the_mic_by_its_stretches():
-    meta = {"shared_mic": [[0, 300_000], [3_600_000, None]]}
-    w = app.diarize_weights(meta, 7200)
-    assert w == {"system": 7200, "mic": 300 + 3600}
-    small = {"system": 7200.0, "mic": 600.0}
-    both = ["mic", "system"]
-    f = app.pass_fraction
-    assert f("Identifying speakers (mic)", 1.0, both, small) == pytest.approx(app.DIARIZE_SHARE * 600 / 7800)
-    assert f("Identifying speakers (system)", 0.0, both, small) == pytest.approx(app.DIARIZE_SHARE * 600 / 7800)
-    assert f("Identifying speakers (system)", 1.0, both, small) == pytest.approx(app.DIARIZE_SHARE)
-    assert f("Identifying speakers (mic)", 0.5, ["mic"], {"mic": 10.0}) == pytest.approx(app.DIARIZE_SHARE / 2)
-    assert f("Identifying speakers (mic)", 0.5, both) == pytest.approx(app.DIARIZE_SHARE * 0.25)  # no weights
-    assert f("Identifying speakers (mic)", 0.5, both, {"mic": 0, "system": 0}) == pytest.approx(
-        app.DIARIZE_SHARE * 0.25)

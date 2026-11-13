@@ -419,7 +419,7 @@ capture ─► Recorder._on_audio(source, samples)
 | 9 | Retry button | In the row | In the action bar and the row's right-click menu | `ttk.Treeview` rows can't hold buttons |
 | 10 | Symbols | 🎤✕ in the mute bar | "MIC MUTED" text | Emoji don't render reliably on Tk 8.6 |
 | 11 | Vocabulary spike | `hotwords` vs `initial_prompt` | Use `hotwords`; the spike compares prompt *wording* and budget | In faster-whisper 1.2.1 both end up in the same `<\|startofprev\|>` slot for a one-window utterance; `hotwords` also covers every window if utterances ever get longer |
-| 12 | `huddle-helper finalize` | — | Keeps audio unless `--delete-audio` is passed | See ground rule 2 |
+| 12 | `huddle-helper finalize` | — | Keeps audio unless `--delete-audio` is passed. Since #61: follows the meeting's own Keep audio choice, which `--keep-audio` / `--delete-audio` set first | See ground rule 2 |
 
 ## 6. Work packages
 

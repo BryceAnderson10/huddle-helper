@@ -108,8 +108,8 @@ def _final_texts(folder):
 
 def test_finalize_without_a_second_transcriber_is_unchanged(tmp_path):
     a, b = make_meeting_to_finalize(tmp_path / "a"), make_meeting_to_finalize(tmp_path / "b")
-    finalize_meeting(a, FakeDiarizer, keep_audio=False)
-    finalize_meeting(b, FakeDiarizer, keep_audio=False, transcriber_factory=None)
+    finalize_meeting(a, FakeDiarizer, default_keep_audio=False)
+    finalize_meeting(b, FakeDiarizer, default_keep_audio=False, transcriber_factory=None)
     assert _final_texts(a) == _final_texts(b)
     meta = a.read_meta()
     assert "final_transcriber" not in meta and "retranscribe" not in meta["final_stats"]["stages"]
@@ -121,7 +121,7 @@ def test_finalize_uses_the_second_transcription(tmp_path):
     tr = ScriptedTranscriber(by_ms={})
     tr.default = "Better."
     stages = []
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False, progress=lambda s, f: stages.append(s),
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False, progress=lambda s, f: stages.append(s),
                      transcriber_factory=lambda: tr)
     texts = _final_texts(folder)
     assert [t for src, _s, t in texts if src == "system"] == ["Better.", "Better."]
@@ -134,7 +134,7 @@ def test_finalize_uses_the_second_transcription(tmp_path):
     stats = meta["final_stats"]
     assert stats["retx_lines_changed"] == 2 and stats["retx_lines_kept_live"] == 0
     assert "retranscribe" in stats["stages"]
-    assert stages[0] == "Improving the transcript" and folder.done_path.exists()
+    assert stages[0].label == "Improving the transcript" and folder.done_path.exists()
 
 
 def test_finalize_survives_a_failing_second_transcriber(tmp_path):
@@ -143,7 +143,7 @@ def test_finalize_survives_a_failing_second_transcriber(tmp_path):
     def broken():
         raise FileNotFoundError("model folder renamed")
 
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False, transcriber_factory=broken)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False, transcriber_factory=broken)
     assert [t for _src, _s, t in _final_texts(folder)] == ["Hello.", "First.", "Second."]
     meta = folder.read_meta()
     assert meta["final_stats"]["retx_failed"] is True and "final_transcriber" not in meta

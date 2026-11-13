@@ -1,8 +1,8 @@
 """The Meetings list (L29-L31): one ``MeetingInfo`` per meeting folder, and deleting a meeting or its audio.
 
 No Tk. ``scan`` is cheap on a large folder because a meeting is re-read only when something that
-feeds its row changed (``meta.json``, ``DONE``, the final transcript, ``speakers.json`` or
-``marks.jsonl``, by modification time); the sizes of ``audio\\`` and of the whole folder are measured
+feeds its row changed (``meta.json``, ``DONE``, the final transcript, ``speakers.json``,
+``marks.jsonl`` or ``heartbeat.json``, by modification time); the sizes of ``audio\\`` and of the whole folder are measured
 by one worker thread of the ``ScanCache`` and show up in a later scan (``audio_bytes`` is None until then).
 The window runs ``scan`` on its own worker thread so even the first pass never blocks Tk.
 
@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import marks as marks_mod, meeting as mt, shell
+from . import marks as marks_mod, meeting as mt, shell, status as status_mod
 from .writer import read_events
 
 log = logging.getLogger(__name__)
@@ -38,9 +38,7 @@ class MeetingInfo:
     title: str
     started_at: str  # ISO 8601 as in meta.json, "" if unknown
     length_s: float | None
-    status: str  # meta.json "status"
-    done: bool  # DONE exists
-    recovered: bool  # finished after a crash (interrupted, or clean_exit false)
+    files: status_mod.Files  # what its files say about its status (``status_of`` lays the app's state over it)
     speakers: int | None  # distinct people in the final transcript; None without one
     marks: int
     has_audio: bool  # an audio\ folder exists
@@ -49,6 +47,11 @@ class MeetingInfo:
     error: str
     finished_at: str  # final_written_at, else ended_at; "" if unknown
     done_at: float | None = None  # modification time of DONE (what auto-purge ages a meeting by); None without DONE
+
+    @property
+    def done(self) -> bool:
+        """DONE exists."""
+        return self.files.done
 
 
 def meeting_length_s(meta: dict) -> float | None:
@@ -107,16 +110,17 @@ def read_info(folder: mt.MeetingFolder) -> MeetingInfo | None:
         meta = folder.read_meta()
     except (OSError, ValueError):
         return None
+    if not isinstance(meta, dict):
+        return None
     try:
         marks = len(marks_mod.reduce(read_events(folder.marks_path))) if folder.marks_path.exists() else 0
     except (OSError, ValueError):
         marks = int(meta.get("marks") or 0)
-    status = str(meta.get("status") or "")
     return MeetingInfo(
         id=folder.meeting_id, path=folder.path, title=str(meta.get("title") or folder.meeting_id),
-        started_at=str(meta.get("started_at") or ""), length_s=meeting_length_s(meta), status=status,
-        done=folder.is_done, recovered=status == mt.STATUS_INTERRUPTED or meta.get("clean_exit") is False,
-        speakers=_count_speakers(folder), marks=marks, has_audio=folder.audio_dir.is_dir(),
+        started_at=str(meta.get("started_at") or ""), length_s=meeting_length_s(meta),
+        files=status_mod.read(folder, meta), speakers=_count_speakers(folder), marks=marks,
+        has_audio=folder.audio_dir.is_dir(),
         audio_bytes=None, total_bytes=None, error=str(meta.get("error") or ""),
         finished_at=str(meta.get("final_written_at") or meta.get("ended_at") or ""),
         done_at=(_mtime(folder.done_path) or 0) / 1e9 or None)
@@ -202,9 +206,11 @@ class ScanCache:
 
 
 def _row_key(folder: mt.MeetingFolder) -> tuple:
-    """Everything that feeds a row, by modification time: any change re-reads the folder."""
+    """Everything that feeds a row, by modification time: any change re-reads the folder. The heartbeat
+    feeds its status: a recording meeting is re-read at each beat (``status_of`` ages the beat it read)."""
     return (_mtime(folder.meta_path), _mtime(folder.done_path), _mtime(folder.marks_path),
-            _mtime(folder.final_path), _mtime(folder.speakers_path), _mtime(folder.audio_dir))
+            _mtime(folder.final_path), _mtime(folder.speakers_path), _mtime(folder.audio_dir),
+            _mtime(folder.heartbeat_path))
 
 
 def scan(meetings_dir: Path, cache: ScanCache | None = None) -> list[MeetingInfo]:
@@ -263,6 +269,7 @@ class LiveState:
     progress: float | None = None  # 0-1 of that pass
     queued: frozenset[str] = frozenset()  # waiting for or running the after-Stop pass
     waiting: frozenset[str] = frozenset()  # retries waiting for the recording to stop
+    stopping: bool = False  # the recording meeting is stopping (Stop pressed, live transcript finishing)
 
 
 RECORDING, PROCESSING, QUEUED, RETRY_WAITING = "recording", "processing", "queued", "retry-waiting"
@@ -277,27 +284,30 @@ _FILTER_OF = {RECORDING: "Recording", PROCESSING: "Processing", QUEUED: "Process
 class StatusView:
     kind: str
     text: str
-    busy: bool  # recording, queued or processing: not deletable
+    busy: bool  # recording, queued or processing, here or in another process: not deletable
 
 
-def status_of(info: MeetingInfo, live: LiveState | None = None) -> StatusView:
-    """The Status column. The app's live state wins over what meta.json says (it lags by a moment)."""
-    live = live or LiveState()
-    if info.id == live.recording:
+def status_of(info: MeetingInfo, live: LiveState | None = None, now: datetime | None = None) -> StatusView:
+    """The Status column: ``status.shown`` as a label. A recorder that died shows as "Not finished"
+    (recover, at app start, finishes those meetings)."""
+    shown = status_mod.shown(info.files, info.id, live, now)
+    s = shown.status
+    if s in (status_mod.RECORDING, status_mod.STOPPING):
         return StatusView(RECORDING, "Recording", True)
-    if info.id == live.finalizing:
-        pct = f" {live.progress:.0%}" if live.progress is not None else ""
-        return StatusView(PROCESSING, f"Processing{pct}", True)
-    if info.id in live.waiting:
+    if s == status_mod.PROCESSING:
+        pct = f" {live.progress:.0%}" if shown.here and live.progress is not None else ""
+        # busy while a process holds it: this app, or another with a fresh heartbeat (ADR 0002)
+        return StatusView(PROCESSING, f"Processing{pct}", shown.here or info.files.heartbeat_fresh(now))
+    if s == status_mod.RETRY_WAITING:
         return StatusView(RETRY_WAITING, "Retry queued until recording stops", True)
-    if info.id in live.queued:
+    if s == status_mod.QUEUED:
         return StatusView(QUEUED, "Waiting for the final pass", True)
-    if info.done:
-        return StatusView(RECOVERED if info.recovered else COMPLETE,
-                          "Interrupted (recovered)" if info.recovered else "Complete", False)
-    if info.status == mt.STATUS_FAILED:
+    if s == status_mod.COMPLETE:
+        return StatusView(RECOVERED if shown.recovered else COMPLETE,
+                          "Interrupted (recovered)" if shown.recovered else "Complete", False)
+    if s == status_mod.FAILED:
         return StatusView(FAILED, "Final pass failed", False)
-    if info.status == mt.STATUS_INTERRUPTED:
+    if s == status_mod.INTERRUPTED:
         return StatusView(UNFINISHED, "Interrupted", False)
     return StatusView(UNFINISHED, "Not finished", False)
 

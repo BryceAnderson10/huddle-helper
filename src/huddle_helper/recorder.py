@@ -40,6 +40,7 @@ from .diarize import MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OnlineClu
 from .echo import EchoMatch, drop_event
 from .finalize import append_words
 from .segments import Segment, Word
+from .shared_mic import SharedMic
 from .transcribe import Transcriber
 from .vad import FrameScorer, Utterance, UtteranceSegmenter
 from .writer import JsonlWriter, SegmentMerger, meeting_end_event, meeting_start_event
@@ -85,6 +86,7 @@ class Status:
     # Start) | "loading" | "ready" | "failed"; ``voice_model_error`` says why it failed.
     voice_model: str = ""
     voice_model_error: str = ""
+    shared_mic: bool = False  # a shared mic stretch is open now: "Several people on my mic" is ticked
 
 
 class _StreamWorker:
@@ -170,7 +172,7 @@ class Recorder:
         self._utterances: queue.PriorityQueue = queue.PriorityQueue()
         self._workers: dict[str, _StreamWorker] = {}
         self._clusterers: dict[str, OnlineClusterer] = {}
-        self._shared_mic: list[mt.Stretch] = []  # this meeting's shared mic stretches (meta.json "shared_mic")
+        self._shared_mic = SharedMic()  # this meeting's shared mic stretches (meta.json "shared_mic")
         self._shared_lock = threading.Lock()
         self._voice_thread: threading.Thread | None = None  # background load of the voice model (#55)
         self._mic_line_starts: list[int] = []  # start_ms of every mic line written (Stop drops empty stretches)
@@ -270,21 +272,21 @@ class Recorder:
                 **self.c.model_info,
             },
             "settings": {
-                # diarize_mic: the meeting has at least one shared mic stretch (kept for older readers)
-                "diarize_system": s.diarize_system, "diarize_mic": bool(shared_mic),
+                "diarize_system": s.diarize_system,
                 "echo_dedupe": s.echo_dedupe, "keep_audio": s.keep_audio,
             },
             "vocabulary": list(self._terms_used),
             "vocabulary_changed_at_ms": [],
             "mic_muted_since_ms": 0 if start_muted else None,
-            "shared_mic": [[0, None]] if shared_mic else [],
         }
+        shared = SharedMic.at_start(shared_mic)
+        meta = shared.write(meta)
         names = attendees_mod.clean_attendees(attendees)
         if names:  # additive (L13): absent when none were entered
             meta["attendees"] = names
         self.folder = mt.MeetingFolder.create(s.resolved_meetings_dir(), title, started, meta)
         with self._shared_lock:
-            self._shared_mic = mt.shared_mic_stretches(meta)
+            self._shared_mic = shared
             self._mic_line_starts = []
         # Beats from here on, through the start-up; a start that fails stops it, so no thread is left
         # beating for a meeting that never ran.
@@ -319,7 +321,7 @@ class Recorder:
         if s.diarize_system:
             self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, voice.live_match, s.live_min_new_speaker_s,
                                                          adopt_threshold=voice.live_adopt)
-        if self._shared_mic:
+        if self._shared_mic.has_stretches:
             self._mic_clusterer()
 
         capture_factory = self.c.capture_factory
@@ -342,7 +344,8 @@ class Recorder:
         self._levels = {}
         self._max_backlog = 0
         self._max_lag_s = 0.0
-        self.status = Status(state="recording", meeting_id=self.folder.meeting_id, mic_muted=start_muted)
+        self.status = Status(state="recording", meeting_id=self.folder.meeting_id, mic_muted=start_muted,
+                             shared_mic=self._shared_mic.is_open)
         self._voice_thread = None
         for w in self._workers.values():
             w.thread.start()
@@ -399,14 +402,12 @@ class Recorder:
         count = self._seq
         self._writer.write(meeting_end_event(mt.iso(ended), count))
         self._writer.close()
-        # The meeting's end on the meeting clock: the audio's length (a file-fed run is faster than real time)
+        # The meeting's end on the meeting clock (``ended_ms``): the audio's length (a file-fed run is faster
+        # than real time). An open stretch ends there; a stretch in which no mic line started is dropped.
         end_ms = max([stopped_ms] + [w.samples * 1000 // SAMPLE_RATE for w in self._workers.values()])
-        # An open stretch ends with the meeting; a stretch in which no mic line started is dropped.
         with self._shared_lock:
-            self._shared_mic = mt.stretches_with_lines(mt.close_stretches(self._shared_mic, end_ms),
-                                                       self._mic_line_starts)
-            shared = [list(st) for st in self._shared_mic]
-        self.folder.set_shared_mic(shared)
+            self._shared_mic = shared = self._shared_mic.closed_at_stop(end_ms, self._mic_line_starts)
+        self.folder.write_shared_mic(shared)
         self.folder.update_meta(
             status=mt.STATUS_PROCESSING, ended_at=mt.iso(ended), clean_exit=True, segments=count,
             echo_segments_dropped=self._merger.dropped_echo,
@@ -436,35 +437,26 @@ class Recorder:
         return c
 
     @property
-    def shared_mic(self) -> bool:
-        """A shared mic stretch is open now."""
+    def shared_mic_stretches(self) -> SharedMic:
+        """This meeting's shared mic stretches as they stand now (``status.shared_mic``: one is open)."""
         with self._shared_lock:
-            return bool(self._shared_mic) and self._shared_mic[-1][1] is None
-
-    @property
-    def shared_mic_stretches(self) -> list[mt.Stretch]:
-        with self._shared_lock:
-            return [list(st) for st in self._shared_mic]
+            return self._shared_mic
 
     def set_shared_mic(self, on: bool, at_ms: int | None = None) -> bool:
         """Open a shared mic stretch at the meeting clock (``on``) or close the open one. Mic lines that
         start from then on follow the new mode; lines already written keep their labels. ``at_ms``
         overrides the clock (tests). Returns whether a stretch is open afterwards."""
         if self.status.state != "recording" or self.folder is None:
-            return self.shared_mic
+            return self.shared_mic_stretches.is_open
         with self._shared_lock:
-            is_open = bool(self._shared_mic) and self._shared_mic[-1][1] is None
-            if bool(on) == is_open:
-                return is_open
-            now = max(0, int(self.now_ms() or 0) if at_ms is None else int(at_ms))
+            if bool(on) == self._shared_mic.is_open:
+                return bool(on)
+            now = int(self.now_ms() or 0) if at_ms is None else int(at_ms)
             if on:
                 self._mic_clusterer()
-                self._shared_mic.append([now, None])
-            else:
-                last = self._shared_mic[-1]
-                last[1] = max(now, last[0])
-            shared = [list(st) for st in self._shared_mic]
-        self.folder.set_shared_mic(shared)
+            self._shared_mic = shared = self._shared_mic.toggled(on, now)
+            self.status.shared_mic = shared.is_open
+        self.folder.write_shared_mic(shared)
         if on:
             self._load_voice_model()
         self._publish()
@@ -508,7 +500,7 @@ class Recorder:
 
     def _in_shared_mic(self, at_ms: int) -> bool:
         with self._shared_lock:
-            return mt.in_stretch(self._shared_mic, at_ms)
+            return self._shared_mic.covers(at_ms)
 
     # -- click to hear (WP7) ---------------------------------------------------------------
     def _before_reopen(self) -> None:

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 
-from huddle_helper import meeting as mt
+from huddle_helper import heartbeat as hb, meeting as mt
 from huddle_helper.audio import SAMPLE_RATE
 from huddle_helper.segments import Segment
 from huddle_helper.writer import JsonlWriter, meeting_end_event, meeting_start_event
@@ -110,3 +110,12 @@ class ManualCapture:
         for i in range(0, n, CHUNK):
             self.on_audio("mic", mic[i:i + CHUNK])
             self.on_audio("system", system[i:i + CHUNK])
+
+
+def no_wait(_seconds: float) -> None:
+    """Recover's re-check of a stale heartbeat, without the real one-beat sleep."""
+
+
+def stale_heartbeat(folder) -> None:
+    """Leave ``folder``'s last heartbeat well past stale, as a crash does (its status stays as it is)."""
+    folder.beat(mt.now_local() - timedelta(seconds=2 * hb.STALE_AFTER_S))

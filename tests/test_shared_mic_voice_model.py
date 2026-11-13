@@ -115,7 +115,7 @@ def test_final_pass_separates_the_whole_stretch_including_lines_shown_as_you(tmp
 
     loader = GatedLoader()
     folder, _rec, _ = record(tmp_path, loader, [(True, 3000)], release_at=3)
-    finalize_meeting(folder, RecordingDiarizer, keep_audio=False, embedder_factory=ToneEmbedder)
+    finalize_meeting(folder, RecordingDiarizer, default_keep_audio=False, embedder_factory=ToneEmbedder)
     final = [(e["start_ms"], e["speaker"]) for e in read_events(folder.final_path)
              if e["type"] == "segment" and e["source"] == "mic"]
     assert final[0][1] == "You" and final[0][0] < 3000
@@ -210,7 +210,6 @@ def test_shared_mic_without_any_voice_model_labels_mic_lines_you(tmp_path):
 def test_not_downloaded_disables_the_window_box_with_a_tooltip(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
     mid = m.meeting_id
-    m.set_meta({**m.meta, "shared_mic": []})
     st = recording_state(mid)
     st.voice_model_installed = False
     v = logic.shared_mic_view(mid, m, st)

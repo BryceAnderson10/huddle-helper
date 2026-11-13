@@ -1,9 +1,12 @@
-"""Recorder heartbeat (#40): tells an active meeting from one whose recorder died.
+"""The heartbeat (#40, #63): a fresh beat means a process holds the meeting (ADR 0002).
 
 While a meeting records, a thread of its own rewrites ``heartbeat.json`` in the meeting folder every
 ``INTERVAL_S`` seconds, whatever the audio does: in total silence and while the mic is muted it beats
 just the same. It stops when Stop has set ``meta.json`` to ``processing``; a crash stops it too, and
-``meta.json`` then stays at ``recording`` until the app next starts. So a reader asks ``liveness``:
+``meta.json`` then stays at ``recording`` until the app next starts. The final pass beats again while it
+runs (``Heartbeat``), and the tray beats for every meeting in its final pass queue (``Heartbeats``, one
+thread for all of them), so recover skips any meeting with a fresh beat, whatever its status. A meeting's
+heartbeat state (``status.heartbeat_state``) is:
 
     ACTIVE         status ``recording`` and the last beat at most ``STALE_AFTER_S`` old: recording,
                    even if nobody has spoken for an hour (transcript freshness is not health)
@@ -11,7 +14,8 @@ just the same. It stops when Stop has set ``meta.json`` to ``processing``; a cra
     NOT_RECORDING  any other status: stopped, in its final pass, done, interrupted or failed
 
 A separate small file, rather than a field in ``meta.json``, so every ``meta.json`` watcher is not woken
-every two seconds. See docs/OUTPUT_SPEC.md, "heartbeat.json".
+every two seconds. See docs/OUTPUT_SPEC.md, "heartbeat.json". A meeting's status as a whole (the heartbeat
+together with ``meta.json`` and ``DONE``) is worked out in ``status``.
 """
 
 from __future__ import annotations
@@ -33,40 +37,87 @@ RECORDER_DIED = "recorder_died"
 NOT_RECORDING = "not_recording"
 
 
-class Heartbeat:
-    """Beats for one meeting folder on a daemon thread, from ``start`` until ``stop``."""
+class Heartbeats:
+    """Beats for every meeting folder it holds, on one daemon thread: ``hold`` beats at once and from then
+    on every ``interval_s``, until as many ``release`` calls as ``hold`` calls; ``stop`` ends the thread
+    (the files keep their last beat). The thread starts with the first ``hold``."""
 
-    def __init__(self, folder: mt.MeetingFolder, interval_s: float = INTERVAL_S):
-        self.folder = folder
+    def __init__(self, interval_s: float = INTERVAL_S):
         self.interval_s = interval_s
+        self._lock = threading.Lock()
+        self._held: dict[str, tuple[mt.MeetingFolder, int]] = {}  # meeting id -> (folder, hold count)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def start(self) -> None:
-        self._beat()
-        self._thread = threading.Thread(target=self._run, name="heartbeat", daemon=True)
-        self._thread.start()
+    def hold(self, folder: mt.MeetingFolder) -> None:
+        """Beat for ``folder`` now and from then on, until it is released (once per ``hold``)."""
+        with self._lock:
+            _, n = self._held.get(folder.meeting_id, (folder, 0))
+            self._held[folder.meeting_id] = (folder, n + 1)
+            if self._stop.is_set():
+                return
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._run, name="heartbeats", daemon=True)
+                self._thread.start()
+        _beat(folder)
+
+    def release(self, folder: mt.MeetingFolder) -> None:
+        """Undo one ``hold``; after the last one ``folder`` is no longer beaten (its file goes stale)."""
+        with self._lock:
+            _, n = self._held.get(folder.meeting_id, (folder, 0))
+            if n <= 1:
+                self._held.pop(folder.meeting_id, None)
+            else:
+                self._held[folder.meeting_id] = (folder, n - 1)
 
     def stop(self) -> None:
-        """Stop beating; the file keeps the last beat. Safe to call twice."""
+        """Stop beating for all of them. Safe to call twice."""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
+        with self._lock:
+            thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.join()
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval_s):
-            self._beat()
+            with self._lock:
+                folders = [f for f, _ in self._held.values()]
+            for folder in folders:
+                _beat(folder)
 
-    def _beat(self) -> None:
-        try:
-            self.folder.beat()
-        except OSError:
-            # e.g. a reader holds the file open on Windows: the next beat tries again, well within
-            # STALE_AFTER_S.
-            log.debug("Heartbeat write failed for %s", self.folder.meeting_id, exc_info=True)
-        except Exception:  # noqa: BLE001 - a dead thread would report a live recorder as dead
-            log.exception("Heartbeat failed for %s", self.folder.meeting_id)
+
+class Heartbeat:
+    """Beats for one meeting folder, from ``start`` (or entering ``with``) until ``stop``: ``Heartbeats``
+    holding just that folder."""
+
+    def __init__(self, folder: mt.MeetingFolder, interval_s: float = INTERVAL_S):
+        self.folder = folder
+        self._beats = Heartbeats(interval_s)
+
+    def start(self) -> None:
+        self._beats.hold(self.folder)
+
+    def stop(self) -> None:
+        """Stop beating; the file keeps the last beat. Safe to call twice."""
+        self._beats.stop()
+
+    def __enter__(self) -> "Heartbeat":
+        self.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stop()
+
+
+def _beat(folder: mt.MeetingFolder) -> None:
+    try:
+        folder.beat()
+    except OSError:
+        # e.g. a reader holds the file open on Windows: the next beat tries again, well within
+        # STALE_AFTER_S.
+        log.debug("Heartbeat write failed for %s", folder.meeting_id, exc_info=True)
+    except Exception:  # noqa: BLE001 - a dead thread would report a live process as gone
+        log.exception("Heartbeat failed for %s", folder.meeting_id)
 
 
 def last_beat(folder: mt.MeetingFolder) -> datetime | None:
@@ -78,17 +129,3 @@ def last_beat(folder: mt.MeetingFolder) -> datetime | None:
         return None
     return at if at.utcoffset() is not None else None
 
-
-def liveness(folder: mt.MeetingFolder, now: datetime | None = None,
-             stale_after_s: float = STALE_AFTER_S) -> str:
-    """``ACTIVE``, ``RECORDER_DIED`` or ``NOT_RECORDING`` (see the module docstring). Raises OSError or
-    ValueError when ``meta.json`` cannot be read right now (it is being replaced): ask again."""
-    if folder.read_meta().get("status") != mt.STATUS_RECORDING:
-        return NOT_RECORDING
-    at = last_beat(folder)
-    if at is None:
-        return RECORDER_DIED
-    age = ((now or mt.now_local()) - at).total_seconds()
-    # A beat from the future counts as stale too: a clock set back after a crash must not keep a dead
-    # meeting looking alive.
-    return ACTIVE if abs(age) <= stale_after_s else RECORDER_DIED

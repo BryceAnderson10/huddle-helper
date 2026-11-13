@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from huddle_helper import app, config, meeting as mt
-from huddle_helper.app import AppState, FinalizeProgress
+from huddle_helper.app import AppState
+from huddle_helper.final_pass import PassProgress
+from huddle_helper.finalize import Stage, Step
 from huddle_helper.gui import logic, theme
 from huddle_helper.recorder import Status
 from huddle_helper.replay import Replay, check_output_dir, next_step, replay_files
@@ -77,21 +79,31 @@ def test_status_bar_while_recording_shows_levels_lag_backlog(tmp_path):
 def test_processing_shows_stage_percent_and_time_left(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_PROCESSING)
     st = AppState(phase="ready", last_meeting=m.meeting_id)
-    st.finalize = FinalizeProgress(m.meeting_id, "Identifying speakers (system)", 0.4, 0.35, 120.0, 390.0)
+    st.finalize = PassProgress(m.meeting_id, Stage(Step.SEPARATE, "system"), 0.4, 0.35, 120.0, 390.0)
     h = logic.header_view(m.meeting_id, m, st)
     assert (h.dot, h.text) == ("busy", "Refining speaker labels")
     v = logic.status_view(m.meeting_id, m, st)
     assert v.text == "Identifying speakers (system) 40% · 35% overall · about 6 min left"
     assert not v.show_stop
     assert logic.notice_view(m.meeting_id, m, st).text == "Provisional: speaker labels may change."
-    st.finalize = FinalizeProgress(m.meeting_id, "Identifying speakers")  # first meeting on the PC: no estimate
-    assert logic.status_view(m.meeting_id, m, st).text == "Identifying speakers"
+    st.finalize = PassProgress(m.meeting_id, Stage(Step.SECOND_TRANSCRIPTION))  # first meeting on the PC: no estimate
+    assert logic.status_view(m.meeting_id, m, st).text == "Improving the transcript"
+
+
+def test_a_meeting_recorded_by_another_process_shows_as_recording_elsewhere(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    m.folder.beat()  # fresh: `huddle-helper record` holds it, not this app
+    st = AppState(phase="ready")
+    assert logic.header_view(m.meeting_id, m, st) == logic.HeaderView("recording", "Recording elsewhere · 2 lines · live")
+    assert not logic.mute_button_view(m.meeting_id, m, st).visible and not logic.status_view(m.meeting_id, m, st).show_stop
+    m.folder.heartbeat_path.unlink()  # the recorder died
+    assert logic.header_view(m.meeting_id, m, st) == logic.HeaderView("idle", "Not finished · 2 lines")
 
 
 def test_the_progress_of_another_meeting_does_not_show_here(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_PROCESSING)
     st = AppState(phase="ready")
-    st.finalize = FinalizeProgress("other", "Grouping voices", 0.5)
+    st.finalize = PassProgress("other", Stage(Step.GROUP), 0.5)
     assert logic.meeting_phase(m.meeting_id, m, st) == logic.WAITING
     assert logic.header_view(m.meeting_id, m, st).text == "Waiting for the final pass"
 
@@ -257,12 +269,13 @@ def test_mute_bar_and_button_follow_the_displayed_meeting(tmp_path):
     assert not logic.mute_button_view(mid, m, stopping).visible
 
 
-def test_in_room_mode_warns_that_everyone_is_muted(tmp_path):
+def test_open_shared_mic_warns_that_everyone_is_muted(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
-    m.set_meta({**m.meta, "settings": {"diarize_mic": True}})
     mid = m.meeting_id
-    assert "Everyone in the room" in logic.mute_bar_view(mid, m, muted_state(mid)).text
-    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
+    st = muted_state(mid)
+    st.recording.shared_mic = True  # a shared mic stretch is open (the recorder's live status)
+    assert "Everyone in the room" in logic.mute_bar_view(mid, m, st).text
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, st).tooltip
 
 
 def test_bookmark_items_list_the_four_types_with_symbol_and_hotkey():

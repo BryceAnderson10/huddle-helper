@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
+from . import status as status_mod
 from .meeting import MeetingFolder
 from .transcript_model import KIND_ORDER, DividerRow, GapRow, MarkRow, TranscriptModel, fmt_elapsed
 
@@ -160,6 +161,7 @@ def render(model: TranscriptModel, fmt: str = "md", times: str = "elapsed", join
         body.append("*No transcript lines.*" if md else "(no transcript lines)")
 
     when, who = _header(model)
+    recovered = status_mod.recovered(model.meta)
     out: list[str] = []
     if model.provisional:
         out += [f"> {PROVISIONAL}" if md else PROVISIONAL, ""]
@@ -168,7 +170,7 @@ def render(model: TranscriptModel, fmt: str = "md", times: str = "elapsed", join
         line = " · ".join(p for p in (when, f"Speakers: {_esc(who)}" if who else "") if p)
         if line:
             out += [line, ""]
-        if model.interrupted or model.status == "interrupted":
+        if recovered:
             out += [f"> {INTERRUPTED}", ""]
         if marks:
             out += ["## Bookmarks", ""]
@@ -186,7 +188,7 @@ def render(model: TranscriptModel, fmt: str = "md", times: str = "elapsed", join
             out.append(when)
         if who:
             out.append(f"Speakers: {who}")
-        if model.interrupted or model.status == "interrupted":
+        if recovered:
             out.append(INTERRUPTED)
         out.append("")
         out += body
