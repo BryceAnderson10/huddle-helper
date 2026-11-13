@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, replace
+from enum import Enum
 import os
 import shutil
 import time
@@ -45,7 +46,28 @@ from .writer import new_transcript_version, read_events, write_transcript
 
 log = logging.getLogger(__name__)
 
-Progress = Callable[[str, float], None]
+
+class Step(Enum):
+    """The stages of the final pass, in the order they run; the value is the on-screen wording."""
+    SECOND_TRANSCRIPTION = "Improving the transcript"
+    SEPARATE = "Identifying speakers"
+    GROUP = "Grouping voices"
+    WRITE = "Writing final transcript"
+
+
+@dataclass(frozen=True)
+class Stage:
+    """Where the final pass is: a step, and for ``SEPARATE`` the stream being separated into speakers."""
+    step: Step
+    stream: str | None = None
+
+    @property
+    def label(self) -> str:
+        """The on-screen wording: "Identifying speakers (system)", "Grouping voices", ..."""
+        return f"{self.step.value} ({self.stream})" if self.stream else self.step.value
+
+
+Progress = Callable[[Stage, float], None]  # the stage, and the fraction (0-1) of it done
 PREFIX = {"mic": MIC_PREFIX, "system": SYSTEM_PREFIX}
 UNDIARIZED = {"mic": YOU, "system": REMOTE}
 
@@ -595,15 +617,22 @@ def write_names(folder: mt.MeetingFolder, live_segments: list[Segment], final_se
     return True
 
 
-def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
-    """Delete the audio folder unless Keep audio is on, re-reading meta.json so a late change is honoured."""
+def keeps_audio(meta: dict, default: bool) -> bool:
+    """The meeting's own Keep audio choice (``settings.keep_audio``); ``default``, the Keep audio
+    setting, only for a meeting that has none (older meetings)."""
+    own = (meta.get("settings") or {}).get("keep_audio")
+    return bool(default if own is None else own)
+
+
+def _remove_audio(folder: mt.MeetingFolder, default_keep: bool) -> None:
+    """Delete the audio folder unless the meeting keeps its audio, re-reading meta.json just before so a
+    late change is honoured. If meta.json cannot be read the audio is kept."""
     if not folder.audio_dir.exists():
         return
     try:
-        keep_audio = keep_audio or bool(folder.read_meta().get("settings", {}).get("keep_audio"))
+        if keeps_audio(folder.read_meta(), default_keep):
+            return
     except (OSError, ValueError):
-        pass
-    if keep_audio:
         return
     shutil.rmtree(folder.audio_dir, ignore_errors=True)
     if folder.audio_dir.exists():
@@ -644,18 +673,28 @@ def diarize_stretches(diarizer: OfflineDiarizer, audio: np.ndarray, shared: Shar
 
 
 # -- the full pass -------------------------------------------------------
+def separated_streams(meta: dict) -> list[str]:
+    """The streams the final pass separates into speakers, in the order it does them."""
+    return SharedMic.from_meta(meta).separated_streams(meta.get("settings", {}).get("diarize_system", True))
+
+
 def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], OfflineDiarizer] | None,
-                     keep_audio: bool, progress: Progress | None = None,
+                     default_keep_audio: bool, progress: Progress | None = None,
                      embedder_factory: Callable[[], Embedder] | None = None,
                      voice_threshold: float | None = None, voice: VoiceProfile | None = None,
                      transcriber_factory: Callable[[], FinalTranscriber] | None = None) -> int:
     """Write transcript.final.jsonl, clean up audio and create DONE. Returns segment count.
 
+    Run again on a done meeting it replaces the final transcript: DONE is cleared first.
+    ``default_keep_audio`` is the Keep audio setting, used only for a meeting without a Keep audio choice of
+    its own.
     With ``transcriber_factory`` the kept audio of both sources is transcribed a second time first
-    (``retranscribe``); if that fails for any reason the pass carries on with the live text."""
+    (``retranscribe``); if that fails for any reason the pass carries on with the live text.
+    Most callers want ``final_pass.FinalPass``, which wires the models and reports overall progress."""
     progress = progress or (lambda stage, frac: None)
     t_start = time.perf_counter()
     stages: dict[str, float] = {}
+    folder.clear_done()
     meta = folder.read_meta()
     folder.update_meta(status=mt.STATUS_PROCESSING)
 
@@ -667,7 +706,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     ended_at = (end_event or {}).get("ended_at") or meta.get("ended_at") or mt.iso(mt.now_local())
 
     shared = SharedMic.from_meta(meta)
-    diarized = set(shared.separated_streams(meta.get("settings", {}).get("diarize_system", True)))
+    diarized = set(separated_streams(meta))
     words = load_words(folder.words_path)
     mic_stretches = shared if "mic" in diarized else None
 
@@ -676,7 +715,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     if transcriber_factory is not None and segments:
         t0 = time.perf_counter()
         try:
-            progress("Improving the transcript", 0.0)
+            progress(Stage(Step.SECOND_TRANSCRIPTION), 0.0)
             for src in sorted({s.source for s in segments}):
                 if folder.audio_file(src).exists():
                     preloaded[src] = read_audio(folder.audio_file(src))
@@ -685,7 +724,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
                 terms = [t for t in meta.get("vocabulary") or [] if isinstance(t, str)]
                 segments, words, rstats = retranscribe(
                     segments, words, preloaded, transcriber, vocab_mod.build_prompt(terms),
-                    lambda f: progress("Improving the transcript", f))
+                    lambda f: progress(Stage(Step.SECOND_TRANSCRIPTION), f))
                 retx = {"final_transcriber": getattr(transcriber, "name", "unknown"),
                         "retx_lines_changed": rstats.changed, "retx_lines_kept_live": rstats.kept_live}
                 del transcriber
@@ -717,9 +756,10 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
                 if diarizer_factory is None:
                     raise RuntimeError("no diarizer available")
                 diarizer = diarizer_factory()
-            progress(f"Identifying speakers ({src})", 0.0)
+            progress(Stage(Step.SEPARATE, src), 0.0)
+
             def report(f: float, s: str = src) -> None:
-                progress(f"Identifying speakers ({s})", f)
+                progress(Stage(Step.SEPARATE, s), f)
 
             if src == "mic":  # shared mic: only the stretches' audio, each stretch on its own
                 turns_by_source[src] = diarize_stretches(diarizer, audio_by_source[src], mic_stretches, report)
@@ -750,12 +790,12 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
             log.exception("Voice fingerprints unavailable; using diarizer labels")
             embed = None
 
-    progress("Grouping voices", 0.0)
+    progress(Stage(Step.GROUP), 0.0)
     voice_timings: dict[str, float] = {}
     you: dict = {}
     ranges = tags_mod.tagged_ranges(read_tags(folder), segments)  # the user's names as rules; [] without tags
     final_segments = relabel(segments, words, turns_by_source, diarized, embed, voice_threshold,
-                             voice_timings, lambda f: progress("Grouping voices", f), ranges or None, voice,
+                             voice_timings, lambda f: progress(Stage(Step.GROUP), f), ranges or None, voice,
                              mic_stretches, you)
     final_segments = join_fragments(final_segments)
     if embed is not None:
@@ -763,7 +803,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     refined = sorted(s for s in diarized
                      if s in audio_by_source and (embed is not None or turns_by_source.get(s)))
     audio_by_source.clear()
-    progress("Writing final transcript", 1.0)
+    progress(Stage(Step.WRITE), 1.0)
     t0 = time.perf_counter()
     version = new_transcript_version()  # every final transcript gets its own, even with the same words
     count = write_transcript(folder.final_tmp_path, folder.meeting_id, started_at, ended_at, final_segments,
@@ -776,7 +816,7 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     except Exception:  # noqa: BLE001 - the transcript is done; names can be given again in the window
         log.exception("Could not write speaker names for %s", folder.meeting_id)
 
-    _remove_audio(folder, keep_audio)
+    _remove_audio(folder, default_keep_audio)
     took = time.perf_counter() - t_start
     final_stats = {"took_s": round(took, 2), "audio_s": round(audio_s, 2) if audio_s is not None else None,
                    "speed": round(took / audio_s, 2) if audio_s else None,

@@ -384,6 +384,10 @@ class MeetingFolder:
     def mark_done(self) -> None:
         self.done_path.touch()
 
+    def clear_done(self) -> None:
+        """The final transcript is about to be replaced: the meeting is no longer done."""
+        self.done_path.unlink(missing_ok=True)
+
 
 def iter_meetings(meetings_dir: Path):
     """Yield MeetingFolder objects for every meeting folder, oldest first."""

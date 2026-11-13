@@ -219,10 +219,10 @@ def test_set_keep_audio_is_honoured_by_the_final_pass_even_when_the_setting_is_o
     folder = kept(tmp_path)
     folder.update_meta(settings={"keep_audio": False})
     ctl.set_keep_audio(folder, True)  # ticked while the meeting was processing
-    finalize._remove_audio(folder, keep_audio=False)  # the pass was started with the old value
+    finalize._remove_audio(folder, default_keep=False)  # the Keep audio setting is off
     assert folder.audio_file("mic").exists()
     ctl.set_keep_audio(folder, False)
-    finalize._remove_audio(folder, keep_audio=False)
+    finalize._remove_audio(folder, default_keep=False)
     assert not folder.audio_dir.exists()
 
 

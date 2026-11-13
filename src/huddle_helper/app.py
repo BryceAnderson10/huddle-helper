@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import os
 import queue
-import statistics
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -17,22 +16,10 @@ from pathlib import Path
 from typing import Callable
 
 from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
+from .final_pass import FinalPass, PassProgress
 from .recorder import Components, Recorder, Status, load_components
-from .shared_mic import SharedMic
-from .transcribe import final_transcriber_factory
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class FinalizeProgress:
-    """Where the after-Stop pass is, for the window's status bar (the tray reads ``finalizing``)."""
-    meeting_id: str
-    stage: str  # "Identifying speakers (system)", "Grouping voices", "Writing final transcript"
-    frac: float = 0.0  # 0-1 within the stage
-    overall: float = 0.0  # 0-1 over the whole pass, from fixed stage weights (see pass_fraction)
-    elapsed_s: float = 0.0  # since this meeting's pass started
-    eta_s: float | None = None  # None until there is history to estimate from: show the stage only
 
 
 @dataclass(frozen=True)
@@ -50,7 +37,7 @@ class AppState:
     phase: str = "starting"  # starting | downloading | ready | recording | stopping | error
     recording: Status | None = None
     finalizing: str = ""  # "<stage> 40%" (kept for the tray)
-    finalize: FinalizeProgress | None = None  # structured form of the same, None when idle
+    finalize: PassProgress | None = None  # structured form of the same, None when idle
     finalize_queue: int = 0
     message: str = ""
     last_meeting: str | None = None
@@ -58,65 +45,6 @@ class AppState:
     # The voice model is on disk (#55): without it "Several people on my mic" is disabled, in the Start dialog
     # and the Transcript window. Checked at start-up and when a recording starts; never downloaded mid-meeting.
     voice_model_installed: bool = True
-
-
-# -- after-Stop time estimate (pure) --------------------------------------
-SPEAKER_STAGE = "Identifying speakers"
-VOICE_STAGE = "Grouping voices"
-DIARIZE_SHARE = 0.87  # share of a pass spent in diarization, the rest in voice fingerprints
-#                       (final_stats of the test meetings: diarize 87-91%, embed_pieces 9-13%)
-OWN_RATE_FROM = 0.10  # blend in the pass's own rate once this fraction of the pass is done
-HISTORY = 5  # completed meetings whose final_stats.speed are used
-
-
-def pass_fraction(stage: str, frac: float, diarized: list[str] | tuple[str, ...],
-                  weights: dict[str, float] | None = None) -> float:
-    """Fraction (0-1) of the whole pass done, from the stage name and the fraction within it.
-
-    ``diarized`` are the streams the pass diarizes, in the order it does them (sorted by name).
-    Diarization is DIARIZE_SHARE of the time, split over the streams by ``weights`` (seconds of audio
-    each one diarizes: the mic only its shared mic stretches; equal when not given); voice
-    fingerprints are the rest. "Writing final transcript" counts as the end.
-    """
-    frac = min(1.0, max(0.0, frac))
-    n = len(diarized)
-    if stage.startswith(SPEAKER_STAGE):
-        src = stage[stage.find("(") + 1:stage.find(")")] if "(" in stage else ""
-        idx = list(diarized).index(src) if src in diarized else 0
-        w = [max(float((weights or {}).get(s, 1.0)), 0.0) for s in diarized] if weights else [1.0] * n
-        if not any(w):
-            w = [1.0] * n
-        total = sum(w) or 1.0
-        return DIARIZE_SHARE * (sum(w[:idx]) + (w[idx] if w else 0.0) * frac) / total
-    if stage == VOICE_STAGE:
-        base = DIARIZE_SHARE if n else 0.0
-        return base + (1.0 - base) * frac
-    return 1.0 if stage.startswith("Writing") else frac
-
-
-def diarize_weights(meta: dict, length_s: float | None) -> dict[str, float]:
-    """Seconds of audio the after-Stop pass diarizes per stream, for ``pass_fraction``: the system
-    stream whole, the mic only inside its shared mic stretches (an open stretch ends at ``length_s``)."""
-    return {"system": float(length_s or 0), "mic": SharedMic.from_meta(meta).mic_seconds(length_s)}
-
-
-def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | None,
-                         speeds: list[float]) -> float | None:
-    """Seconds left in the after-Stop pass, or None when there is nothing to base it on.
-
-    ``speeds`` are ``final_stats.speed`` (pass time / audio time) of the last completed meetings.
-    expected total = median(speeds) x this meeting's length; once the pass is past OWN_RATE_FROM it
-    is blended with the pass's own rate (elapsed / overall), weighted by how far along it is;
-    remaining = (1 - overall) x expected total. With no history, or no length, there is no estimate
-    (the window shows the stage and percent only).
-    """
-    if not speeds or not length_s or length_s <= 0:
-        return None
-    overall = min(1.0, max(0.0, overall))
-    expected = statistics.median(speeds) * length_s
-    if overall > OWN_RATE_FROM and elapsed_s > 0:
-        expected = (1.0 - overall) * expected + overall * (elapsed_s / overall)
-    return max(0.0, (1.0 - overall) * expected)
 
 
 REMINDER_ENV = "HUDDLE_HELPER_MUTE_REMINDER_S"  # test seam only: seconds between mute reminders
@@ -132,27 +60,6 @@ def _reminder_interval() -> float:
         return INTERVAL_S
 
 
-meeting_length_s = library.meeting_length_s  # how long the meeting was (kept here for the callers of app.*)
-
-
-def recent_final_speeds(meetings_dir: Path, exclude: str | None = None, limit: int = HISTORY) -> list[float]:
-    """``final_stats.speed`` of the last ``limit`` completed meetings (by when their final file was written)."""
-    found: list[tuple[str, float]] = []
-    for f in mt.iter_meetings(meetings_dir):
-        if f.meeting_id == exclude:
-            continue
-        try:
-            meta = f.read_meta()
-        except (OSError, ValueError):
-            continue
-        speed = (meta.get("final_stats") or {}).get("speed")
-        if (meta.get("status") in (mt.STATUS_COMPLETE, mt.STATUS_INTERRUPTED)
-                and isinstance(speed, (int, float)) and speed > 0):
-            found.append((str(meta.get("final_written_at") or meta.get("ended_at") or f.meeting_id), float(speed)))
-    found.sort()
-    return [speed for _, speed in found[-limit:]]
-
-
 def _same_apart_from_vocabulary(a: config.Settings, b: config.Settings) -> bool:
     return {**a.to_dict(), "vocabulary": []} == {**b.to_dict(), "vocabulary": []}
 
@@ -161,16 +68,18 @@ class AppController:
     def __init__(self, on_change: Callable[[], None] | None = None,
                  notify: Callable[[str], None] | None = None,
                  overrides: dict | None = None, capture_factory: Callable[..., object] | None = None,
-                 player: playback.Player | None = None):
+                 player: playback.Player | None = None, final_pass: FinalPass | None = None):
         """``overrides`` (dev aids such as ``tray --out``) replace Settings fields for this run only:
         they are never written back to settings.json. ``capture_factory`` replaces the live devices
-        (``tray --replay``)."""
+        (``tray --replay``). ``final_pass`` runs every meeting's final pass; by default one is built
+        from the Settings in force when each meeting's pass starts."""
         self.settings = config.load()
         self._overrides = dict(overrides or {})
         self._persisted = {k: getattr(self.settings, k) for k in self._overrides}
         for k, v in self._overrides.items():
             setattr(self.settings, k, v)
         self._capture_factory = capture_factory
+        self._final_pass = final_pass
         self.state = AppState()
         self._on_change = on_change or (lambda: None)
         self._notify = notify or (lambda msg: None)
@@ -649,54 +558,21 @@ class AppController:
         folder.merge_speakers({final_label: name})
         self._on_change()
 
-    # -- after-Stop pass ------------------------------------------------
+    # -- final pass ------------------------------------------------------
     def _finalize_worker(self) -> None:
-        from .diarize import SherpaEmbedder, SherpaOfflineDiarizer, final_threads
-        from .finalize import finalize_meeting
-
         while True:
             folder: mt.MeetingFolder = self._jobs.get()
-            last = [0.0]
-            t_start = time.monotonic()
-            speeds: list[float] = []
-            length_s: float | None = None
-            diarized: list[str] = []
-            weights: dict[str, float] | None = None
-            try:
-                meta = folder.read_meta()
-                length_s = meeting_length_s(meta)
-                diarized = SharedMic.from_meta(meta).separated_streams(
-                    meta.get("settings", {}).get("diarize_system", True))
-                weights = diarize_weights(meta, length_s) if length_s else None
-                speeds = recent_final_speeds(folder.path.parent, exclude=folder.meeting_id)
-            except Exception:  # noqa: BLE001 - the estimate is optional
-                log.exception("Could not prepare the time-left estimate for %s", folder.meeting_id)
+            last = [0.0, None]  # when the window was last told, and of which stage
 
-            def progress(stage: str, frac: float, mid=folder.meeting_id) -> None:
+            def progress(p: PassProgress) -> None:
                 now = time.monotonic()
-                if now - last[0] > 0.5 or frac >= 1.0:
-                    last[0] = now
-                    overall = pass_fraction(stage, frac, diarized, weights)
-                    elapsed = now - t_start
-                    self._set(finalizing=f"{stage} {frac:.0%}",
-                              finalize=FinalizeProgress(mid, stage, frac, overall, elapsed,
-                                                        estimate_remaining_s(overall, elapsed, length_s, speeds)))
+                if now - last[0] > 0.5 or p.frac >= 1.0 or p.stage != last[1]:
+                    last[0], last[1] = now, p.stage
+                    self._set(finalizing=f"{p.label} {p.frac:.0%}", finalize=p)
 
             try:
-                self._set(finalizing="Identifying speakers",
-                          finalize=FinalizeProgress(folder.meeting_id, SPEAKER_STAGE))
-                keep = folder.read_meta().get("settings", {}).get("keep_audio", self.settings.keep_audio)
-                # Read when the models load, so a meeting started meanwhile gets 1 thread.
-                voice = self.settings.voice_profile()
-                finalize_meeting(
-                    folder, lambda: SherpaOfflineDiarizer(
-                        threshold=voice.split_cluster, merge_small=False,
-                        num_threads=final_threads(self.is_recording)),
-                    keep_audio=keep, progress=progress,
-                    embedder_factory=lambda: SherpaEmbedder(num_threads=final_threads(self.is_recording)),
-                    voice=voice,
-                    transcriber_factory=final_transcriber_factory(
-                        self.settings, lambda: final_threads(self.is_recording)))
+                final_pass = self._final_pass or FinalPass(self.settings, busy=lambda: self.is_recording)
+                final_pass.run(folder, progress)
                 self._notify(f"Final transcript ready: {folder.meeting_id}")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Finalizing %s failed", folder.meeting_id)

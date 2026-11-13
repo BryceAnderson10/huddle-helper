@@ -74,7 +74,7 @@ def test_ticked_at_start_separates_the_mic_live_and_in_the_final_transcript(tmp_
     assert meta["settings"]["diarize_mic"] is True
     assert speakers(folder.live_path) == ["MIC_SPEAKER_01", "MIC_SPEAKER_02"]
 
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     final = speakers(folder.final_path)
     assert final and all(sp.startswith("MIC_SPEAKER_") for sp in final)
     assert "mic" in folder.read_meta()["refined_streams"]
@@ -87,7 +87,7 @@ def test_not_ticked_keeps_every_mic_line_as_you(tmp_path):
     meta = folder.read_meta()
     assert meta["shared_mic"] == [] and meta["settings"]["diarize_mic"] is False
     assert speakers(folder.live_path) == ["You", "You"]
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     assert speakers(folder.final_path) == ["You", "You"]
     assert "mic" not in folder.read_meta()["refined_streams"]
 
@@ -110,7 +110,7 @@ def test_old_meeting_with_the_flag_and_no_list_is_separated_whole(tmp_path):
         w.write(meeting_end_event(mt.iso(started), len(segs)))
     folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True)
 
-    finalize_meeting(folder, FakeDiarizer, keep_audio=False)
+    finalize_meeting(folder, FakeDiarizer, default_keep_audio=False)
     assert speakers(folder.final_path) == ["MIC_SPEAKER_01", "MIC_SPEAKER_02"]
     assert folder.read_meta()["refined_streams"] == ["mic"]
 
@@ -134,7 +134,7 @@ def test_cli_diarize_mic_is_shared_mic_from_the_start(tmp_path, monkeypatch, fla
     monkeypatch.setattr(recorder, "load_components", fake_load)
     monkeypatch.setattr(cli, "_ensure_models", lambda s, shared=False: None)
     monkeypatch.setattr(cli, "go_offline", lambda: None)
-    monkeypatch.setattr(cli, "_finalize", lambda folder, s, keep_audio=None: finalized.append(folder))
+    monkeypatch.setattr(cli, "_finalize", lambda folder, s: finalized.append(folder))
     argv = ["simulate", "--mic", str(tmp_path / "mic.wav"), "--system", str(tmp_path / "system.wav"),
             "--out", str(tmp_path / "meetings")] + (["--diarize-mic"] if flag else [])
     assert cli.main(argv) == 0

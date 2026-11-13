@@ -551,12 +551,13 @@ def cmd_finalize(args) -> int:
     for name in ("transcript.final.jsonl", "DONE"):
         (dest / name).unlink(missing_ok=True)
     folder = mt.MeetingFolder(dest)
+    folder.update_meta_settings(keep_audio=True)  # the copy keeps its audio whatever the meeting chose
     voice, model_path = voice_for(args.embedding)
     n = args.threads  # 0: the old defaults (diarizer 2 threads, embedder 1)
     count = finalize_meeting(
         folder, lambda: SherpaOfflineDiarizer(threshold=voice.split_cluster, num_threads=n or 2,
                                               merge_small=args.merge_small, embedding_path=model_path),
-        keep_audio=True, embedder_factory=lambda: SherpaEmbedder(num_threads=n or 1, model_path=model_path),
+        default_keep_audio=True, embedder_factory=lambda: SherpaEmbedder(num_threads=n or 1, model_path=model_path),
         voice=voice)
     print(f"{count} segments -> {folder.final_path}")
     print("final_stats:", json.dumps(folder.read_meta().get("final_stats")))
