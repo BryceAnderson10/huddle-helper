@@ -6,7 +6,8 @@
 * ``from_meta(meta)`` / ``write(meta)``  read itself (older meetings: ``settings.diarize_mic`` true is one
   stretch over the whole meeting) and write itself back, with ``ended_ms`` once Stop has closed it
 * ``at_start(on)`` ``toggled(on, at_ms)`` ``closed_at_stop(end_ms, mic_line_starts)``  the changes
-* ``is_open`` ``covers(at_ms)``  "Several people on my mic" is ticked now; a time is inside a stretch
+* ``has_stretches`` ``is_open`` ``covers(at_ms)``  any stretch at all; "Several people on my mic" is ticked now;
+  a time is inside a stretch
 * ``dividers()``  the live view's toggles; the end Stop gave a stretch is not one
 * ``mic_seconds(length_s)`` ``spans(n_samples)`` ``separated_streams(diarize_system)``  the final pass
 
@@ -68,7 +69,7 @@ class SharedMic:
         """``meta`` with this value written in: ``shared_mic``, ``settings.diarize_mic`` (true when there is
         at least one stretch; kept for older readers) and, once Stop has closed it, ``ended_ms``."""
         out = {**meta, "shared_mic": [list(st) for st in self.stretches],
-               "settings": {**(meta.get("settings") or {}), "diarize_mic": self.any}}
+               "settings": {**(meta.get("settings") or {}), "diarize_mic": self.has_stretches}}
         if self.ended_ms is not None:
             out["ended_ms"] = self.ended_ms
         return out
@@ -100,7 +101,7 @@ class SharedMic:
 
     # -- questions -------------------------------------------------------------------------
     @property
-    def any(self) -> bool:
+    def has_stretches(self) -> bool:
         """The meeting has at least one stretch."""
         return bool(self.stretches)
 
@@ -149,7 +150,7 @@ class SharedMic:
     def separated_streams(self, diarize_system: bool) -> list[str]:
         """The streams the final pass separates into speakers, sorted by name: the mic when the meeting has
         a stretch, the system stream when ``settings.diarize_system``."""
-        return [src for src, on in (("mic", self.any), ("system", bool(diarize_system))) if on]
+        return [src for src, on in (("mic", self.has_stretches), ("system", bool(diarize_system))) if on]
 
 
 def _inside(stretch: Stretch, at_ms: int) -> bool:

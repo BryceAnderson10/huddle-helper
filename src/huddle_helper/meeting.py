@@ -274,6 +274,7 @@ class MeetingFolder:
             return meta
 
     def read_shared_mic(self) -> SharedMic:
+        """The meeting's shared mic stretches as ``meta.json`` has them (``SharedMic.from_meta``)."""
         return SharedMic.from_meta(self.read_meta())
 
     def write_shared_mic(self, shared: SharedMic) -> dict:

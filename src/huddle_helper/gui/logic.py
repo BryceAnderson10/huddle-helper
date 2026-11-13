@@ -307,7 +307,7 @@ class MuteBarView:
     emphasis: bool = False  # a "still muted" reminder came in the last REMIND_HIGHLIGHT_S: stronger colours
 
 
-def _in_room(state) -> bool:
+def _shared_mic_open(state) -> bool:
     """A shared mic stretch is open now (the recorder's live status): muting the mic mutes everyone on it."""
     return bool(getattr(getattr(state, "recording", None), "shared_mic", False))
 
@@ -326,11 +326,11 @@ def mute_bar_view(meeting_id: str, model: TranscriptModel, state, now: float | N
     if secs > 0:
         now = time.monotonic() if now is None else now
         text = f"Muted for {duration_text(secs)}. Your mic is still out of the recording (the call still hears you)."
-        if _in_room(state):
+        if _shared_mic_open(state):
             text += " Everyone in the room is out of the recording too."
         return MuteBarView("MIC MUTED", text, now - float(getattr(rec, "mute_reminder_at", 0.0)) < REMIND_HIGHLIGHT_S)
     text = "You're muted in the recording (the call still hears you)."
-    if _in_room(state):
+    if _shared_mic_open(state):
         text += " Everyone in the room is out of the recording too."
     return MuteBarView("MIC MUTED", text)
 
@@ -349,7 +349,7 @@ def mute_button_view(meeting_id: str, model: TranscriptModel, state, hotkey: str
     muted = _mic_muted(meeting_id, model, state)
     key = f" [{hotkey}]" if hotkey else ""
     tip = ("Takes your microphone out of this recording only. The call app still hears you."
-           + (" With several people on your mic, everyone in the room is muted." if _in_room(state) else "")
+           + (" With several people on your mic, everyone in the room is muted." if _shared_mic_open(state) else "")
            + key)
     return MuteButtonView(True, "Unmute me" if muted else "Mute me in the recording", tip)
 
@@ -697,7 +697,7 @@ def shared_mic_view(meeting_id: str, model: TranscriptModel, state) -> SharedMic
     the recorder's live status says so."""
     if meeting_phase(meeting_id, model, state) != RECORDING:
         return SharedMicView(False)
-    checked = _in_room(state)
+    checked = _shared_mic_open(state)
     if not checked and not getattr(state, "voice_model_installed", True):
         return SharedMicView(True, False, tooltip=models.VOICE_MODEL_MISSING, enabled=False)
     tip = ("Your mic's speech is split into speakers from here. Untick when it is just you again."

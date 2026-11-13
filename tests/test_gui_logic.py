@@ -257,7 +257,7 @@ def test_mute_bar_and_button_follow_the_displayed_meeting(tmp_path):
     assert not logic.mute_button_view(mid, m, stopping).visible
 
 
-def test_in_room_mode_warns_that_everyone_is_muted(tmp_path):
+def test_open_shared_mic_warns_that_everyone_is_muted(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
     mid = m.meeting_id
     st = muted_state(mid)

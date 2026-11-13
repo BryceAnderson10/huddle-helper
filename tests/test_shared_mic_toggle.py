@@ -119,7 +119,7 @@ def test_unticking_a_meeting_started_shared_and_ticking_an_open_one_again_is_a_n
 
 def test_set_shared_mic_does_nothing_when_not_recording(tmp_path):
     rec = Recorder(config.Settings(meetings_dir=str(tmp_path)), Components(transcriber=ToneTranscriber()))
-    assert rec.set_shared_mic(True) is False and not rec.shared_mic.any and not rec.status.shared_mic
+    assert rec.set_shared_mic(True) is False and not rec.shared_mic_stretches.has_stretches and not rec.status.shared_mic
 
 
 # -- controller ------------------------------------------------------------------------------------

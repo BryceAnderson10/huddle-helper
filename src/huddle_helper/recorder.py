@@ -321,7 +321,7 @@ class Recorder:
         if s.diarize_system:
             self._clusterers["system"] = OnlineClusterer(SYSTEM_PREFIX, voice.live_match, s.live_min_new_speaker_s,
                                                          adopt_threshold=voice.live_adopt)
-        if self._shared_mic.any:
+        if self._shared_mic.has_stretches:
             self._mic_clusterer()
 
         capture_factory = self.c.capture_factory
@@ -437,8 +437,8 @@ class Recorder:
         return c
 
     @property
-    def shared_mic(self) -> SharedMic:
-        """This meeting's shared mic stretches as they stand now."""
+    def shared_mic_stretches(self) -> SharedMic:
+        """This meeting's shared mic stretches as they stand now (``status.shared_mic``: one is open)."""
         with self._shared_lock:
             return self._shared_mic
 
@@ -447,7 +447,7 @@ class Recorder:
         start from then on follow the new mode; lines already written keep their labels. ``at_ms``
         overrides the clock (tests). Returns whether a stretch is open afterwards."""
         if self.status.state != "recording" or self.folder is None:
-            return self.shared_mic.is_open
+            return self.shared_mic_stretches.is_open
         with self._shared_lock:
             if bool(on) == self._shared_mic.is_open:
                 return bool(on)

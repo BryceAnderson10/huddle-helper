@@ -16,7 +16,7 @@ def test_reads_the_list_and_older_meetings_from_the_flag():
     assert stretches(fm({"settings": {"diarize_mic": True}})) == [[0, None]]  # older: the whole meeting
     assert stretches(fm({"settings": {"diarize_mic": False}})) == [] == stretches(fm({}))
     assert stretches(fm({"shared_mic": [[0, 5000], "junk", [1, "x"]]})) == [[0, 5000]]
-    assert fm({"shared_mic": [[0, 5000]]}).any and not fm({"shared_mic": []}).any
+    assert fm({"shared_mic": [[0, 5000]]}).has_stretches and not fm({"shared_mic": []}).has_stretches
 
 
 def test_writes_the_list_the_legacy_flag_and_ended_ms_once_stopped():

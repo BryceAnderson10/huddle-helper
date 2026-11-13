@@ -97,7 +97,7 @@ def pass_fraction(stage: str, frac: float, diarized: list[str] | tuple[str, ...]
 def diarize_weights(meta: dict, length_s: float | None) -> dict[str, float]:
     """Seconds of audio the after-Stop pass diarizes per stream, for ``pass_fraction``: the system
     stream whole, the mic only inside its shared mic stretches (an open stretch ends at ``length_s``)."""
-    return {"system": int((length_s or 0) * 1000) / 1000, "mic": SharedMic.from_meta(meta).mic_seconds(length_s)}
+    return {"system": float(length_s or 0), "mic": SharedMic.from_meta(meta).mic_seconds(length_s)}
 
 
 def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | None,
