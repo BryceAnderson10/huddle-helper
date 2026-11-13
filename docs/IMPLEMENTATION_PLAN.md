@@ -1,6 +1,12 @@
 # Implementation plan: open TODOs and the Transcript window
 
-Nov 9, 2026 · for the development agent · Status: ready to start
+Nov 9, 2026 · for the development agent · Status: finished (historical)
+
+> **Historical.** WP0-WP9 and WP11 are built; WP10 (process loopback) was a spike and is out of
+> scope (`.out-of-scope/process-loopback-capture.md`). Sections 3, 7 and 8 describe the code and
+> the open questions as they were on Nov 9, before WP1. For how the app works now, read the
+> [README](../README.md), [OUTPUT_SPEC.md](OUTPUT_SPEC.md) and [GLOSSARY.md](../GLOSSARY.md); the
+> record of what was measured is [TODO.md](../TODO.md).
 
 This plan turns two documents into ordered, checkable work:
 

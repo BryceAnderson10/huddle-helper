@@ -1,4 +1,4 @@
-# Meeting Companion PRD
+# Huddle Helper PRD
 
 Nov 9, 2026 · @Bryce
 
@@ -50,7 +50,7 @@ P0 items define v1; P1 items follow once the core pipeline is stable.
 | F7 | One folder per meeting, with a metadata file and a completion marker | P0 |
 | F8 | After Stop, write a refined final transcript with improved speaker labels | P0 |
 | F9 | Let the user rename speakers (for example "Speaker 2" to "Dana") and store the mapping in the meeting folder | P1 |
-| F10 | Buffer both streams as audio during the meeting, for catch-up and the after-Stop pass; delete after the final transcript unless Keep audio is on | P0 |
+| F10 | Buffer both streams as audio during the meeting, for catch-up and the final pass; delete after the final transcript unless Keep audio is on | P0 |
 | F11 | Choose input and output devices and the output folder in settings | P1 |
 | F12 | Detect likely meeting start (call app audio active) and prompt to record; v1 stays manual | Later |
 | F13 | Languages other than English; v1 uses English-only models | Later |
@@ -58,37 +58,18 @@ P0 items define v1; P1 items follow once the core pipeline is stable.
 
 ## Output spec
 
-This is the contract with the downstream app. Each meeting gets its own folder; the live file is append-only, and the final file replaces it as the source of truth once the meeting ends.
+This is the contract with the downstream app. Each meeting gets its own folder; the live file is append-only, and the final file replaces it as the source of truth once the meeting ends. The full, current contract is [OUTPUT_SPEC.md](OUTPUT_SPEC.md): the folder layout, every file and field, how to tell an active meeting from one whose recorder died, and the read-only `context` command.
 
-```text
-%USERPROFILE%\MeetingCompanion\meetings\
-  2026-11-09_1100_weekly-sync\
-    meta.json               # start time, devices, models, status
-    transcript.jsonl        # live, append-only, one JSON object per line
-    transcript.final.jsonl  # written after Stop, refined speaker labels
-    speakers.json           # optional: speaker id to display name
-    DONE                    # empty marker, created last
-    audio\                  # buffered while recording; kept only if Keep audio is on
-```
+The rules it rests on:
 
-Every line of `transcript.jsonl` is one event. Line 1 is `meeting_start`, the last line is `meeting_end`, and everything between is `segment`:
-
-```json
-{"type":"meeting_start","meeting_id":"2026-11-09_1100_weekly-sync","started_at":"2026-11-09T11:00:03-06:00","schema":1}
-{"type":"segment","seq":1,"start_ms":1200,"end_ms":4850,"source":"mic","speaker":"You","text":"Let's start with the launch checklist.","confidence":0.93}
-{"type":"segment","seq":2,"start_ms":5100,"end_ms":9020,"source":"system","speaker":"SPEAKER_01","text":"Legal still needs one more day.","confidence":0.88}
-{"type":"meeting_end","ended_at":"2026-11-09T11:42:30-06:00","segments":212}
-```
-
-- **Timestamps** are milliseconds from the start of the meeting, so segments from both streams share one clock. Wall-clock time is in the start and end events.
+- **Timestamps** are milliseconds from the start of the meeting, so segments from both streams share one clock.
 - **Speaker labels** in the live file are provisional. `transcript.final.jsonl` uses the same schema with refined labels, and the app creates `DONE` only after it is fully written.
 - **Crash safety.** Each line is flushed on write. If the app dies, the live file is still valid up to the last complete line, and `meta.json` says the meeting did not finish cleanly.
-
-**Detecting new meetings.** The downstream app runs on the same PC and watches the `meetings` folder. The recorder creates each meeting folder with `meta.json` before writing any transcript line, and writes `transcript.final.jsonl` under a temporary name, renaming it into place when complete. A watcher therefore never sees a half-written final file: new folder means a meeting started, `DONE` means it is safe to process.
+- **Detecting new meetings.** The downstream app runs on the same PC and watches the `meetings` folder. A new folder means a meeting started; `DONE` means it is safe to process. The final file is written under a temporary name and renamed into place, so a watcher never sees it half-written.
 
 ## Technical approach (Windows)
 
-These are proposed defaults for the first build; each can change after a spike.
+These were the proposed defaults for the first build. What was built follows them, except where a bullet says otherwise.
 
 &#91;embedded content: audio pipeline · 2 streams, 1 writer\]
 
@@ -96,9 +77,9 @@ Mic and system audio stay separate until the writer, so every line knows whether
 
 - **Capture.** Use WASAPI from Python (PyAudioWPatch or soundcard are the likely libraries). The microphone is a normal capture stream; meeting audio is WASAPI loopback on the default playback device, which needs no virtual driver and works with any call app. Keeping the two as separate streams gives the "You" versus "others" split for free.
 - **Segmentation.** Run voice activity detection on each stream and cut speech into utterances, so transcription works on short chunks and lines can be written as soon as an utterance ends.
-- **Transcription.** faster-whisper on the CPU with 8-bit weights and an English-only model (base.en or small.en). Milestone 2 picks the size by measuring speed on the target laptop.
-- **Audio buffer.** Both streams are written to compressed audio files in the meeting folder while recording. If live transcription falls behind, it keeps working through the backlog without dropping speech, and the after-Stop pass always has the full audio. By default the files are deleted once `transcript.final.jsonl` is written. With Keep audio on, they stay until the user deletes them, or until the optional auto-purge (F14) removes them.
-- **Diarization.** Run only on the system stream by default, since the mic stream is usually just you. A setting switches diarization onto the mic stream, or both streams, for meetings with several people in your room. A light live pass (voice fingerprints grouped by similarity) gives provisional speaker ids; a second, more accurate pass after Stop runs on the buffered audio and produces the refined labels in `transcript.final.jsonl`.
+- **Transcription.** faster-whisper on the CPU with 8-bit weights and an English-only model (base.en or small.en). Built: base.en live, with an optional second transcription after Stop on a stronger model (off by default).
+- **Audio buffer.** Both streams are written to compressed audio files in the meeting folder while recording. If live transcription falls behind, it keeps working through the backlog without dropping speech, and the final pass always has the full audio. By default the files are deleted once `transcript.final.jsonl` is written. With Keep audio on, they stay until the user deletes them, or until the optional auto-purge (F14) removes them.
+- **Diarization.** Run only on the system stream by default, since the mic stream is usually just you. For meetings with several people in your room, the user marks a shared mic per meeting ("Several people on my mic", at Start or while recording), and mic speech in those stretches is separated into speakers too. A light live pass (voice fingerprints grouped by similarity) gives provisional speaker ids; a second, more accurate pass after Stop runs on the buffered audio and produces the refined labels in `transcript.final.jsonl`.
 - **Writer.** A single component merges segments from both streams by time, assigns sequence numbers and appends JSONL lines with a flush per line.
 - **Echo.** Without headphones, the mic also hears the speakers, which would duplicate remote speech as "You". Start with a dedupe step that drops mic segments matching system text at the same time, and revisit echo cancellation if that is not enough.
 - **App shell.** A tray application with Start/Stop, a recording indicator and a settings window. Built in Python, using pystray for the tray icon, and packaged as a Windows app with PyInstaller.
@@ -107,7 +88,7 @@ Mic and system audio stay separate until the writer, so every line knows whether
 
 - **Privacy.** After models are installed, the app makes no network calls. Audio is kept on disk only until the final transcript is written, unless the user turns on Keep audio. Transcripts stay in the user's chosen folder.
 - **Recording transparency.** A visible recording indicator is always on while capturing. Laws on recording calls vary by place; the app should remind users to tell participants, and it is the user's responsibility to comply.
-- **Latency (proposed).** A finished utterance appears in `transcript.jsonl` within about 5 seconds at the 90th percentile on the reference laptop (a recent CPU, no dedicated GPU; exact model to be chosen).
+- **Latency.** A finished utterance appears in `transcript.jsonl` within about 5 seconds at the 90th percentile on the reference laptop (a recent CPU, no dedicated GPU; exact model to be chosen). Measured on the target laptop: p90 1.6 to 3.6 s.
 - **Throughput.** Transcription keeps up with real time on average on the reference laptop. If it falls behind, live lines arrive late but none are lost, and the backlog clears after the meeting.
 - **Reliability.** A meeting of at least 2 hours records without dropped audio, and a crash loses at most the utterance in progress.
 - **Footprint.** Idle CPU use is negligible when not recording; disk use is text only by default.

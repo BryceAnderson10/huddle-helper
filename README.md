@@ -48,7 +48,7 @@ Files and folders:
 
 ## Development
 
-Requires Windows and Python 3.12 or 3.14.
+Requires Windows and Python 3.11 to 3.14 (`pyproject.toml`; the dev venv runs 3.14).
 
 ```powershell
 python -m venv .venv
@@ -66,8 +66,9 @@ huddle-helper capture-spike --minutes 30            # M1: mic + loopback to WAVs
 huddle-helper bench --audio call.wav --models base.en,small.en   # M2: speed vs real time
 python tools\make_sample_meeting.py --out sample --echo          # synthetic two-voice meeting (Windows TTS)
 huddle-helper simulate --mic sample\mic.wav --system sample\system.wav --realtime
-huddle-helper finalize <meeting folder>             # re-run the after-Stop pass
-huddle-helper recover                               # finish meetings left by a crash
+huddle-helper finalize <meeting folder>             # re-run the final pass
+huddle-helper recover                               # finish meetings left by a crash (never one another process holds)
+huddle-helper export <meeting folder> --format md   # Markdown or plain text (--format txt)
 huddle-helper context --pretty                      # read-only: last 3 min of the latest meeting as JSON (docs/OUTPUT_SPEC.md)
 huddle-helper tray --replay <meeting folder> --out <dir> [--keep-audio]  # dev: run a kept meeting's audio through the tray app (add --auto to run unattended)
 huddle-helper devices
@@ -92,19 +93,30 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `audio/capture.py` | WASAPI mic + loopback, resampling, default-device change detection and rebind |
 | `audio/aligner.py` | Keeps both streams on one clock (fills loopback silence and dropouts) |
 | `audio/buffer.py` | FLAC buffer per stream |
+| `audio/endpoints.py` | The Windows default microphone and speakers, read from Core Audio |
+| `audio/filesource.py` | Feeds audio files through the recorder instead of live devices (tests, `simulate`, replay) |
 | `vad.py` | Streaming Silero VAD and utterance segmentation |
 | `transcribe.py` | faster-whisper wrapper |
 | `vocab.py` | Custom vocabulary: parse terms, token budget, prompt sentence; one term from a line (`check_new_term`: tidy, no duplicates, budget note); the plain-text vocabulary file (read, write, merge) |
 | `storage.py` | The Storage panel's numbers: meetings-folder use split into audio and the rest, the largest by audio, and the previewed set for "delete kept audio older than N days" (the age rule of auto-purge) |
 | `context.py` | The read-only `context` command for a downstream app: the active, latest or a named meeting; live or final transcript; a capped time window (last N s, a range, around a bookmark) or the whole meeting; returned as JSON |
 | `attendees.py` | The attendee list from the Start dialog: parse, dedupe, `meta.json` `attendees`, the opt-in to add names to the vocabulary |
-| `diarize.py` | Live clustering and offline diarization |
+| `diarize.py` | Live clustering and offline diarization; the fingerprint model's cutoffs (`PROFILES`) |
+| `models.py` | Where models live (bundled copy, else the user folder) and the one-time downloads; the only network access in the app |
+| `config.py`, `paths.py` | Settings (`settings.json`, versioned migrations); well-known folders |
+| `segments.py` | `Segment` and `Word`, shared by the pipeline, the writer and the final pass |
+| `cli.py` | The `huddle-helper` commands |
 | `writer.py`, `echo.py` | Time-ordered merge, echo dedupe, JSONL writing |
 | `recorder.py` | Threads and lifecycle of one recording |
-| `finalize.py` | After-Stop pass: refined labels (the user's names steer the clustering), final file, `speakers.json` from the names, cleanup, DONE |
+| `finalize.py` | The final pass's steps: refined labels (the user's names steer the clustering; only shared mic stretches of the mic are separated, and `You` is recognised inside them), final file, `speakers.json` from the names, cleanup, DONE |
+| `final_pass.py` | `FinalPass`: the final pass as the app and the CLI both run it (model wiring, the Keep audio rule, progress that only goes forward, time left, re-running, the heartbeat while it runs) |
+| `shared_mic.py` | `SharedMic`: the stretches where several people speak into the user's mic; the only reader and writer of `meta.json` `shared_mic` |
+| `status.py` | A meeting's status, worked out in one place from `meta.json`, `heartbeat.json` and `DONE`; what the app shows for it |
+| `heartbeat.py` | `heartbeat.json`: a fresh beat means a process holds the meeting (recording, final pass, final pass queue, recover; ADR 0002) |
+| `live_wording.py` | Where the final transcript's wording differs from the live one: a hint, never a verdict |
 | `retranscribe.py` | Optional second transcription of the kept audio after Stop with a stronger model (off by default); each line keeps its place |
-| `housekeeping.py` | Crash recovery, audio auto-purge |
-| `library.py` | Meetings list: `MeetingInfo`, cached `scan` (sizes measured on a worker thread), status mapping, filter and search, `delete_meeting` / `delete_audio` (never while busy; only real folders inside the meetings folder) |
+| `housekeeping.py` | Recover (closes out meetings whose recording did not end with Stop; skips and holds by heartbeat), audio auto-purge |
+| `library.py` | Meetings list: `MeetingInfo`, cached `scan` (sizes measured on a worker thread), filter and search, `delete_meeting` / `delete_audio` (never while busy; only real folders inside the meetings folder) |
 | `shell.py` | Recycle Bin delete through `SHFileOperationW` (`recycle`), `has_recycle_bin` |
 | `tail.py` | `JsonlTail`: reads only the complete lines appended to a growing JSONL file |
 | `transcript_model.py` | UI-free model of one meeting: lines, names, bookmarks and gaps as ordered rows and change ops; live-to-final swap |
@@ -127,21 +139,24 @@ Run the exe from inside that folder (or a shortcut to it): it needs the `_intern
 | `gui/storage_dialog.py` | The Storage panel: disk use, the auto-delete setting, Delete kept audio older than N days with a preview (thin Tk over `storage` and `confirm`) |
 | `gui/meetings_logic.py`, `gui/confirm.py` | What the Meetings page shows and which buttons work; the exact wording of the delete confirmation (what goes, can it come back, 24-hour warning, permanently), as pure functions |
 | `gui/logic.py`, `gui/theme.py` | What the window says (header, status, time left, default meeting, mute bar, Bookmark menu, hotkey rows, tray tooltip, which final speakers are "short") as pure functions; colours, fonts, DPI awareness |
-| `app.py`, `tray.py`, `ui.py` | Controller (after-Stop progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`, `add_vocabulary_term`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted" and "Several people on my mic"; Settings has Vocabulary with file import and export, Hotkeys and Bookmark types; "Add to vocabulary…") |
+| `app.py`, `tray.py`, `ui.py` | Controller (final pass queue, progress and time-left estimate, bookmarks, mute, `is_busy`, `retry_final`, `delete_meetings`, `play_clip` / `play_from` / `stop_playback`, `set_keep_audio`, `tag_speaker` / `tag_line` / `set_final_name`, `add_vocabulary_term`), tray icon and menu (Meetings…, Bookmark submenu, mute, `muted`/`flag` icons, hotkeys), dialogs (Start has "Start with my mic muted" and "Several people on my mic"; Settings has Vocabulary with file import and export, Hotkeys and Bookmark types; "Add to vocabulary…") |
 
 ## Status against the PRD milestones
 
+All six milestones are built and were checked on real calls on the target laptop (Tests #4 and
+#6-#8; the record is in [TODO.md](TODO.md)).
+
 | Milestone | State |
 | --- | --- |
-| 1. Capture spike | Built (`capture-spike`). Verified briefly on real devices; **the 30-minute real-call run is still to do.** |
-| 2. Single-stream transcription | Built (`bench`). On the dev PC, base.en ran ~4× real time over both streams. Pick the default model on the target laptop. |
-| 3. Two streams to JSONL | Done; verified with synthetic meetings (median 0.9 s, p90 1.5 s from end of speech to line on disk). |
-| 4. Diarization | Done (live + refined). Verified on two synthetic voices; needs tuning on real calls. |
+| 1. Capture spike | Done (`capture-spike`). Real calls of 22 to 57 minutes recorded without gaps. |
+| 2. Single-stream transcription | Done (`bench`). base.en is the live default; small.en is offered for the optional second transcription. |
+| 3. Two streams to JSONL | Done. Live delay on the laptop: median 1.1-1.5 s, p90 1.6-3.6 s (target 5 s). |
+| 4. Diarization | Done (live + final pass). The speaker count was right on each real call (3, 9 and 6 remote people). |
 | 5. Tray app | Done, including settings, device selection, Keep audio and a PyInstaller build. |
-| 6. Hardening | Crash recovery, echo dedupe, device rebind, F9 rename and F14 purge are in. **Long soak tests (2 h+) are still to do.** |
+| 6. Hardening | Recover, echo dedupe, device rebind (a headset plugged in mid-call re-opened both streams within 0.4 s), speaker naming (F9) and auto-purge (F14) are in. The 2-hour soak test was dropped: calls are not expected to run that long. |
 
 Known limitations:
 
-* The refined pass loads a whole stream into memory (~230 MB per hour of audio per stream).
-* Device-change rebinding is implemented but hasn't been exercised by switching devices mid-call.
+* The final pass loads a whole stream into memory (~230 MB per hour of audio per stream).
+* The final pass takes about 0.2x the meeting's length on the laptop, and 0.4-0.6x with the second transcription on.
 * Echo handling is text-based dedupe only; there is no acoustic echo cancellation.

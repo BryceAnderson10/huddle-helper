@@ -137,7 +137,7 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `segments` | Lines in the live file. |
 | `devices` | `{"mic": name, "system": name}` actually captured. |
 | `models` | Speech, VAD and diarization models used. |
-| `settings` | Diarization, echo and Keep audio settings in force for this meeting. `diarize_mic` is `true` when the meeting has at least one shared mic stretch (see `shared_mic`): it becomes `true` when the first stretch opens and, after Stop, is `false` again if every stretch was dropped. It is no longer an app setting. `keep_audio` starts as the Keep audio setting and the user can change it for this one meeting while it is recording or processing (Transcript window, "Keep this meeting's audio"); the after-Stop pass reads it just before deleting `audio\`. |
+| `settings` | Diarization, echo and Keep audio settings in force for this meeting. `diarize_mic` is `true` when the meeting has at least one shared mic stretch (see `shared_mic`): it becomes `true` when the first stretch opens and, after Stop, is `false` again if every stretch was dropped. It is no longer an app setting. `keep_audio` starts as the Keep audio setting and the user can change it for this one meeting while it is recording or processing (Transcript window, "Keep this meeting's audio"); the final pass reads it just before deleting `audio\`. |
 | `shared_mic` | Additive. The meeting's shared mic stretches: `[[start_ms, end_ms], ...]` on the meeting clock, stretches where several people speak into the user's microphone. Inside a stretch mic lines are separated into `MIC_SPEAKER_nn`; outside, every mic line is `You`. A line belongs to the stretch it started in: `start_ms <= line start < end_ms`. `end_ms` is `null` while a stretch is still open. Ticking "Several people on my mic" in the Start dialog (or `--diarize-mic` on the CLI) records `[[0, null]]`, otherwise it starts as `[]`; while recording, ticking the box in the Transcript window appends `[now, null]` and unticking sets that `null` to the meeting clock, so the list grows during the meeting (stretches are literal, however short). At Stop an open stretch is closed at the meeting's end (`ended_ms`) and **any stretch in which no mic line started is dropped**, so after Stop no `end_ms` is `null` and every stretch holds at least one mic line. The toggles are not written to the transcript files; the Transcript window draws its dividers from this list, with no "just you" divider at an `end_ms` equal to `ended_ms` (the end Stop gave it, not an untick; in meetings without `ended_ms`, an `end_ms` within 1 s of `duration_s`). **Absent in older meetings:** read `settings.diarize_mic: true` there as one stretch covering the whole meeting, and `false` as none. |
 | `ended_ms` | Optional, additive (set at Stop; absent while recording and in older meetings). The meeting's end on the meeting clock, in ms: the length of the recorded audio, the value Stop closed any open `shared_mic` stretch at, so a stretch Stop ended has `end_ms` exactly equal to it. Unlike `duration_s` (wall-clock seconds measured after the transcription backlog drained) it does not include the time Stop took. |
 | `gaps` | `[{"source","start_ms","end_ms","reason"}]`: periods with no audio. Silence is inserted so the clock stays aligned. **Readers must check `reason`:** most gaps are lost audio (for example while re-binding after the default device changed), but `"muted"` is deliberate (see below). |
@@ -150,14 +150,14 @@ Rewritten atomically (temp file + rename) whenever it changes.
 | `playbacks`, `playback_segments_dropped` | Optional, additive (set at Stop; absent in older meetings). `playbacks`: how many clips the user played from the Transcript window while the meeting was recording (every line of a Play from here run counts as one clip). `playback_segments_dropped`: utterances that overlapped such a clip in time and repeated its words, so they were left out of the transcript (the clip came back through the system audio or the microphone) and never reached the live speaker labels. Kept as a diagnostic; both are 0 when nothing was played. |
 | `audio_deleted_at` | Optional, additive. ISO 8601 time at which the user deleted the kept `audio\` from the Meetings list (to the Recycle Bin or permanently); `audio_kept` is then `false`. Absent if that never happened. The transcripts, `speakers.json` and `marks.jsonl` are not touched. |
 | `audio_purged_at` | Optional, additive. The same for the automatic purge of kept audio after N days (Settings). |
-| `final_stats` | Diagnostics: after-Stop timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`diarize_mic`: the split-point step over the shared mic stretches only, all stretches together; `merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
+| `final_stats` | Diagnostics: final pass timing, `{"took_s", "audio_s", "speed" (took_s / audio_s; null without audio), "stages": {"read_audio", "diarize_<source>", "merge_small_<source>", "embed_pieces", "cluster", "write"}}`, seconds; only stages that ran (`diarize_mic`: the split-point step over the shared mic stretches only, all stretches together; `merge_small_<source>`: re-fingerprinting sherpa's turns to merge small speakers, not included in `diarize_<source>`; `embed_pieces`: voice fingerprints of the pieces; `cluster`: grouping them into speakers). |
 | `you_match` | Optional, additive; a diagnostic. Present when the final pass separated mic speech inside shared mic stretches: whether it took one of those mic speakers for `You` (see "You inside a shared mic stretch"). `{"matched": bool, "reason": "matched" \| "no_reference" \| "too_little_reference" \| "below_cutoff" \| "no_clear_lead" \| "named" \| "no_mic_speakers" \| "failed", "reference_s": seconds of fingerprinted mic speech outside every stretch, "similarity": the most alike mic speaker (null when not computed), "runner_up": the second (null with one speaker)}`. Similarities are on the voice model's own scale (`diarization_embedding`). |
 | `final_transcriber` | Present only when the kept audio was transcribed a second time after Stop (WP15, off by default): the model's name. The text of a final line may then differ from the live line at the same time; `transcript.jsonl` and `audio\words.jsonl` are never rewritten. `final_stats` then also has `stages.retranscribe` (seconds), `retx_lines_changed` and `retx_lines_kept_live` (lines whose new text was refused as empty, under half or over twice the live line's words); `retx_failed: true` instead when the second transcription failed and the live text was kept. |
 
 ## `marks.jsonl` (bookmarks)
 
 Append-only, one JSON object per line, flushed per line. Created on the first bookmark: a meeting
-without bookmarks has no file. It is never deleted by the after-Stop pass; it belongs with the
+without bookmarks has no file. It is never deleted by the final pass; it belongs with the
 transcript. Bookmarks can also be added, labelled, retyped or deleted after the meeting, so a reader
 should apply the events rather than trust a count.
 
@@ -212,7 +212,7 @@ is replaced by digital silence before anything is stored or analysed, and the pe
 A diagnostic: the mic lines the echo dedupe left out of the transcript, so a false drop (a line the user
 really said) can be checked after the meeting. Append-only, one JSON object per line, flushed per line as
 each line is dropped, so it survives a crash. Created on the first drop: a meeting with no drops (or with
-echo dedupe off) has no file. It is never deleted by the after-Stop pass. Nothing in it is in
+echo dedupe off) has no file. It is never deleted by the final pass. Nothing in it is in
 `transcript.jsonl` or `transcript.final.jsonl`.
 
 ```json
@@ -268,7 +268,7 @@ has started again the meeting is `interrupted`.
 
 Append-only, one JSON object per line, flushed per line. Created when the user first names a speaker
 or a line in the Transcript window; a meeting nobody was named in has no file. It is never deleted by
-the after-Stop pass. Names can also be added after Stop until `DONE` (the pass reads the file again at
+the final pass. Names can also be added after Stop until `DONE` (the pass reads the file again at
 its end), so apply the events rather than trust a count.
 
 ```json
@@ -305,7 +305,7 @@ apply the mapping when you read.
 | Field | Meaning |
 | --- | --- |
 | `speakers` | Final label to display name. A speaker without an entry has no name (keep showing the label). |
-| `from_tags` | Optional, additive. `true` when the after-Stop pass wrote the names from `speaker_tags.jsonl`. |
+| `from_tags` | Optional, additive. `true` when the final pass wrote the names from `speaker_tags.jsonl`. |
 | `conflicts` | Optional, additive. Final speakers that hold the speech of two named people: `{"speaker", "names": {name: ms}}`, milliseconds of that person's tagged speech inside the speaker, largest first. The speaker is listed under the largest name in `speakers`. A second name is reported when it has at least 25% of the largest one's overlap. The user is shown these in the window; a downstream app can treat the speaker as uncertain. |
 | `names_changed_at` | Optional, additive. When `speakers` last changed (ISO 8601 with milliseconds and UTC offset, strictly later than the time before; compare as times, not as text). Huddle Helper moves it only when a name is added, changed or removed, not when it writes the same names again, and never with the transcript version: a reader holding quotes re-applies the names without treating the quotes as outdated. Absent until Huddle Helper first changes a name. A downstream app that changes `speakers` should set it too. |
 | `updated_at` | When the file was last written. |

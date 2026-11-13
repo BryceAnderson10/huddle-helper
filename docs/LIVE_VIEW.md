@@ -1,6 +1,18 @@
-# Transcript Window: Live View, Speakers, Bookmarks and Meetings (draft)
+# Transcript Window: Live View, Speakers, Bookmarks and Meetings
 
-Nov 9, 2026 · @Bryce · Status: draft for discussion
+Nov 9, 2026 · @Bryce · Status: built (design record)
+
+> **Built.** This is the design the Transcript window was built from, kept as the record of
+> what each feature does and why. Where it differs from the app today:
+>
+> - The Overview's "Today" and "Problem" describe the app before the window existed
+>   ("Rename speakers..." is gone; names are given in the window).
+> - Milestone 7, process-loopback capture, is out of scope
+>   (`.out-of-scope/process-loopback-capture.md`); the drop rule stays.
+> - Similarity numbers on the old fingerprint model's scale (the 0.7 tag gate, 0.64-0.75) are
+>   now the shipped model's profile values (`diarize.PROFILES`, tag gate 0.40).
+> - The final pass takes about 0.2x the meeting's length on the laptop, not 0.6x.
+> - The milestone checks were run or closed; results are in [TODO.md](../TODO.md).
 
 ## Overview
 
@@ -155,7 +167,7 @@ P0 items define this feature's first release; P1 items follow.
 | L32 | A Storage panel shows disk use of the meetings folder (transcripts vs kept audio), the auto-purge setting, and "Delete kept audio older than N days" now, with a preview | P1 |
 | **Custom vocabulary** | | |
 | L33 | A Vocabulary list in Settings (acronyms, product names, people's names, one per line) is given to Whisper for every utterance on both streams; changes apply from the next utterance, including during a meeting | P0 |
-| L34 | The Start dialog takes extra terms for this meeting only; attendee names (L13) are added automatically | P0 |
+| L34 | The Start dialog takes extra terms for this meeting only; attendee names (L13) are added only when the user ticks a box (off by default) | P0 |
 | L35 | The vocabulary a meeting used is recorded in `meta.json`, so a transcript can be traced to the vocabulary it was made with | P0 |
 | L36 | Vocabulary never adds words that weren't said: no measurable rise in hallucinated lines, and live line delay stays within the PRD target, measured on kept real audio before release | P0 |
 | L37 | "Add to vocabulary…" on a line's right-click menu, with the selected words prefilled for the user to correct | P1 |
@@ -766,7 +778,7 @@ it may not keep up live on the target laptop.
   `settings.json` as a list.
 - **This meeting (L34).** The Start dialog has an "Extra terms for this meeting" box
   (names of attendees, a project codename). Attendee names from L13 are added
-  automatically. These apply to this meeting only and aren't saved to Settings.
+  only when the user ticks the Start dialog's opt-in box (off by default). These apply to this meeting only and aren't saved to Settings.
 - **From a line (L37, P1, built in WP9d).** Right-click → "Add to vocabulary…" opens a small dialog
   with the selected text ("Quodium") for the user to replace with the right term
   ("QDM"). It's added to Settings and applies from the next utterance (during a recording it goes to the
@@ -817,8 +829,8 @@ real audio (Tests #2–#4) with and without vocabulary:
 - **Speed:** live line delay p90 stays under the PRD's 5 s on the target laptop (it was
   2.4 s in Test #4 without vocabulary).
 - **Names:** people's names are the riskiest terms, because a wrongly inserted name is
-  a wrong fact ("Thank you, Dana" when nobody said Dana), and attendee names are
-  added automatically (L34). Test #4 has four known names on the call (Remote A–D),
+  a wrong fact ("Thank you, Dana" when nobody said Dana), which is why attendee names
+  are opt-in (L34). Test #4 has four known names on the call (Remote A–D),
   so count names that appear where the run without vocabulary had none, and
   check each against the audio. If names misfire, keep attendee names out of the prompt
   by default.
@@ -1087,7 +1099,7 @@ show that the call is active, but who is speaking is only known once the line la
 | Exported files spread transcripts outside the meetings folder | User picks the location each time; nothing is exported automatically. Same privacy as copying the JSONL. |
 | Names are personal data | Stored only in the meeting folder like the transcript; no network. |
 | Vocabulary makes Whisper write terms that weren't said (on noise or short sounds) | Measured before release (L36); existing hallucination filters stay on; a confidence floor for very short vocabulary-only lines if needed. |
-| **Names in the vocabulary appear where nobody said them** | A wrong name is a wrong fact downstream, and attendee names are added automatically (L34). Measured on Test #4, which has known names; if names misfire, attendee names stay out of the prompt by default. |
+| **Names in the vocabulary appear where nobody said them** | A wrong name is a wrong fact downstream, so attendee names are added only when the user ticks a box (L34). Measured on Test #4, which has known names: names did misfire, so they stay out of the prompt by default. |
 | A long vocabulary slows every utterance or crowds out the audio | Token budget with a visible counter; meeting terms first; speed checked on the target laptop. |
 | Vocabulary helps less than expected on base.en | Measure in the milestone 9 spike; pair with the small.en benchmark (TODO) if base.en still misses the terms. |
 

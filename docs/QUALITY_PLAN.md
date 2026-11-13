@@ -1,6 +1,13 @@
 # Implementation plan: speaker labels and transcript quality
 
-Nov 10, 2026 · for the development agent · Status: ready to start
+Nov 10, 2026 · for the development agent · Status: finished (historical)
+
+> **Historical.** WP12 and WP13 are done (the app ships 3D-Speaker ERes2Net; its cutoffs are in
+> `diarize.PROFILES`). WP15, the second transcription, is built and stays opt-in on Whisper. WP14
+> (Parakeet) was dropped, and no further model tuning is planned (#13, #32, #35). Section 3
+> describes the code before WP13 (wespeaker and its cutoffs), and section 6's questions were
+> closed unanswered. Section 4.1 (the cutoffs and why) and the first risks in section 7 are
+> still current.
 
 This plan turns the quality experiments of Nov 10 into ordered, checkable work. The
 measurements behind every number here are in [TODO.md](../TODO.md), sections "From the
