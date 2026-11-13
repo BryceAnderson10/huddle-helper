@@ -110,3 +110,16 @@ class ManualCapture:
         for i in range(0, n, CHUNK):
             self.on_audio("mic", mic[i:i + CHUNK])
             self.on_audio("system", system[i:i + CHUNK])
+
+
+def no_wait(_seconds: float) -> None:
+    """Recover's re-check of a stale heartbeat, without the real one-beat sleep."""
+
+
+def crash(folder) -> None:
+    """Leave ``folder`` as a crash does: its last heartbeat long stale (status stays as it is)."""
+    from datetime import timedelta
+
+    from huddle_helper import meeting as mt
+
+    folder.beat(mt.now_local() - timedelta(minutes=5))

@@ -5,6 +5,8 @@ from huddle_helper.diarize import profile
 from huddle_helper import config, housekeeping, meeting as mt
 from huddle_helper.writer import JsonlWriter, meeting_start_event, read_events
 
+from .helpers import crash, no_wait
+
 
 def test_slug_and_ids():
     assert mt.slugify("Weekly Sync / Q4!") == "weekly-sync-q4"
@@ -36,7 +38,8 @@ def test_recover_crashed_meeting(tmp_path):
         fh.write('{"type":"segment","se')  # died mid-write
 
     finalized = []
-    recovered = housekeeping.recover(tmp_path, finalized.append)
+    crash(folder)
+    recovered = housekeeping.recover(tmp_path, finalized.append, wait=no_wait)
     assert recovered == [folder.meeting_id] and finalized[0].meeting_id == folder.meeting_id
     events = read_events(folder.live_path)
     assert [e["type"] for e in events] == ["meeting_start", "segment", "meeting_end"]
@@ -175,6 +178,7 @@ def test_recover_stores_error(tmp_path):
     def boom(_folder):
         raise RuntimeError("model exploded")
 
-    housekeeping.recover(tmp_path, boom)
+    crash(folder)
+    housekeeping.recover(tmp_path, boom, wait=no_wait)
     meta = folder.read_meta()
     assert meta["status"] == "failed" and meta["error"] == "model exploded"
