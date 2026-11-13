@@ -70,7 +70,7 @@ A meeting whose status is `recording` but whose heartbeat is stale or missing. I
 _Avoid_: Crashed, dead meeting, hung
 
 **Recovered**:
-A meeting whose recording did not end with Stop (status `interrupted`, or `clean_exit` false). Recover closes it out and runs its final pass.
+A meeting whose recording did not end with Stop (status `interrupted`, or `clean_exit` false). Recover (run at app start, or `huddle-helper recover`) closes it out and runs its final pass.
 _Avoid_: Crashed, broken
 
 **Downstream app**:
