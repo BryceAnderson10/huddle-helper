@@ -16,7 +16,7 @@ to them (except optionally `speakers.json`, see below).
     speaker_tags.jsonl      # the user's speaker names, append-only; exists only if they named anyone
     marks.jsonl             # bookmarks, append-only; exists only if there was a bookmark
     echo_dropped.jsonl      # mic lines dropped as echo, append-only; exists only if any were dropped
-    heartbeat.json          # recorder's "still alive" time, refreshed every 2 s while recording
+    heartbeat.json          # "still alive" time, refreshed every 2 s while recording or held for the final pass
     DONE                    # empty marker, created last
     audio\                  # buffered while recording; kept only if Keep audio is on
 ```
@@ -234,6 +234,8 @@ before the folder appears, then replaced every **2 s** while the meeting records
 it goes on in total silence and while the mic is muted, and while Stop finishes the live transcript. It
 stops once Stop has set `status` to `processing`; a crash stops it too, and then `meta.json` keeps
 `status: "recording"` until the app next starts. The file stays in the folder with its last beat.
+It also beats while the meeting's final pass runs and while it waits in the app's queue for one, so a fresh
+heartbeat means some process holds the meeting; "active" is still only status `recording` with a fresh heartbeat.
 
 ```json
 {"at":"2026-11-09T11:42:31.207-06:00"}

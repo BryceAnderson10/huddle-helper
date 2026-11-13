@@ -10,7 +10,7 @@ Layout (see docs/OUTPUT_SPEC.md):
         marks.jsonl             bookmarks (first bookmark creates it)
         speaker_tags.jsonl      the user's speaker names (first name creates it)
         echo_dropped.jsonl      mic lines dropped as echo (first drop creates it)
-        heartbeat.json          the recorder's "still alive" time, refreshed while recording
+        heartbeat.json          "still alive" time, refreshed while recording or held for the final pass
         DONE                    empty marker, created last
         audio/                  buffered audio, deleted unless Keep audio is on
 """
@@ -97,11 +97,17 @@ def read_json(path: Path) -> dict:
 
 def write_heartbeat(path: Path, at: datetime) -> None:
     """Replace heartbeat.json atomically (temp file + rename). No fsync: after a crash the heartbeat is
-    stale whatever it holds, so it is not worth a disk flush every few seconds."""
+    stale whatever it holds, so it is not worth a disk flush every few seconds. Writes in this process take
+    turns (the queue's beat and the final pass's may meet), so one never renames another's half-written
+    temp file."""
     tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"at": at.isoformat(timespec="milliseconds")}, fh)
-    os.replace(tmp, path)
+    with _HEARTBEAT_LOCK:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"at": at.isoformat(timespec="milliseconds")}, fh)
+        os.replace(tmp, path)
+
+
+_HEARTBEAT_LOCK = threading.Lock()
 
 
 _FOLDER_LOCKS: dict[str, threading.Lock] = {}

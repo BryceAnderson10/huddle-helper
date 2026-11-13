@@ -5,7 +5,7 @@ import json
 import time
 from datetime import timedelta
 
-from huddle_helper import config, heartbeat as hb, meeting as mt
+from huddle_helper import config, heartbeat as hb, meeting as mt, status
 from huddle_helper.recorder import Components, Recorder
 from huddle_helper.vad import EnergyScorer
 from huddle_helper.writer import read_events
@@ -14,6 +14,11 @@ from .conftest import ToneEmbedder, ToneTranscriber
 from .helpers import ManualCapture
 
 FAST = 0.05  # heartbeat interval for the tests (the app uses hb.INTERVAL_S)
+
+
+def liveness(folder, now=None):
+    """The heartbeat's reading of the meeting (the context command's ``heartbeat.state``)."""
+    return status.heartbeat_state(status.read(folder).status(now))
 
 
 def start(tmp_path, **kw):
@@ -60,7 +65,7 @@ def test_heartbeat_advances_in_total_silence_and_the_meeting_is_active(tmp_path)
         wait_for_beat_after(folder, second)
         # nothing was said, no audio arrived at all: the meeting is still healthy
         assert [e["type"] for e in read_events(folder.live_path)] == ["meeting_start"]
-        assert hb.liveness(folder) == hb.ACTIVE
+        assert liveness(folder) == hb.ACTIVE
     finally:
         rec.stop()
 
@@ -70,7 +75,7 @@ def test_heartbeat_advances_while_the_mic_is_muted(tmp_path):
     try:
         assert folder.read_meta()["mic_muted_since_ms"] == 0
         wait_for_beat_after(folder, wait_for_beat_after(folder, hb.last_beat(folder)))
-        assert hb.liveness(folder) == hb.ACTIVE
+        assert liveness(folder) == hb.ACTIVE
     finally:
         rec.stop()
 
@@ -78,7 +83,7 @@ def test_heartbeat_advances_while_the_mic_is_muted(tmp_path):
 def test_a_quiet_meeting_with_a_fresh_heartbeat_is_active_however_old_its_last_line(tmp_path):
     folder = crashed_meeting(tmp_path, beat_age_s=1)
     folder.update_meta(started_at=mt.iso(mt.now_local() - timedelta(hours=2)))
-    assert hb.liveness(folder) == hb.ACTIVE
+    assert liveness(folder) == hb.ACTIVE
 
 
 # -- no active meeting -----------------------------------------------------------------------------
@@ -91,15 +96,15 @@ def test_after_stop_the_heartbeat_stops_and_the_meeting_is_not_recording(tmp_pat
     last = hb.last_beat(folder)
     time.sleep(FAST * 6)
     assert hb.last_beat(folder) == last  # no thread is left beating
-    assert hb.liveness(folder) == hb.NOT_RECORDING
-    assert hb.liveness(folder, now=last + timedelta(minutes=5)) == hb.NOT_RECORDING
+    assert liveness(folder) == hb.NOT_RECORDING
+    assert liveness(folder, now=last + timedelta(minutes=5)) == hb.NOT_RECORDING
 
 
 def test_finished_and_recovered_meetings_are_not_recording_whatever_the_heartbeat(tmp_path):
     for status in (mt.STATUS_PROCESSING, mt.STATUS_COMPLETE, mt.STATUS_INTERRUPTED, mt.STATUS_FAILED):
         folder = crashed_meeting(tmp_path, beat_age_s=0)
         folder.update_meta(status=status)
-        assert hb.liveness(folder) == hb.NOT_RECORDING, status
+        assert liveness(folder) == hb.NOT_RECORDING, status
 
 
 def test_a_start_that_fails_leaves_no_heartbeat_thread(tmp_path):
@@ -120,7 +125,7 @@ def test_a_start_that_fails_leaves_no_heartbeat_thread(tmp_path):
     last = hb.last_beat(folder)
     time.sleep(FAST * 6)
     assert hb.last_beat(folder) == last and rec._heartbeat is None
-    assert hb.liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S + 1)) == hb.RECORDER_DIED
+    assert liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S + 1)) == hb.RECORDER_DIED
 
 
 # -- recorder died ---------------------------------------------------------------------------------
@@ -132,8 +137,8 @@ def test_a_crash_leaves_status_recording_with_a_stale_heartbeat(tmp_path):
     try:
         last = hb.last_beat(folder)
         assert folder.read_meta()["status"] == mt.STATUS_RECORDING
-        assert hb.liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S - 1)) == hb.ACTIVE
-        assert hb.liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S + 1)) == hb.RECORDER_DIED
+        assert liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S - 1)) == hb.ACTIVE
+        assert liveness(folder, now=last + timedelta(seconds=hb.STALE_AFTER_S + 1)) == hb.RECORDER_DIED
     finally:
         rec.stop()
 
@@ -141,21 +146,21 @@ def test_a_crash_leaves_status_recording_with_a_stale_heartbeat(tmp_path):
 def test_a_stale_heartbeat_is_never_active_however_recent_the_meeting(tmp_path):
     folder = crashed_meeting(tmp_path, beat_age_s=hb.STALE_AFTER_S + 5)
     assert folder.read_meta()["started_at"] >= mt.iso(mt.now_local() - timedelta(minutes=1))
-    assert hb.liveness(folder) == hb.RECORDER_DIED
+    assert liveness(folder) == hb.RECORDER_DIED
 
 
 def test_a_missing_or_unreadable_heartbeat_means_the_recorder_died(tmp_path):
-    assert hb.liveness(crashed_meeting(tmp_path, beat_age_s=None)) == hb.RECORDER_DIED
+    assert liveness(crashed_meeting(tmp_path, beat_age_s=None)) == hb.RECORDER_DIED
     folder = crashed_meeting(tmp_path, beat_age_s=0)
     folder.heartbeat_path.write_text("{not json", encoding="utf-8")
     assert hb.last_beat(folder) is None
-    assert hb.liveness(folder) == hb.RECORDER_DIED
+    assert liveness(folder) == hb.RECORDER_DIED
 
 
 def test_a_heartbeat_from_the_future_is_stale_too(tmp_path):
     """A clock set back after a crash must not keep a dead meeting looking alive."""
     folder = crashed_meeting(tmp_path, beat_age_s=-(hb.STALE_AFTER_S + 60))
-    assert hb.liveness(folder) == hb.RECORDER_DIED
+    assert liveness(folder) == hb.RECORDER_DIED
 
 
 # -- the file ------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 """The final pass as one module (#61): ``FinalPass.run(folder, on_progress)``, its typed progress, the
 meeting's own Keep audio choice and re-running."""
 
+import functools
 import threading
 import time
 
@@ -11,7 +12,7 @@ import soundfile as sf
 from huddle_helper import config, final_pass as fp, library, meeting as mt
 
 from .conftest import FakeDiarizer, ScriptedTranscriber, make_meeting_to_finalize
-from .helpers import make_meeting
+from .helpers import make_meeting, no_wait, stale_heartbeat
 
 
 def final_pass(**kw):
@@ -243,8 +244,12 @@ def test_cli_finalize_again_replaces_the_final_transcript(tmp_path, cli_with_fak
     assert folder.is_done and folder.read_meta()["transcript_version"] != first
 
 
-def test_cli_recover_follows_the_meetings_own_keep_audio_choice(tmp_path, cli_with_fakes):
+def test_cli_recover_follows_the_meetings_own_keep_audio_choice(tmp_path, cli_with_fakes, monkeypatch):
+    from huddle_helper import housekeeping
+
+    monkeypatch.setattr(housekeeping, "recover", functools.partial(housekeeping.recover, wait=no_wait))
     folder = make_meeting_to_finalize(tmp_path, keep_audio=False)  # stopped, its final pass never ran
+    stale_heartbeat(folder)  # and no process holds it
     assert cli_with_fakes.main(["recover", "--out", str(tmp_path), "--keep-audio"]) == 0
     assert folder.is_done and not folder.audio_file("system").exists()
 

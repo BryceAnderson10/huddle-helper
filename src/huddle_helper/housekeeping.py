@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import heartbeat as hb, marks as marks_mod, meeting as mt
+from . import heartbeat as hb, marks as marks_mod, meeting as mt, status
 from .writer import dumps, meeting_end_event, read_events
 
 log = logging.getLogger(__name__)
@@ -123,35 +123,45 @@ def find_unfinished(meetings_dir: Path) -> list[mt.MeetingFolder]:
     return out
 
 
-def _liveness(folder: mt.MeetingFolder) -> str | None:
-    """``heartbeat.liveness``, or None when ``meta.json`` cannot be read right now."""
+def _files(folder: mt.MeetingFolder) -> status.Files | None:
+    """``status.read``, or None when ``meta.json`` cannot be read right now."""
     try:
-        return hb.liveness(folder)
+        return status.read(folder)
     except (OSError, ValueError):
         return None
 
 
-def _without_active(folders: list[mt.MeetingFolder], wait: Callable[[float], None]) -> list[mt.MeetingFolder]:
-    """Drop the meetings another recorder is still writing: status ``recording`` with a fresh heartbeat.
+def _not_held(folders: list[mt.MeetingFolder], wait: Callable[[float], None]) -> list[mt.MeetingFolder]:
+    """Drop the meetings another process holds (ADR 0002): those with a fresh heartbeat, whatever their
+    status (it is recording them, running their final pass or holding them in its final pass queue).
 
-    A stale heartbeat may only mean the PC has just woken from sleep, so the meetings whose recorder
-    looks dead are asked about again once, after one beat interval (a single wait shared by all of
-    them, and none when there are none), and kept only if they still look dead: one that has beaten
-    again, or moved on from ``recording`` in the meantime, has a live process behind it. A meeting
-    whose ``meta.json`` cannot be read right now is left for the next recover.
+    A stale heartbeat may only mean the PC has just woken from sleep, so the meetings left are asked about
+    again once, after one beat interval (a single wait shared by all of them, and none when there are
+    none), and kept only if their heartbeat is still stale and their status unchanged: one that has beaten
+    again, or moved on in the meantime, has a live process behind it. A meeting whose ``meta.json`` cannot
+    be read right now is left for the next recover.
     """
-    states = {f.meeting_id: _liveness(f) for f in folders}
-    stale = [f for f in folders if states[f.meeting_id] == hb.RECORDER_DIED]
-    dead: set[str] = set()
-    if stale:
-        wait(hb.INTERVAL_S)
-        dead = {f.meeting_id for f in stale if _liveness(f) == hb.RECORDER_DIED}
+    first = {f.meeting_id: _files(f) for f in folders}
+    stale = [f for f in folders if first[f.meeting_id] is not None and not first[f.meeting_id].heartbeat_fresh()]
+    if not stale:
+        return []
+    wait(hb.INTERVAL_S)
     keep = []
-    for f in folders:
-        state = states[f.meeting_id]
-        if state == hb.NOT_RECORDING or (state == hb.RECORDER_DIED and f.meeting_id in dead):
+    for f in stale:
+        again = _files(f)
+        if again is not None and not again.heartbeat_fresh() and not again.done                 and again.meta_status == first[f.meeting_id].meta_status:
             keep.append(f)
     return keep
+
+
+def close_shared_mic(folder: mt.MeetingFolder, events: list[dict]) -> None:
+    """Close the shared mic the way Stop does, for a meeting whose recorder died: an open stretch ends at
+    the end of the last line (which becomes ``ended_ms``) and a stretch in which no mic line started is
+    dropped."""
+    segments = [e for e in events if e.get("type") == "segment"]
+    end_ms = max((int(e.get("end_ms", 0)) for e in segments), default=0)
+    mic_starts = [int(e.get("start_ms", 0)) for e in segments if e.get("source") == "mic"]
+    folder.write_shared_mic(folder.read_shared_mic().closed_at_stop(end_ms, mic_starts))
 
 
 def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | None = None,
@@ -159,22 +169,23 @@ def recover(meetings_dir: Path, finalize: Callable[[mt.MeetingFolder], None] | N
     """Close out meetings left unfinished by a crash, then finalize them.
 
     ``skip`` holds meeting ids that are live in this process and must be left alone. A meeting another
-    process is still recording (fresh heartbeat) is left alone too; ``wait`` is the pause before a
-    stale heartbeat is checked again (see ``_without_active``).
+    process holds (fresh heartbeat, whatever its status) is left alone too; ``wait`` is the pause before
+    a stale heartbeat is checked again (see ``_not_held``).
     """
     recovered = []
     candidates = [f for f in find_unfinished(meetings_dir) if not (skip and f.meeting_id in skip)]
-    for folder in _without_active(candidates, wait):
-        meta = folder.read_meta()
+    for folder in _not_held(candidates, wait):
         try:
+            meta = folder.read_meta()
             if meta.get("status") == mt.STATUS_RECORDING or meta.get("clean_exit") is not True:
                 count = close_interrupted_live_file(folder)
-                last_end = max((e.get("end_ms", 0) for e in read_events(folder.live_path)
-                                if e.get("type") == "segment"), default=0)
+                events = read_events(folder.live_path)
+                last_end = max((e.get("end_ms", 0) for e in events if e.get("type") == "segment"), default=0)
                 close_open_mute(folder, meta, last_end)
+                close_shared_mic(folder, events)
                 folder.update_meta(**marks_mod.summarize(folder))
                 folder.update_meta(status=mt.STATUS_INTERRUPTED, clean_exit=False, segments=count,
-                                   ended_at=meta.get("ended_at") or read_events(folder.live_path)[-1].get("ended_at"))
+                                   ended_at=meta.get("ended_at") or events[-1].get("ended_at"))
                 log.warning("Meeting %s did not finish cleanly; recovered %d segments", folder.meeting_id, count)
             if finalize is not None:
                 finalize(folder)

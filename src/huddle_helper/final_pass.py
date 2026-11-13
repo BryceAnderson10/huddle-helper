@@ -9,7 +9,8 @@
 - the streams to separate into speakers (``SharedMic.separated_streams``);
 - progress: ``PassProgress`` values with the stage, the fraction of the whole pass done (stage weights
   applied, never going back) and the time left;
-- re-running: an earlier final transcript is replaced and DONE cleared through the meeting folder.
+- re-running: an earlier final transcript is replaced and DONE cleared through the meeting folder;
+- the heartbeat: the meeting's heartbeat beats while the pass runs, so recover leaves it alone (ADR 0002).
 
 The steps themselves are ``finalize.finalize_meeting``.
 """
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import config, meeting as mt
+from . import config, heartbeat as hb, meeting as mt
 from .finalize import Stage, Step, finalize_meeting, separated_streams
 from .library import meeting_length_s
 from .shared_mic import SharedMic
@@ -148,13 +149,15 @@ class FinalPass:
 
     def __init__(self, settings: config.Settings, *, busy: Callable[[], bool] = lambda: False,
                  diarizer_factory=_FROM_SETTINGS, embedder_factory=_FROM_SETTINGS,
-                 transcriber_factory=_FROM_SETTINGS, clock: Callable[[], float] = time.monotonic):
+                 transcriber_factory=_FROM_SETTINGS, clock: Callable[[], float] = time.monotonic,
+                 heartbeat_s: float = hb.INTERVAL_S):
         """``busy`` says whether a meeting is recording; it is read when each model loads, so a meeting
         started meanwhile gets 1 thread. The factories replace the real models (``None``: no voice
         fingerprints, or no second transcription); left out they are built from ``settings``."""
         self.settings = settings
         self._busy = busy
         self._clock = clock
+        self._heartbeat_s = heartbeat_s
         self._diarizer_factory = self._diarizer if diarizer_factory is _FROM_SETTINGS else diarizer_factory
         self._embedder_factory = self._embedder if embedder_factory is _FROM_SETTINGS else embedder_factory
         if transcriber_factory is _FROM_SETTINGS:
@@ -183,7 +186,13 @@ class FinalPass:
             on_progress: Callable[[PassProgress], None] | None = None) -> int:
         """Run the final pass on ``folder``, replacing any earlier final transcript, and mark it done.
         Returns the number of final lines. ``on_progress`` gets a ``PassProgress`` at the start and at
-        every step; its ``overall`` never goes back. Raises if the pass fails."""
+        every step; its ``overall`` never goes back. Raises if the pass fails. The meeting's heartbeat
+        beats from the start to the end of the pass."""
+        with hb.Heartbeat(folder, self._heartbeat_s):
+            return self._run(folder, on_progress)
+
+    def _run(self, folder: mt.MeetingFolder,
+             on_progress: Callable[[PassProgress], None] | None) -> int:
         report = on_progress or (lambda p: None)
         t_start = self._clock()
         mid = folder.meeting_id
