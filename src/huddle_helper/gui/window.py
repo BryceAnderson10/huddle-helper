@@ -313,7 +313,7 @@ class MainWindow:
         st = self.app.state
         phase = logic.meeting_phase(folder.meeting_id, self.session.model, st)
         # Follow the end while lines are still arriving; a finished meeting opens at its top.
-        self._autoscroll = phase in (logic.RECORDING, logic.STOPPING, logic.PROCESSING)
+        self._autoscroll = phase in (logic.RECORDING, logic.STOPPING, logic.ELSEWHERE, logic.PROCESSING)
         if self._autoscroll:
             self.view.jump_to_end()
         else:

@@ -728,7 +728,8 @@ class AppController:
                     or (rec is not None and rec.meeting_id == meeting_id))
 
     def live_state(self) -> library.LiveState:
-        """What the Meetings view needs to label each row (see ``library.status_of``)."""
+        """What this app is doing with its meetings, for ``status.shown`` (the Meetings view's rows and the
+        Transcript window's phase)."""
         rec = self.current_folder()
         fin = self.state.finalize
         with self._jobs_lock:
@@ -737,7 +738,8 @@ class AppController:
                 finalizing=fin.meeting_id if fin is not None else None,
                 progress=fin.overall if fin is not None else None,
                 queued=frozenset(self._queued),
-                waiting=frozenset(f.meeting_id for f in self._retry_waiting))
+                waiting=frozenset(f.meeting_id for f in self._retry_waiting),
+                stopping=rec is not None and self.state.phase == "stopping")
 
     def _recording_now(self) -> bool:
         return self._recorder is not None or self.state.phase in ("recording", "stopping")

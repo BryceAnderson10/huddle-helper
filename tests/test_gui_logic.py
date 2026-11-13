@@ -88,6 +88,16 @@ def test_processing_shows_stage_percent_and_time_left(tmp_path):
     assert logic.status_view(m.meeting_id, m, st).text == "Identifying speakers"
 
 
+def test_a_meeting_recorded_by_another_process_shows_as_recording_elsewhere(tmp_path):
+    m = model_for(tmp_path, status=mt.STATUS_RECORDING)
+    m.folder.beat()  # fresh: `huddle-helper record` holds it, not this app
+    st = AppState(phase="ready")
+    assert logic.header_view(m.meeting_id, m, st) == logic.HeaderView("recording", "Recording elsewhere · 2 lines · live")
+    assert not logic.mute_button_view(m.meeting_id, m, st).visible and not logic.status_view(m.meeting_id, m, st).show_stop
+    m.folder.heartbeat_path.unlink()  # the recorder died
+    assert logic.header_view(m.meeting_id, m, st) == logic.HeaderView("idle", "Not finished · 2 lines")
+
+
 def test_the_progress_of_another_meeting_does_not_show_here(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_PROCESSING)
     st = AppState(phase="ready")

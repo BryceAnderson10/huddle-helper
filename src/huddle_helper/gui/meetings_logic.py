@@ -127,7 +127,7 @@ def confirm_items(infos: list[MeetingInfo], *, audio_only: bool, now: datetime |
         out.append(confirm.Item(
             info.title, info.audio_bytes if audio_only else info.total_bytes,
             library.hours_since(info.finished_at, now) if info.done else None,
-            final_failed=info.status == mt.STATUS_FAILED, has_final=info.done))
+            final_failed=library.status_of(info).kind == library.FAILED, has_final=info.done))
     return out
 
 

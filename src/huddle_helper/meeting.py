@@ -41,6 +41,7 @@ AUDIO = "audio"
 
 MUTED = "muted"  # gap reason: the user took their mic out of the recording (not lost audio)
 
+# meta.json "status" as written. What a meeting's status is (with the heartbeat and DONE) is ``status.py``.
 STATUS_RECORDING = "recording"
 STATUS_PROCESSING = "processing"
 STATUS_COMPLETE = "complete"

@@ -5,7 +5,7 @@ tool) runs it instead of writing its own file tailer. The meeting files stay the
 (docs/OUTPUT_SPEC.md, "Reading a meeting from another app"); nothing here writes to them.
 
 Which meeting
-    ``active``   the meeting recording right now with a fresh heartbeat (``heartbeat.liveness``). With
+    ``active``   the meeting recording right now with a fresh heartbeat (status ``RECORDING``). With
                  none, an answer with ``meeting: null`` that names the meeting that just ended.
     ``latest``   (default) the active meeting, else the most recently started one in any state, even if
                  it started seconds ago. ``meeting.selected_as`` says which of the two it got.
@@ -32,7 +32,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import attendees as attendees_mod, heartbeat as hb, marks as marks_mod, meeting as mt
+from . import attendees as attendees_mod, marks as marks_mod, meeting as mt, status as status_mod
 from .library import DeleteRefused, meeting_folder
 from .playback import bookmark_range
 from .session import MeetingSession
@@ -87,10 +87,6 @@ def _read_meta(folder: mt.MeetingFolder) -> dict:
     return meta
 
 
-def _liveness(folder: mt.MeetingFolder, now: datetime) -> str:
-    return _retry(lambda: hb.liveness(folder, now), folder.meta_path)
-
-
 def _check_readable(path: Path) -> None:
     """Raise ``ContextError`` when ``path`` exists but cannot be opened (``JsonlTail`` would be silent)."""
     if path.exists():
@@ -101,25 +97,18 @@ def _check_readable(path: Path) -> None:
 
 
 # -- meeting summary -----------------------------------------------------------------------------------
-def _state(meta: dict, live: str) -> str:
-    if live == hb.ACTIVE:
-        return "recording"
-    if live == hb.RECORDER_DIED:
-        return "recorder_died"
-    return str(meta.get("status") or "unknown")
-
-
-def _heartbeat(folder: mt.MeetingFolder, live: str, now: datetime) -> dict:
-    beat = hb.last_beat(folder)
-    return {"state": live, "last_beat": beat.isoformat(timespec="milliseconds") if beat else None,
+def _heartbeat(files: status_mod.Files, state: str, now: datetime) -> dict:
+    beat = files.last_beat
+    return {"state": status_mod.heartbeat_state(state), "last_beat": beat.isoformat(timespec="milliseconds") if beat else None,
             "age_s": round((now - beat).total_seconds(), 1) if beat else None}
 
 
-def _summary(folder: mt.MeetingFolder, meta: dict, live: str, now: datetime) -> dict:
+def _summary(folder: mt.MeetingFolder, meta: dict, files: status_mod.Files, now: datetime) -> dict:
+    state = files.status(now)
     return {"id": folder.meeting_id, "title": str(meta.get("title") or folder.meeting_id),
-            "state": _state(meta, live), "active": live == hb.ACTIVE,
+            "state": state, "active": state == status_mod.RECORDING,
             "started_at": meta.get("started_at"), "ended_at": meta.get("ended_at"),
-            "heartbeat": _heartbeat(folder, live, now)}
+            "heartbeat": _heartbeat(files, state, now)}
 
 
 def _started_key(folder: mt.MeetingFolder, meta: dict) -> tuple:
@@ -133,18 +122,17 @@ MINUTE_PREFIX = len("YYYY-MM-DD_HHMM")  # meeting ids start with their start min
 
 
 def _scan(meetings_dir: Path, now: datetime, warnings: list) -> tuple[list[tuple], list[tuple]]:
-    """``(rows, unreadable)``: ``(folder, meta, liveness)`` oldest start first, and
+    """``(rows, unreadable)``: ``(folder, meta, files)`` oldest start first, and
     ``(meeting_id, ContextError)`` for folders whose ``meta.json`` could not be read."""
     rows, unreadable = [], []
     for folder in mt.iter_meetings(meetings_dir):
         try:
             meta = _read_meta(folder)
-            live = _liveness(folder, now)
         except ContextError as exc:
             warnings.append(exc.as_dict())
             unreadable.append((folder.meeting_id, exc))
             continue
-        rows.append((folder, meta, live))
+        rows.append((folder, meta, status_mod.read(folder, meta)))
     rows.sort(key=lambda r: _started_key(r[0], r[1]))
     return rows, unreadable
 
@@ -228,11 +216,11 @@ def answer(meetings_dir: Path | str, meeting: str = LATEST, transcript: str = AU
 
 
 def _pick(meetings_dir: Path, meeting: str, now: datetime, warnings: list):
-    """``(folder, meta, liveness, selected_as)``; for ``active`` with none recording, the list of
-    ``(folder, meta, liveness)`` of every meeting, oldest start first."""
+    """``(folder, meta, files, selected_as)``; for ``active`` with none recording, the list of
+    ``(folder, meta, files)`` of every meeting, oldest start first."""
     if meeting in (ACTIVE, LATEST):
         rows, unreadable = _scan(meetings_dir, now, warnings)
-        active = [r for r in rows if r[2] == hb.ACTIVE]
+        active = [r for r in rows if r[2].status(now) == status_mod.RECORDING]
         if active:
             return (*active[-1], ACTIVE)
         _refuse_if_maybe_newer(rows[-1][0].meeting_id if rows else None, unreadable)
@@ -246,10 +234,10 @@ def _pick(meetings_dir: Path, meeting: str, now: datetime, warnings: list):
     except DeleteRefused:
         raise ContextError("not_found", f"No meeting {meeting!r} in {meetings_dir}") from None
     meta = _read_meta(folder)
-    return folder, meta, _liveness(folder, now), "id"
+    return folder, meta, status_mod.read(folder, meta), "id"
 
 
-def _meeting_answer(folder: mt.MeetingFolder, meta: dict, live: str, selected_as: str, transcript: str,
+def _meeting_answer(folder: mt.MeetingFolder, meta: dict, files: status_mod.Files, selected_as: str, transcript: str,
                     now: datetime, warnings: list, **window_req) -> dict:
     if transcript == FINAL and not folder.final_path.exists():
         raise ContextError("final_not_ready", "This meeting has no final transcript yet", folder.final_path)
@@ -271,7 +259,8 @@ def _meeting_answer(folder: mt.MeetingFolder, meta: dict, live: str, selected_as
         meta = model.meta  # the session's read is the newer one
     session.poll(None)
 
-    active = live == hb.ACTIVE
+    state = files.status(now)
+    active = state == status_mod.RECORDING
     end_ref = _clock_now_ms(model, now) if active else max(model.duration_ms, model.last_line_end_ms)
     window = _window(model, end_ref, **window_req)
     start, end = window["start_ms"], window["end_ms"]
@@ -287,11 +276,11 @@ def _meeting_answer(folder: mt.MeetingFolder, meta: dict, live: str, selected_as
         reasons.append("lost_audio")
     if active and end > model.last_line_end_ms:
         reasons.append("still_recording")
-    if live == hb.RECORDER_DIED and end > model.last_line_end_ms:
+    if state == status_mod.RECORDER_DIED and end > model.last_line_end_ms:
         reasons.append("recorder_died")
     labels = {r.label for r in lines}
 
-    summary = _summary(folder, meta, live, now)
+    summary = _summary(folder, meta, files, now)
     summary["selected_as"] = selected_as
     all_lines = model.lines
     return {

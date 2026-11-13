@@ -106,6 +106,19 @@ def test_interrupted_meeting(tmp_path):
     assert f"> {export.INTERRUPTED}" in export.render(m, "md")
 
 
+def test_a_recovered_meeting_that_finished_its_final_pass_is_still_marked_recovered(tmp_path):
+    # recover sets clean_exit false; the final pass then sets status complete (GLOSSARY "Recovered")
+    folder = weekly(tmp_path, marks=[])
+    folder.update_meta(clean_exit=False)
+    m = model(folder)
+    assert export.INTERRUPTED in export.render(m, "txt", crlf=False)
+    assert f"> {export.INTERRUPTED}" in export.render(m, "md")
+
+
+def test_a_meeting_that_ended_with_stop_is_not_marked_recovered(tmp_path):
+    assert export.INTERRUPTED not in export.render(model(weekly(tmp_path, marks=[])), "txt", crlf=False)
+
+
 def test_no_marks_means_no_bookmarks_section(tmp_path):
     md = export.render(model(weekly(tmp_path, marks=[])), "md")
     assert "## Bookmarks" not in md and "bookmark" not in md
