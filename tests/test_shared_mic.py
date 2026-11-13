@@ -61,19 +61,6 @@ def test_saved_settings_file_with_diarize_mic_loads(tmp_path):
     assert "diarize_mic" not in s.to_dict()
 
 
-# -- meta.json stretches -----------------------------------------------------------------------------
-def test_stretches_from_meta():
-    assert mt.shared_mic_stretches({"shared_mic": [[0, None]]}) == [[0, None]]
-    assert mt.shared_mic_stretches({"shared_mic": [], "settings": {"diarize_mic": True}}) == []
-    # a meeting from before the list existed: the old flag means the whole meeting
-    assert mt.shared_mic_stretches({"settings": {"diarize_mic": True}}) == [[0, None]]
-    assert mt.shared_mic_stretches({"settings": {"diarize_mic": False}}) == []
-    assert mt.shared_mic_stretches({}) == []
-    assert mt.shared_mic_stretches({"shared_mic": [[0, 5000], "junk", [1, "x"]]}) == [[0, 5000]]
-    assert mt.has_shared_mic({"shared_mic": [[0, 5000]]}) and not mt.has_shared_mic({"shared_mic": []})
-    assert mt.close_stretches([[0, 100], [200, None]], 900) == [[0, 100], [200, 900]]
-
-
 # -- Recorder + final pass -----------------------------------------------------------------------------
 def test_ticked_at_start_separates_the_mic_live_and_in_the_final_transcript(tmp_path):
     seen = {}
@@ -193,8 +180,9 @@ def test_controller_passes_shared_mic_and_loads_the_voice_model(tmp_path, monkey
 # -- Mute tooltip ------------------------------------------------------------------------------------------
 def test_mute_tooltip_warns_for_a_meeting_started_with_the_box_ticked(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
-    m.set_meta({**m.meta, "shared_mic": [[0, None]], "settings": {"diarize_mic": True}})
     mid = m.meeting_id
-    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
-    m.set_meta({**m.meta, "shared_mic": [], "settings": {"diarize_mic": False}})
-    assert "everyone in the room" not in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
+    st = muted_state(mid)
+    st.recording.shared_mic = True  # the recorder's live status
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, st).tooltip
+    st.recording.shared_mic = False
+    assert "everyone in the room" not in logic.mute_button_view(mid, m, st).tooltip

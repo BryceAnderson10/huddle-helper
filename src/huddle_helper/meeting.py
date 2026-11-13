@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__
+from .shared_mic import SharedMic
 
 META = "meta.json"
 LIVE = "transcript.jsonl"
@@ -272,13 +273,13 @@ class MeetingFolder:
             write_json_atomic(self.meta_path, meta)
             return meta
 
-    def set_shared_mic(self, stretches: list) -> dict:
-        """Write the meeting's shared mic stretches and ``settings.diarize_mic`` (true when there is at
-        least one), in one locked read-modify-write."""
+    def read_shared_mic(self) -> SharedMic:
+        return SharedMic.from_meta(self.read_meta())
+
+    def write_shared_mic(self, shared: SharedMic) -> dict:
+        """Write the meeting's shared mic (``SharedMic.write``) in one locked read-modify-write."""
         with self._lock:
-            meta = self.read_meta()
-            meta["shared_mic"] = [list(s) for s in stretches]
-            meta["settings"] = {**(meta.get("settings") or {}), "diarize_mic": bool(stretches)}
+            meta = shared.write(self.read_meta())
             write_json_atomic(self.meta_path, meta)
             return meta
 
@@ -381,53 +382,6 @@ class MeetingFolder:
     # -- completion -----------------------------------------------------
     def mark_done(self) -> None:
         self.done_path.touch()
-
-
-Stretch = list  # [start_ms, end_ms | None] on the meeting clock; None while the stretch is still open
-
-
-def shared_mic_stretches(meta: dict) -> list[Stretch]:
-    """The meeting's shared mic stretches: where mic speech is separated into ``MIC_SPEAKER_nn``.
-
-    ``meta["shared_mic"]`` when present. A meeting from before that key existed, with
-    ``settings.diarize_mic: true``, had the whole mic shared: one stretch from 0, open."""
-    raw = meta.get("shared_mic")
-    if isinstance(raw, list):
-        out = []
-        for item in raw:
-            if (isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], (int, float))
-                    and (item[1] is None or isinstance(item[1], (int, float)))):
-                out.append([int(item[0]), None if item[1] is None else int(item[1])])
-        return out
-    if (meta.get("settings") or {}).get("diarize_mic"):
-        return [[0, None]]
-    return []
-
-
-def has_shared_mic(meta: dict) -> bool:
-    """True when the meeting has at least one shared mic stretch."""
-    return bool(shared_mic_stretches(meta))
-
-
-def close_stretches(stretches: list[Stretch], end_ms: int) -> list[Stretch]:
-    """``stretches`` with an open end set to ``end_ms`` (Stop closes them at the meeting's end)."""
-    return [[a, end_ms if b is None else b] for a, b in stretches]
-
-
-def shared_mic_open(meta: dict) -> bool:
-    """A shared mic stretch is open now (its end is ``null``): "Several people on my mic" is ticked."""
-    stretches = shared_mic_stretches(meta)
-    return bool(stretches) and stretches[-1][1] is None
-
-
-def in_stretch(stretches: list[Stretch], at_ms: int) -> bool:
-    """``at_ms`` lies inside a stretch: from its start (included) to its end (excluded, or open)."""
-    return any(a <= at_ms and (b is None or at_ms < b) for a, b in stretches)
-
-
-def stretches_with_lines(stretches: list[Stretch], mic_starts: list[int]) -> list[Stretch]:
-    """The stretches in which at least one mic line started (Stop drops the others)."""
-    return [s for s in stretches if any(in_stretch([s], t) for t in mic_starts)]
 
 
 def iter_meetings(meetings_dir: Path):

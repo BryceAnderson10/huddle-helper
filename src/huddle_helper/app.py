@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .recorder import Components, Recorder, Status, load_components
+from .shared_mic import SharedMic
 from .transcribe import final_transcriber_factory
 
 log = logging.getLogger(__name__)
@@ -96,10 +97,7 @@ def pass_fraction(stage: str, frac: float, diarized: list[str] | tuple[str, ...]
 def diarize_weights(meta: dict, length_s: float | None) -> dict[str, float]:
     """Seconds of audio the after-Stop pass diarizes per stream, for ``pass_fraction``: the system
     stream whole, the mic only inside its shared mic stretches (an open stretch ends at ``length_s``)."""
-    length_ms = int((length_s or 0) * 1000)
-    stretches = mt.close_stretches(mt.shared_mic_stretches(meta), length_ms)
-    mic_ms = sum(max(0, min(b, length_ms) - a) for a, b in stretches) if length_ms else 0
-    return {"system": length_ms / 1000, "mic": mic_ms / 1000}
+    return {"system": int((length_s or 0) * 1000) / 1000, "mic": SharedMic.from_meta(meta).mic_seconds(length_s)}
 
 
 def estimate_remaining_s(overall: float, elapsed_s: float, length_s: float | None,
@@ -667,8 +665,8 @@ class AppController:
             try:
                 meta = folder.read_meta()
                 length_s = meeting_length_s(meta)
-                diarized = [src for src, on in (("mic", mt.has_shared_mic(meta)),
-                                                ("system", meta.get("settings", {}).get("diarize_system", True))) if on]
+                diarized = SharedMic.from_meta(meta).separated_streams(
+                    meta.get("settings", {}).get("diarize_system", True))
                 weights = diarize_weights(meta, length_s) if length_s else None
                 speeds = recent_final_speeds(folder.path.parent, exclude=folder.meeting_id)
             except Exception:  # noqa: BLE001 - the estimate is optional

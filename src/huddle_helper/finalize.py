@@ -40,6 +40,7 @@ from .diarize import (MIC_PREFIX, REMOTE, SYSTEM_PREFIX, YOU, Embedder, OfflineD
                       VoiceProfile, cluster_voices, fold_small_clusters, label, profile)
 from .retranscribe import FinalTranscriber, retranscribe
 from .segments import Segment, Word
+from .shared_mic import SharedMic
 from .writer import new_transcript_version, read_events, write_transcript
 
 log = logging.getLogger(__name__)
@@ -366,10 +367,10 @@ def _rejoin_lines(pieces: Pieces, words: dict[tuple[str, int], list[Word]]) -> l
     return [seg for _line, seg in out]
 
 
-def outside_stretches(seg: Segment, mic_stretches: list[mt.Stretch] | None) -> bool:
+def outside_stretches(seg: Segment, mic_stretches: SharedMic | None) -> bool:
     """A mic piece that starts outside every shared mic stretch: it is ``You``, never separated.
     ``mic_stretches`` None separates the whole mic stream; a system piece is never outside."""
-    return seg.source == "mic" and mic_stretches is not None and not mt.in_stretch(mic_stretches, seg.start_ms)
+    return seg.source == "mic" and mic_stretches is not None and not mic_stretches.covers(seg.start_ms)
 
 
 def _merge_same_speaker(pieces: list[Segment]) -> list[Segment]:
@@ -387,7 +388,7 @@ def _merge_same_speaker(pieces: list[Segment]) -> list[Segment]:
 
 def split_pieces(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
                  turns_by_source: dict[str, list[Turn] | None], diarized: set[str],
-                 embed_available: bool, mic_stretches: list[mt.Stretch] | None = None
+                 embed_available: bool, mic_stretches: SharedMic | None = None
                  ) -> tuple[list[Segment], dict[str, Pieces]]:
     """Split lines where the diarizer saw a speaker change, before voice labelling.
 
@@ -439,7 +440,7 @@ def relabel(segments: list[Segment], words: dict[tuple[str, int], list[Word]],
             progress: Callable[[float], None] | None = None,
             ranges: list[tags_mod.TaggedRange] | None = None,
             voice: VoiceProfile | None = None,
-            mic_stretches: list[mt.Stretch] | None = None,
+            mic_stretches: SharedMic | None = None,
             you: dict | None = None) -> list[Segment]:
     """Apply refined speaker labels.
 
@@ -613,31 +614,17 @@ def _remove_audio(folder: mt.MeetingFolder, keep_audio: bool) -> None:
 
 
 # -- shared mic stretches ------------------------------------------------
-def stretch_spans(stretches: list[mt.Stretch], n_samples: int) -> list[tuple[int, int]]:
-    """Sample ranges of the audio to diarize, one per stretch, in meeting order.
-
-    An open stretch runs to the end of the audio. Stop closes a stretch at the meeting's end, which is
-    never before the end of the audio, so a stretch over the whole meeting is the whole stream."""
-    spans = []
-    for a, b in sorted(stretches, key=lambda st: st[0]):
-        start = min(max(a, 0) * SAMPLE_RATE // 1000, n_samples)
-        end = n_samples if b is None else min(b * SAMPLE_RATE // 1000, n_samples)
-        if end > start:
-            spans.append((start, end))
-    return spans
-
-
 SPEAKER_ID_STEP = 100_000  # turns of stretch k get speaker id k * this + the diarizer's own id
 
 
-def diarize_stretches(diarizer: OfflineDiarizer, audio: np.ndarray, stretches: list[mt.Stretch],
+def diarize_stretches(diarizer: OfflineDiarizer, audio: np.ndarray, shared: SharedMic,
                       progress: Callable[[float], None] | None = None) -> list[Turn]:
     """Split points for shared mic audio: the diarizer runs on each stretch's audio on its own.
 
     Turns come back on the meeting clock. Speaker ids of different stretches never coincide: they only
     mark split points, and grouping into speakers across stretches is the voice clustering's job.
     ``progress`` gets the fraction of all stretch audio done."""
-    spans = stretch_spans(stretches, len(audio))
+    spans = shared.spans(len(audio))
     total = sum(e - s for s, e in spans) or 1
     done = 0
     turns: list[Turn] = []
@@ -679,11 +666,10 @@ def finalize_meeting(folder: mt.MeetingFolder, diarizer_factory: Callable[[], Of
     started_at = start_event["started_at"] if start_event else meta.get("started_at")
     ended_at = (end_event or {}).get("ended_at") or meta.get("ended_at") or mt.iso(mt.now_local())
 
-    rec = meta.get("settings", {})
-    diarized = {src for src, on in (("system", rec.get("diarize_system", True)),
-                                    ("mic", mt.has_shared_mic(meta))) if on}
+    shared = SharedMic.from_meta(meta)
+    diarized = set(shared.separated_streams(meta.get("settings", {}).get("diarize_system", True)))
     words = load_words(folder.words_path)
-    mic_stretches = mt.shared_mic_stretches(meta) if "mic" in diarized else None
+    mic_stretches = shared if "mic" in diarized else None
 
     preloaded: dict[str, np.ndarray] = {}
     retx: dict = {}

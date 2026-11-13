@@ -210,7 +210,6 @@ def test_shared_mic_without_any_voice_model_labels_mic_lines_you(tmp_path):
 def test_not_downloaded_disables_the_window_box_with_a_tooltip(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
     mid = m.meeting_id
-    m.set_meta({**m.meta, "shared_mic": []})
     st = recording_state(mid)
     st.voice_model_installed = False
     v = logic.shared_mic_view(mid, m, st)

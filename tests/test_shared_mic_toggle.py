@@ -104,9 +104,11 @@ def test_stop_with_no_mic_line_in_any_stretch_leaves_none(tmp_path):
 
 def test_unticking_a_meeting_started_shared_and_ticking_an_open_one_again_is_a_no_op(tmp_path):
     def during(folder, rec):
+        assert rec.status.shared_mic  # ticked in the Start dialog: the live status says so
         assert rec.set_shared_mic(True, at_ms=1000) is True  # already open: nothing changes
         assert folder.read_meta()["shared_mic"] == [[0, None]]
         assert rec.set_shared_mic(False, at_ms=6000) is False
+        assert not rec.status.shared_mic
         assert rec.set_shared_mic(False, at_ms=7000) is False  # already closed: nothing changes
         assert folder.read_meta()["shared_mic"] == [[0, 6000]]
 
@@ -117,15 +119,7 @@ def test_unticking_a_meeting_started_shared_and_ticking_an_open_one_again_is_a_n
 
 def test_set_shared_mic_does_nothing_when_not_recording(tmp_path):
     rec = Recorder(config.Settings(meetings_dir=str(tmp_path)), Components(transcriber=ToneTranscriber()))
-    assert rec.set_shared_mic(True) is False and rec.shared_mic_stretches == []
-
-
-def test_stretch_helpers():
-    assert mt.shared_mic_open({"shared_mic": [[0, 100], [200, None]]})
-    assert not mt.shared_mic_open({"shared_mic": [[0, 100]]}) and not mt.shared_mic_open({})
-    assert mt.in_stretch([[100, 200]], 100) and not mt.in_stretch([[100, 200]], 200)
-    assert mt.in_stretch([[100, None]], 10**9) and not mt.in_stretch([[100, 100]], 100)
-    assert mt.stretches_with_lines([[0, 100], [100, 200], [300, None]], [50, 350]) == [[0, 100], [300, None]]
+    assert rec.set_shared_mic(True) is False and not rec.shared_mic.any and not rec.status.shared_mic
 
 
 # -- controller ------------------------------------------------------------------------------------
@@ -142,10 +136,11 @@ def test_controller_toggles_the_recorder(tmp_path):
 def test_check_box_shows_only_while_recording_and_reflects_the_meeting(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
     mid = m.meeting_id
-    m.set_meta({**m.meta, "shared_mic": [[0, None]]})  # ticked in the Start dialog
-    v = logic.shared_mic_view(mid, m, recording_state(mid))
+    ticked = recording_state(mid)
+    ticked.recording.shared_mic = True  # the recorder's live status, e.g. ticked in the Start dialog
+    v = logic.shared_mic_view(mid, m, ticked)
     assert v.visible and v.checked and v.text == "Several people on my mic"
-    m.set_meta({**m.meta, "shared_mic": [[0, 4000]]})
+    m.set_meta({**m.meta, "shared_mic": [[0, None]]})  # meta.json does not decide the tick
     assert not logic.shared_mic_view(mid, m, recording_state(mid)).checked
     for phase in ("stopping", "ready"):
         st = recording_state(mid)
@@ -161,12 +156,12 @@ def test_check_box_shows_only_while_recording_and_reflects_the_meeting(tmp_path)
 def test_mute_tooltip_mentions_the_room_only_while_a_stretch_is_open(tmp_path):
     m = model_for(tmp_path, status=mt.STATUS_RECORDING)
     mid = m.meeting_id
-    m.set_meta({**m.meta, "shared_mic": [[1000, 5000]], "settings": {"diarize_mic": True}})
-    assert "everyone in the room" not in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
-    assert "Everyone in the room" not in logic.mute_bar_view(mid, m, muted_state(mid)).text
-    m.set_meta({**m.meta, "shared_mic": [[1000, 5000], [8000, None]]})
-    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, muted_state(mid)).tooltip
-    assert "Everyone in the room" in logic.mute_bar_view(mid, m, muted_state(mid)).text
+    st = muted_state(mid)
+    assert "everyone in the room" not in logic.mute_button_view(mid, m, st).tooltip
+    assert "Everyone in the room" not in logic.mute_bar_view(mid, m, st).text
+    st.recording.shared_mic = True
+    assert "everyone in the room is muted" in logic.mute_button_view(mid, m, st).tooltip
+    assert "Everyone in the room" in logic.mute_bar_view(mid, m, st).text
 
 
 def test_dividers_come_from_meta_and_sit_above_a_line_starting_at_the_toggle(tmp_path):
@@ -178,8 +173,11 @@ def test_dividers_come_from_meta_and_sit_above_a_line_starting_at_the_toggle(tmp
     assert [logic.divider_text(d) for d in m.dividers] == [
         "Separating speakers on your mic from here", "Mic is just you from here",
         "Separating speakers on your mic from here"]
-    # after Stop: the end Stop gave the open stretch is not a toggle, so it has no divider
-    m.set_meta({**m.meta, "shared_mic": [[1000, 3000], [5000, 9050]], "duration_s": 9.1})
+    # after Stop: the end Stop gave the open stretch (ended_ms) is not a toggle, so it has no divider
+    m.set_meta({**m.meta, "shared_mic": [[1000, 3000], [5000, 9050]], "ended_ms": 9050, "duration_s": 14.0})
+    assert [(d.at_ms, d.on) for d in m.dividers] == [(1000, True), (3000, False), (5000, True)]
+    # an older meeting without ended_ms: within 1 s of duration_s, as before
+    m.set_meta({k: v for k, v in m.meta.items() if k != "ended_ms"} | {"duration_s": 9.1})
     assert [(d.at_ms, d.on) for d in m.dividers] == [(1000, True), (3000, False), (5000, True)]
     m.set_meta({**m.meta, "shared_mic": []})
     assert m.dividers == []
@@ -227,13 +225,10 @@ class FakeApp:
         return self.folder
 
     def set_shared_mic(self, on):
+        """What the recorder does: change its stretches and say so in the live status."""
         self.calls.append(on)
-        stretches = mt.shared_mic_stretches(self.folder.read_meta())
-        if on:
-            stretches.append([2000, None])
-        else:
-            stretches[-1][1] = 7000
-        self.folder.set_shared_mic(stretches)
+        self.folder.write_shared_mic(self.folder.read_shared_mic().toggled(on, 2000 if on else 7000))
+        self.state.recording.shared_mic = on
         return on
 
 
