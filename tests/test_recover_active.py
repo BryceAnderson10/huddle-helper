@@ -68,13 +68,24 @@ def test_several_stale_meetings_share_one_recheck(tmp_path):
     assert waits.calls == [hb.INTERVAL_S]
 
 
-def test_meetings_not_recording_are_recovered_without_a_wait(tmp_path):
-    folder = crashed_meeting(tmp_path, beat_age_s=0)  # a fresh beat does not matter once it is processing
+def test_a_meeting_past_recording_with_a_fresh_heartbeat_is_left_alone(tmp_path):
+    """ADR 0002 (#63): a fresh beat means a process holds the meeting, whatever its status."""
+    folder = crashed_meeting(tmp_path, beat_age_s=0)
+    folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True)
+    waits = Waits()
+    finalized = []
+    assert housekeeping.recover(tmp_path / "meetings", finalized.append, wait=waits) == []
+    assert waits.calls == [] and finalized == []
+
+
+def test_a_meeting_past_recording_whose_heartbeat_stays_stale_is_recovered_after_one_recheck(tmp_path):
+    folder = crashed_meeting(tmp_path, beat_age_s=hb.STALE_AFTER_S + 5)
     folder.update_meta(status=mt.STATUS_PROCESSING, clean_exit=True)
     waits = Waits()
     finalized = []
     assert housekeeping.recover(tmp_path / "meetings", finalized.append, wait=waits) == [folder.meeting_id]
-    assert waits.calls == [] and [f.meeting_id for f in finalized] == [folder.meeting_id]
+    assert waits.calls == [hb.INTERVAL_S] and [f.meeting_id for f in finalized] == [folder.meeting_id]
+    assert folder.read_meta()["status"] == mt.STATUS_PROCESSING  # it stopped cleanly: only finalized
 
 
 def test_the_in_process_skip_list_still_wins_over_a_stale_heartbeat(tmp_path):

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from . import bookmark_types, config, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
+from . import bookmark_types, config, heartbeat as hb, housekeeping, library, marks as marks_mod, meeting as mt, models, playback, tags as tags_mod, vocab
 from .final_pass import FinalPass, PassProgress
 from .recorder import Components, Recorder, Status, load_components
 from . import status as status_mod
@@ -69,11 +69,14 @@ class AppController:
     def __init__(self, on_change: Callable[[], None] | None = None,
                  notify: Callable[[str], None] | None = None,
                  overrides: dict | None = None, capture_factory: Callable[..., object] | None = None,
-                 player: playback.Player | None = None, final_pass: FinalPass | None = None):
+                 player: playback.Player | None = None, final_pass: FinalPass | None = None,
+                 heartbeats: hb.Heartbeats | None = None):
         """``overrides`` (dev aids such as ``tray --out``) replace Settings fields for this run only:
         they are never written back to settings.json. ``capture_factory`` replaces the live devices
         (``tray --replay``). ``final_pass`` runs every meeting's final pass; by default one is built
-        from the Settings in force when each meeting's pass starts."""
+        from the Settings in force when each meeting's pass starts. ``heartbeats`` beats for every meeting
+        in the final pass queue, queued or waiting to retry, so recover elsewhere leaves them alone
+        (ADR 0002); by default one at ``heartbeat.INTERVAL_S``."""
         self.settings = config.load()
         self._overrides = dict(overrides or {})
         self._persisted = {k: getattr(self.settings, k) for k in self._overrides}
@@ -93,6 +96,7 @@ class AppController:
         self._jobs_lock = threading.Lock()
         self._queued: set[str] = set()  # meeting ids queued for, or in, the after-Stop pass
         self._retry_waiting: list[mt.MeetingFolder] = []  # retries held back while a meeting records
+        self._heartbeats = heartbeats or hb.Heartbeats()  # one thread beating for every meeting queued
         # Click to hear (WP7): one clip at a time; the output gain is 1.0 unless a dev script lowers it.
         self.player = player or playback.Player()
         self.player.device_name = self.settings.clip_output_device  # "Play clips on" (outputs.py)
@@ -117,8 +121,8 @@ class AppController:
             from .cli import go_offline
             go_offline()
             meetings_dir = self.settings.resolved_meetings_dir()
-            for meeting_id in housekeeping.recover(meetings_dir, None, skip=self._live_ids):
-                self._enqueue(mt.MeetingFolder(meetings_dir / meeting_id))
+            # queued (and beating) as soon as each is closed out, so no other recover takes it meanwhile
+            housekeeping.recover(meetings_dir, self._enqueue, skip=self._live_ids)
             self.purge()
             self._check_voice_model()
             self._get_components()
@@ -585,12 +589,14 @@ class AppController:
             finally:
                 with self._jobs_lock:
                     self._queued.discard(folder.meeting_id)
+                self._heartbeats.release(folder)
                 self.state.finalize_queue = max(0, self.state.finalize_queue - 1)
                 self._set(finalizing="", finalize=None)
 
     def _enqueue(self, folder: mt.MeetingFolder) -> None:
         with self._jobs_lock:
             self._queued.add(folder.meeting_id)
+        self._heartbeats.hold(folder)
         self.state.finalize_queue += 1
         self._jobs.put(folder)
 
@@ -635,6 +641,7 @@ class AppController:
             return "refused"
         with self._jobs_lock:
             if self._recording_now():
+                self._heartbeats.hold(folder)  # held until its pass ends: ``_release_retries`` keeps the hold
                 self._retry_waiting.append(folder)
                 waiting = True
             else:
@@ -751,3 +758,4 @@ class AppController:
         self.player.stop()
         if self.is_recording:
             self.stop(wait=True)
+        self._heartbeats.stop()
