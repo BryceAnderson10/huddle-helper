@@ -65,6 +65,10 @@ _Avoid_: Current meeting
 The active meeting if there is one, otherwise the most recently started meeting in whatever state it is in (still in its final pass, done, interrupted or failed). Whoever asks for it is always told which of the two it got.
 _Avoid_: Newest meeting, last meeting, most recent meeting
 
+**Held**:
+A meeting some process is working on: recording it, running its final pass, holding it in its final pass queue, or recovering it. A fresh heartbeat shows it, whatever the meeting's status (ADR 0002); recover never touches a held meeting.
+_Avoid_: Locked, busy, claimed
+
 **Recorder died**:
 A meeting whose status is `recording` but whose heartbeat is stale or missing. It is what the files show, not a verdict: if the PC sleeps mid-meeting the heartbeat goes stale and starts again on wake.
 _Avoid_: Crashed, dead meeting, hung

@@ -50,15 +50,19 @@ class Heartbeats:
         self._thread: threading.Thread | None = None
 
     def hold(self, folder: mt.MeetingFolder) -> None:
+        """Beat for ``folder`` now and from then on, until it is released (once per ``hold``)."""
         with self._lock:
             _, n = self._held.get(folder.meeting_id, (folder, 0))
             self._held[folder.meeting_id] = (folder, n + 1)
-            if self._thread is None and not self._stop.is_set():
+            if self._stop.is_set():
+                return
+            if self._thread is None:
                 self._thread = threading.Thread(target=self._run, name="heartbeats", daemon=True)
                 self._thread.start()
         _beat(folder)
 
     def release(self, folder: mt.MeetingFolder) -> None:
+        """Undo one ``hold``; after the last one ``folder`` is no longer beaten (its file goes stale)."""
         with self._lock:
             _, n = self._held.get(folder.meeting_id, (folder, 0))
             if n <= 1:
@@ -83,32 +87,19 @@ class Heartbeats:
 
 
 class Heartbeat:
-    """Beats for one meeting folder on a daemon thread, from ``start`` until ``stop``."""
+    """Beats for one meeting folder, from ``start`` (or entering ``with``) until ``stop``: ``Heartbeats``
+    holding just that folder."""
 
     def __init__(self, folder: mt.MeetingFolder, interval_s: float = INTERVAL_S):
         self.folder = folder
-        self.interval_s = interval_s
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._beats = Heartbeats(interval_s)
 
     def start(self) -> None:
-        self._beat()
-        self._thread = threading.Thread(target=self._run, name="heartbeat", daemon=True)
-        self._thread.start()
+        self._beats.hold(self.folder)
 
     def stop(self) -> None:
         """Stop beating; the file keeps the last beat. Safe to call twice."""
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-
-    def _run(self) -> None:
-        while not self._stop.wait(self.interval_s):
-            self._beat()
-
-    def _beat(self) -> None:
-        _beat(self.folder)
+        self._beats.stop()
 
     def __enter__(self) -> "Heartbeat":
         self.start()

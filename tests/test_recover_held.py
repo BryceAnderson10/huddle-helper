@@ -1,6 +1,7 @@
 """Recover never touches a meeting another process holds (#63, ADR 0002): a fresh heartbeat means a
 process holds the meeting (recording it, running its final pass, or holding it in its final pass queue),
-and recover skips it whatever its status."""
+and recover skips it whatever its status. A meeting recover does take has its shared mic closed the way
+Stop closes it."""
 
 import threading
 import time
@@ -141,3 +142,15 @@ def test_recover_closes_an_open_shared_mic_stretch_at_the_last_lines_end_as_stop
     assert meta["ended_ms"] == 3000
     assert meta["status"] == mt.STATUS_INTERRUPTED
     assert shared_mic_dividers(meta) == [DividerRow(100, True)]  # no "Mic is just you from here"
+
+
+def test_recover_holds_the_meetings_waiting_their_turn_while_it_finalizes_one(tmp_path):
+    """A second process looking while this recover is busy with the first meeting finds them all held."""
+    a, b = stopped_meeting(tmp_path), stopped_meeting(tmp_path)
+    fresh_while_finalizing = []
+
+    def finalize(folder):
+        fresh_while_finalizing.append(sorted(f.meeting_id for f in (a, b) if status.read(f).heartbeat_fresh()))
+
+    assert sorted(housekeeping.recover(tmp_path, finalize, wait=no_wait)) == sorted([a.meeting_id, b.meeting_id])
+    assert fresh_while_finalizing == [sorted([a.meeting_id, b.meeting_id])] * 2

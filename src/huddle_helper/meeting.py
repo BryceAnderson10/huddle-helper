@@ -95,6 +95,9 @@ def read_json(path: Path) -> dict:
         return json.load(fh)
 
 
+_HEARTBEAT_LOCK = threading.Lock()
+
+
 def write_heartbeat(path: Path, at: datetime) -> None:
     """Replace heartbeat.json atomically (temp file + rename). No fsync: after a crash the heartbeat is
     stale whatever it holds, so it is not worth a disk flush every few seconds. Writes in this process take
@@ -105,9 +108,6 @@ def write_heartbeat(path: Path, at: datetime) -> None:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"at": at.isoformat(timespec="milliseconds")}, fh)
         os.replace(tmp, path)
-
-
-_HEARTBEAT_LOCK = threading.Lock()
 
 
 _FOLDER_LOCKS: dict[str, threading.Lock] = {}
